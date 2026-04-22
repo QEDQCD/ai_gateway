@@ -1,6 +1,6 @@
 module github.com/liwenjian/ai_gateway/gateway
 
-go 1.24
+go 1.22
 
 require github.com/gofiber/fiber/v2 v2.52.12
 
