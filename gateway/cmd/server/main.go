@@ -1,11 +1,14 @@
 package main
 
 import (
-	"log"
-
+	"github.com/liwenjian/ai_gateway/gateway/internal/config"
 	apphttp "github.com/liwenjian/ai_gateway/gateway/internal/http"
+	"github.com/liwenjian/ai_gateway/gateway/internal/telemetry"
 )
 
 func main() {
-	log.Fatal(apphttp.NewRouter().Listen(":8080"))
+	cfg := config.Load()
+	logger := telemetry.NewLogger()
+
+	logger.Fatal(apphttp.NewRouter().Listen(cfg.ListenAddr))
 }

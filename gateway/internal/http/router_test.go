@@ -1,6 +1,7 @@
 package http_test
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -17,5 +18,12 @@ func TestHealthRouteReturnsOK(t *testing.T) {
 	}
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("io.ReadAll failed: %v", err)
+	}
+	if string(body) != `{"status":"ok"}` {
+		t.Fatalf("expected body %q, got %q", `{"status":"ok"}`, string(body))
 	}
 }
