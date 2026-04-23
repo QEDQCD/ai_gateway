@@ -6,5 +6,7 @@ import { createTestRouter } from "../app/router";
 
 test("renders dashboard route", async () => {
   render(<RouterProvider router={createTestRouter()} />);
-  expect(await screen.findByText("Overview")).toBeInTheDocument();
+  expect(
+    await screen.findByRole("heading", { level: 2, name: "Overview" }),
+  ).toBeInTheDocument();
 });
