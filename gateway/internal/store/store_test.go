@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -35,8 +37,10 @@ func TestLookupPlatformAPIKeyByHash(t *testing.T) {
 		_ = conn.Close(context.Background())
 	})
 
-	if _, err := conn.Exec(ctx, readInitMigration(t)); err != nil {
-		t.Fatalf("conn.Exec migration failed: %v", err)
+	for _, migration := range readMigrations(t) {
+		if _, err := conn.Exec(ctx, migration); err != nil {
+			t.Fatalf("conn.Exec migration failed: %v", err)
+		}
 	}
 
 	if _, err := conn.Exec(ctx, `insert into tenants (id, name, status) values ('tenant_demo', 'Demo', 'active');`); err != nil {
@@ -56,6 +60,64 @@ func TestLookupPlatformAPIKeyByHash(t *testing.T) {
 	}
 	if apiKey.Status != string(domain.StatusActive) {
 		t.Fatalf("expected status %q, got %q", domain.StatusActive, apiKey.Status)
+	}
+}
+
+func TestListActiveProviderCredentialsReturnsSupportedModelsInDeterministicOrder(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	container, dsn := startPostgresContainer(ctx, t)
+	t.Cleanup(func() {
+		_ = container.Terminate(context.Background())
+	})
+
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("pgx.Connect failed: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = conn.Close(context.Background())
+	})
+
+	for _, migration := range readMigrations(t) {
+		if _, err := conn.Exec(ctx, migration); err != nil {
+			t.Fatalf("conn.Exec migration failed: %v", err)
+		}
+	}
+
+	if _, err := conn.Exec(ctx, `
+		insert into provider_credentials (id, provider, display_name, supported_models, encrypted_secret, status)
+		values
+			('pc_b', 'openai', 'OpenAI Secondary', '{"gpt-4o"}', 'enc-b', 'active'),
+			('pc_a', 'openai', 'OpenAI Primary', '{"gpt-4o-mini","text-embedding-3-small"}', 'enc-a', 'active'),
+			('pc_disabled', 'anthropic', 'Anthropic Disabled', '{"claude-3-5-sonnet"}', 'enc-c', 'disabled');
+	`); err != nil {
+		t.Fatalf("insert provider_credentials failed: %v", err)
+	}
+
+	queries := store.New(conn)
+	credentials, err := queries.ListActiveProviderCredentials(ctx)
+	if err != nil {
+		t.Fatalf("ListActiveProviderCredentials failed: %v", err)
+	}
+	if len(credentials) != 2 {
+		t.Fatalf("expected 2 active credentials, got %d", len(credentials))
+	}
+
+	if credentials[0].ID != "pc_a" {
+		t.Fatalf("expected first credential %q, got %q", "pc_a", credentials[0].ID)
+	}
+	if credentials[1].ID != "pc_b" {
+		t.Fatalf("expected second credential %q, got %q", "pc_b", credentials[1].ID)
+	}
+	if got := strings.Join(credentials[0].SupportedModels, ","); got != "gpt-4o-mini,text-embedding-3-small" {
+		t.Fatalf("expected supported models to round-trip, got %q", got)
+	}
+	if got := strings.Join(credentials[1].SupportedModels, ","); got != "gpt-4o" {
+		t.Fatalf("expected supported models to round-trip, got %q", got)
 	}
 }
 
@@ -94,7 +156,7 @@ func startPostgresContainer(ctx context.Context, t *testing.T) (testcontainers.C
 	return container, dsn
 }
 
-func readInitMigration(t *testing.T) string {
+func readMigrations(t *testing.T) []string {
 	t.Helper()
 
 	_, filename, _, ok := runtime.Caller(0)
@@ -102,11 +164,29 @@ func readInitMigration(t *testing.T) string {
 		t.Fatal("runtime.Caller failed")
 	}
 
-	migrationPath := filepath.Join(filepath.Dir(filename), "..", "..", "db", "migrations", "0001_init.sql")
-	sqlBytes, err := os.ReadFile(migrationPath)
+	migrationsDir := filepath.Join(filepath.Dir(filename), "..", "..", "db", "migrations")
+	entries, err := os.ReadDir(migrationsDir)
 	if err != nil {
-		t.Fatalf("os.ReadFile failed: %v", err)
+		t.Fatalf("os.ReadDir failed: %v", err)
 	}
 
-	return string(sqlBytes)
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		names = append(names, entry.Name())
+	}
+	sort.Strings(names)
+
+	migrations := make([]string, 0, len(names))
+	for _, name := range names {
+		sqlBytes, err := os.ReadFile(filepath.Join(migrationsDir, name))
+		if err != nil {
+			t.Fatalf("os.ReadFile failed: %v", err)
+		}
+		migrations = append(migrations, string(sqlBytes))
+	}
+
+	return migrations
 }

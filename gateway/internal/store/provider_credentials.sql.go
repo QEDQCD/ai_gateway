@@ -13,6 +13,7 @@ const listActiveProviderCredentials = `-- name: ListActiveProviderCredentials :m
 select id, provider, display_name, supported_models, encrypted_secret, status
 from provider_credentials
 where status = 'active'
+order by created_at asc, id asc
 `
 
 type ListActiveProviderCredentialsRow struct {
