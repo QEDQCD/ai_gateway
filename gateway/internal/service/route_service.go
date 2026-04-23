@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/liwenjian/ai_gateway/gateway/internal/domain"
 	"github.com/liwenjian/ai_gateway/gateway/internal/store"
@@ -23,8 +24,6 @@ func NewRouteService(repository store.AuthRepository) RouteService {
 }
 
 func (s routeService) Resolve(requestedModel string) (domain.ProviderRoute, error) {
-	_ = requestedModel
-
 	credentials, err := s.repository.ListActiveProviderCredentials(context.Background())
 	if err != nil {
 		return domain.ProviderRoute{}, err
@@ -33,8 +32,35 @@ func (s routeService) Resolve(requestedModel string) (domain.ProviderRoute, erro
 		return domain.ProviderRoute{}, ErrRouteNotFound
 	}
 
+	requestedModel = strings.TrimSpace(requestedModel)
+	if requestedModel == "" {
+		return firstCredentialRoute(credentials), nil
+	}
+
+	for _, credential := range credentials {
+		if strings.EqualFold(credential.Provider, requestedModel) {
+			return domain.ProviderRoute{
+				ProviderID:   credential.ID,
+				ProviderName: credential.DisplayName,
+			}, nil
+		}
+	}
+
+	for _, credential := range credentials {
+		if strings.EqualFold(credential.DisplayName, requestedModel) {
+			return domain.ProviderRoute{
+				ProviderID:   credential.ID,
+				ProviderName: credential.DisplayName,
+			}, nil
+		}
+	}
+
+	return domain.ProviderRoute{}, ErrRouteNotFound
+}
+
+func firstCredentialRoute(credentials []store.ProviderCredentialRecord) domain.ProviderRoute {
 	return domain.ProviderRoute{
 		ProviderID:   credentials[0].ID,
 		ProviderName: credentials[0].DisplayName,
-	}, nil
+	}
 }

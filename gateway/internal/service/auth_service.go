@@ -25,15 +25,26 @@ type QuotaGuard interface {
 	CheckTenantQuota(tenantID string) error
 }
 
+type RedisQuotaClient interface {
+	Exists(ctx context.Context, key string) (bool, error)
+}
+
+type RedisQuotaGuard struct {
+	client    RedisQuotaClient
+	keyPrefix string
+}
+
 type authService struct {
 	repository   store.AuthRepository
 	quotaGuard   QuotaGuard
 	routeService RouteService
 }
 
+const redisQuotaExhaustedKeyPrefix = "tenant_quota_exhausted:"
+
 func NewAuthService(repository store.AuthRepository, quotaGuard QuotaGuard, routeService RouteService) AuthService {
 	if quotaGuard == nil {
-		quotaGuard = noopQuotaGuard{}
+		panic("service: quota guard is required")
 	}
 	if routeService == nil {
 		routeService = NewRouteService(repository)
@@ -43,6 +54,17 @@ func NewAuthService(repository store.AuthRepository, quotaGuard QuotaGuard, rout
 		repository:   repository,
 		quotaGuard:   quotaGuard,
 		routeService: routeService,
+	}
+}
+
+func NewRedisQuotaGuard(client RedisQuotaClient) RedisQuotaGuard {
+	if client == nil {
+		panic("service: redis quota client is required")
+	}
+
+	return RedisQuotaGuard{
+		client:    client,
+		keyPrefix: redisQuotaExhaustedKeyPrefix,
 	}
 }
 
@@ -75,10 +97,7 @@ func (s authService) Resolve(rawKey string, requestedModel string) (domain.Reque
 	}
 
 	if err := s.quotaGuard.CheckTenantQuota(tenant.ID); err != nil {
-		if errors.Is(err, ErrQuotaExceeded) {
-			return domain.RequestContext{}, err
-		}
-		return domain.RequestContext{}, fmt.Errorf("%w: %v", ErrQuotaExceeded, err)
+		return domain.RequestContext{}, err
 	}
 
 	route, err := s.routeService.Resolve(requestedModel)
@@ -94,9 +113,14 @@ func (s authService) Resolve(rawKey string, requestedModel string) (domain.Reque
 	}, nil
 }
 
-type noopQuotaGuard struct{}
-
-func (noopQuotaGuard) CheckTenantQuota(string) error {
+func (g RedisQuotaGuard) CheckTenantQuota(tenantID string) error {
+	exhausted, err := g.client.Exists(context.Background(), g.keyPrefix+tenantID)
+	if err != nil {
+		return err
+	}
+	if exhausted {
+		return ErrQuotaExceeded
+	}
 	return nil
 }
 

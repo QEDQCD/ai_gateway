@@ -1,16 +1,7 @@
 package middleware
 
-import (
-	"errors"
+import "github.com/gofiber/fiber/v2"
 
-	"github.com/gofiber/fiber/v2"
-	"github.com/liwenjian/ai_gateway/gateway/internal/service"
-)
-
-func authResolutionError(err error) error {
-	if errors.Is(err, service.ErrQuotaExceeded) {
-		return fiber.NewError(fiber.StatusTooManyRequests, err.Error())
-	}
-
+func unauthorizedError(err error) error {
 	return fiber.NewError(fiber.StatusUnauthorized, err.Error())
 }

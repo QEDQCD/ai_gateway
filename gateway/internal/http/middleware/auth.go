@@ -12,7 +12,7 @@ func RequirePlatformAPIKey(authService service.AuthService) fiber.Handler {
 		raw := strings.TrimSpace(strings.TrimPrefix(c.Get("Authorization"), "Bearer "))
 		ctx, err := authService.Resolve(raw, c.Query("model"))
 		if err != nil {
-			return authResolutionError(err)
+			return unauthorizedError(err)
 		}
 		c.Locals("requestContext", ctx)
 		return c.Next()
