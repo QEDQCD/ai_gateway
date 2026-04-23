@@ -53,7 +53,7 @@ func TestChatCompletionProxy(t *testing.T) {
 	}))
 	t.Cleanup(providerServer.Close)
 
-	app, usagePublisher := newGatewayApp(t, providerServer.URL+"/v1")
+	app, usagePublisher := newGatewayApp(t, providerServer.URL+"/v1", providerServer.URL)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hello"}]}`))
 	req.Header.Set("Authorization", "Bearer platform-live-key")
@@ -123,7 +123,7 @@ func TestChatCompletionProxyPublishesUsageOnInvalidBody(t *testing.T) {
 	}))
 	t.Cleanup(providerServer.Close)
 
-	app, usagePublisher := newGatewayApp(t, providerServer.URL+"/v1")
+	app, usagePublisher := newGatewayApp(t, providerServer.URL+"/v1", providerServer.URL)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"model":`))
 	req.Header.Set("Authorization", "Bearer platform-live-key")
@@ -170,7 +170,7 @@ func TestEmbeddingsProxyReturnsSuccess(t *testing.T) {
 	}))
 	t.Cleanup(providerServer.Close)
 
-	app, usagePublisher := newGatewayApp(t, providerServer.URL+"/v1")
+	app, usagePublisher := newGatewayApp(t, providerServer.URL+"/v1", providerServer.URL)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/embeddings", bytes.NewBufferString(`{"model":"text-embedding-3-small","input":"hello"}`))
 	req.Header.Set("Authorization", "Bearer platform-live-key")
@@ -208,7 +208,7 @@ func TestEmbeddingsProxyReturnsSuccess(t *testing.T) {
 	}
 }
 
-func newGatewayApp(t *testing.T, providerBaseURL string) (*fiber.App, *queue.RecordingUsagePublisher) {
+func newGatewayApp(t *testing.T, providerBaseURL string, ragBaseURL string) (*fiber.App, *queue.RecordingUsagePublisher) {
 	t.Helper()
 
 	repository := store.NewBootstrapAuthRepository(store.BootstrapAuthConfig{
@@ -233,7 +233,7 @@ func newGatewayApp(t *testing.T, providerBaseURL string) (*fiber.App, *queue.Rec
 	usagePublisher := queue.NewRecordingUsagePublisher()
 	chatProxy := service.NewChatProxyService(provider.NewOpenAIClient(http.DefaultClient), usagePublisher)
 	embeddingProxy := service.NewEmbeddingProxyService(provider.NewOpenAIClient(http.DefaultClient), usagePublisher)
-	ragProxy := service.NewRAGProxyService(http.DefaultClient)
+	ragProxy := service.NewRAGProxyService(ragBaseURL, http.DefaultClient)
 	return apphttp.NewRouterWithServices(authService, chatProxy, embeddingProxy, ragProxy), usagePublisher
 }
 

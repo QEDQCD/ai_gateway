@@ -31,16 +31,20 @@ type RAGProxyService interface {
 }
 
 type ragProxyService struct {
+	baseURL    string
 	httpClient *http.Client
 }
 
 type unavailableRAGProxyService struct{}
 
-func NewRAGProxyService(httpClient *http.Client) RAGProxyService {
+func NewRAGProxyService(baseURL string, httpClient *http.Client) RAGProxyService {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
-	return ragProxyService{httpClient: httpClient}
+	return ragProxyService{
+		baseURL:    strings.TrimRight(baseURL, "/"),
+		httpClient: httpClient,
+	}
 }
 
 func NewUnavailableRAGProxyService() RAGProxyService {
@@ -56,7 +60,7 @@ func (s ragProxyService) Query(ctx context.Context, req RAGQueryRequest, resolve
 			Err:     fmt.Errorf("%w: request context is missing", ErrUnauthorized),
 		}
 	}
-	if strings.TrimSpace(requestContext.ProviderTarget.BaseURL) == "" {
+	if strings.TrimSpace(s.baseURL) == "" {
 		return RAGQueryResponse{}, StatusError{
 			Code:    http.StatusBadGateway,
 			Message: "rag proxy unavailable",
@@ -71,7 +75,7 @@ func (s ragProxyService) Query(ctx context.Context, req RAGQueryRequest, resolve
 	}
 
 	var response RAGQueryResponse
-	statusCode, err := s.doJSONRequest(ctx, joinRAGURL(requestContext.ProviderTarget.BaseURL, "/internal/rag/query"), forward, &response)
+	statusCode, err := s.doJSONRequest(ctx, joinRAGURL(s.baseURL, "/internal/rag/query"), forward, &response)
 	if err != nil {
 		return RAGQueryResponse{}, StatusError{
 			Code:    defaultStatusCode(statusCode),

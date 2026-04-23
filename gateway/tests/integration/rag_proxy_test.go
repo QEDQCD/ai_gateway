@@ -44,7 +44,7 @@ func TestRAGQueryProxy(t *testing.T) {
 	}))
 	t.Cleanup(providerServer.Close)
 
-	app, _ := newGatewayApp(t, providerServer.URL+"/v1")
+	app, _ := newGatewayApp(t, providerServer.URL+"/v1", providerServer.URL)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/rag/query", bytes.NewBufferString(`{"tenant_id":"tenant_client","knowledge_base_id":"kb_demo","question":"Where is the answer?"}`))
 	req.Header.Set("Authorization", "Bearer platform-live-key")
@@ -79,8 +79,8 @@ func TestRAGQueryProxy(t *testing.T) {
 		t.Fatal("expected response to include sources")
 	}
 
-	if got.Path != "/v1/internal/rag/query" {
-		t.Fatalf("expected upstream path %q, got %q", "/v1/internal/rag/query", got.Path)
+	if got.Path != "/internal/rag/query" {
+		t.Fatalf("expected upstream path %q, got %q", "/internal/rag/query", got.Path)
 	}
 	if got.TenantID != "tenant_demo" {
 		t.Fatalf("expected upstream tenant id %q, got %q", "tenant_demo", got.TenantID)

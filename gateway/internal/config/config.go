@@ -6,7 +6,8 @@ import (
 )
 
 type Config struct {
-	ListenAddr string
+	ListenAddr        string
+	RAGServiceBaseURL string
 
 	BootstrapPlatformAPIKey          string
 	BootstrapPlatformAPIKeyID        string
@@ -36,6 +37,7 @@ func Load() Config {
 
 	return Config{
 		ListenAddr:                       listenAddr,
+		RAGServiceBaseURL:                os.Getenv("GATEWAY_RAG_SERVICE_BASE_URL"),
 		BootstrapPlatformAPIKey:          os.Getenv("GATEWAY_BOOTSTRAP_PLATFORM_API_KEY"),
 		BootstrapPlatformAPIKeyID:        defaultString(os.Getenv("GATEWAY_BOOTSTRAP_PLATFORM_API_KEY_ID"), "pak_bootstrap"),
 		BootstrapPlatformAPIKeyName:      defaultString(os.Getenv("GATEWAY_BOOTSTRAP_PLATFORM_API_KEY_NAME"), "bootstrap platform key"),

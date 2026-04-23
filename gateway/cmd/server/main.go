@@ -31,7 +31,7 @@ func newServerApp(cfg config.Config) *fiber.App {
 		newBootstrapAuthService(cfg),
 		service.NewChatProxyService(chatClient, usagePublisher),
 		service.NewEmbeddingProxyService(embeddingClient, usagePublisher),
-		service.NewRAGProxyService(nil),
+		service.NewRAGProxyService(cfg.RAGServiceBaseURL, nil),
 	)
 }
 
