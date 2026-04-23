@@ -116,6 +116,7 @@ func (s authService) Resolve(ctx context.Context, rawKey string, requestedModel 
 		PlatformAPIKeyID:     platformKey.ID,
 		SelectedProviderID:   route.ProviderID,
 		SelectedProviderName: route.ProviderName,
+		ProviderTarget:       route.Target,
 	}, nil
 }
 

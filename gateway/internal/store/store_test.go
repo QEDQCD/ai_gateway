@@ -89,11 +89,11 @@ func TestListActiveProviderCredentialsReturnsSupportedModelsInDeterministicOrder
 	}
 
 	if _, err := conn.Exec(ctx, `
-		insert into provider_credentials (id, provider, display_name, supported_models, encrypted_secret, status)
+		insert into provider_credentials (id, provider, display_name, supported_models, base_url, encrypted_secret, status)
 		values
-			('pc_b', 'openai', 'OpenAI Secondary', '{"gpt-4o"}', 'enc-b', 'active'),
-			('pc_a', 'openai', 'OpenAI Primary', '{"gpt-4o-mini","text-embedding-3-small"}', 'enc-a', 'active'),
-			('pc_disabled', 'anthropic', 'Anthropic Disabled', '{"claude-3-5-sonnet"}', 'enc-c', 'disabled');
+			('pc_b', 'openai', 'OpenAI Secondary', '{"gpt-4o"}', 'https://secondary.example/v1', 'enc-b', 'active'),
+			('pc_a', 'openai', 'OpenAI Primary', '{"gpt-4o-mini","text-embedding-3-small"}', 'https://primary.example/v1', 'enc-a', 'active'),
+			('pc_disabled', 'anthropic', 'Anthropic Disabled', '{"claude-3-5-sonnet"}', 'https://disabled.example/v1', 'enc-c', 'disabled');
 	`); err != nil {
 		t.Fatalf("insert provider_credentials failed: %v", err)
 	}
@@ -116,8 +116,14 @@ func TestListActiveProviderCredentialsReturnsSupportedModelsInDeterministicOrder
 	if got := strings.Join(credentials[0].SupportedModels, ","); got != "gpt-4o-mini,text-embedding-3-small" {
 		t.Fatalf("expected supported models to round-trip, got %q", got)
 	}
+	if credentials[0].BaseURL != "https://primary.example/v1" {
+		t.Fatalf("expected base URL %q, got %q", "https://primary.example/v1", credentials[0].BaseURL)
+	}
 	if got := strings.Join(credentials[1].SupportedModels, ","); got != "gpt-4o" {
 		t.Fatalf("expected supported models to round-trip, got %q", got)
+	}
+	if credentials[1].BaseURL != "https://secondary.example/v1" {
+		t.Fatalf("expected base URL %q, got %q", "https://secondary.example/v1", credentials[1].BaseURL)
 	}
 }
 

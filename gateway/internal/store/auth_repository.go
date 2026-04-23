@@ -29,6 +29,8 @@ type ProviderCredentialRecord struct {
 	ID              string
 	Provider        string
 	DisplayName     string
+	BaseURL         string
+	APIKey          string
 	Status          domain.Status
 	SupportedModels []string
 }
@@ -48,6 +50,8 @@ type BootstrapAuthConfig struct {
 	ProviderCredentialID string
 	Provider             string
 	ProviderDisplayName  string
+	ProviderBaseURL      string
+	ProviderAPIKey       string
 	SupportedModels      []string
 }
 
@@ -95,6 +99,8 @@ func NewBootstrapAuthRepository(cfg BootstrapAuthConfig) *BootstrapAuthRepositor
 			ID:              cfg.ProviderCredentialID,
 			Provider:        cfg.Provider,
 			DisplayName:     cfg.ProviderDisplayName,
+			BaseURL:         cfg.ProviderBaseURL,
+			APIKey:          cfg.ProviderAPIKey,
 			Status:          domain.StatusActive,
 			SupportedModels: append([]string(nil), cfg.SupportedModels...),
 		},
@@ -148,6 +154,8 @@ func (r *SQLAuthRepository) ListActiveProviderCredentials(ctx context.Context) (
 			ID:              row.ID,
 			Provider:        row.Provider,
 			DisplayName:     row.DisplayName,
+			BaseURL:         row.BaseURL,
+			APIKey:          row.EncryptedSecret,
 			Status:          domain.Status(row.Status),
 			SupportedModels: append([]string(nil), row.SupportedModels...),
 		})

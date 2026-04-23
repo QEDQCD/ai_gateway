@@ -10,7 +10,7 @@ import (
 )
 
 const listActiveProviderCredentials = `-- name: ListActiveProviderCredentials :many
-select id, provider, display_name, supported_models, encrypted_secret, status
+select id, provider, display_name, supported_models, base_url, encrypted_secret, status
 from provider_credentials
 where status = 'active'
 order by created_at asc, id asc
@@ -21,6 +21,7 @@ type ListActiveProviderCredentialsRow struct {
 	Provider        string   `json:"provider"`
 	DisplayName     string   `json:"display_name"`
 	SupportedModels []string `json:"supported_models"`
+	BaseURL         string   `json:"base_url"`
 	EncryptedSecret string   `json:"encrypted_secret"`
 	Status          string   `json:"status"`
 }
@@ -39,6 +40,7 @@ func (q *Queries) ListActiveProviderCredentials(ctx context.Context) ([]ListActi
 			&i.Provider,
 			&i.DisplayName,
 			&i.SupportedModels,
+			&i.BaseURL,
 			&i.EncryptedSecret,
 			&i.Status,
 		); err != nil {

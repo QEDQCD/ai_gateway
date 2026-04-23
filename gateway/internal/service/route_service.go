@@ -43,6 +43,7 @@ func (s routeService) Resolve(ctx context.Context, requestedModel string) (domai
 				return domain.ProviderRoute{
 					ProviderID:   credential.ID,
 					ProviderName: credential.DisplayName,
+					Target:       providerTargetFromCredential(credential),
 				}, nil
 			}
 		}
@@ -53,6 +54,7 @@ func (s routeService) Resolve(ctx context.Context, requestedModel string) (domai
 			return domain.ProviderRoute{
 				ProviderID:   credential.ID,
 				ProviderName: credential.DisplayName,
+				Target:       providerTargetFromCredential(credential),
 			}, nil
 		}
 	}
@@ -62,6 +64,7 @@ func (s routeService) Resolve(ctx context.Context, requestedModel string) (domai
 			return domain.ProviderRoute{
 				ProviderID:   credential.ID,
 				ProviderName: credential.DisplayName,
+				Target:       providerTargetFromCredential(credential),
 			}, nil
 		}
 	}
@@ -73,5 +76,19 @@ func firstCredentialRoute(credentials []store.ProviderCredentialRecord) domain.P
 	return domain.ProviderRoute{
 		ProviderID:   credentials[0].ID,
 		ProviderName: credentials[0].DisplayName,
+		Target:       providerTargetFromCredential(credentials[0]),
+	}
+}
+
+func providerTargetFromCredential(credential store.ProviderCredentialRecord) domain.ProviderTarget {
+	if credential.BaseURL == "" && credential.APIKey == "" {
+		return domain.ProviderTarget{}
+	}
+
+	return domain.ProviderTarget{
+		CredentialID: credential.ID,
+		Provider:     credential.Provider,
+		BaseURL:      credential.BaseURL,
+		APIKey:       credential.APIKey,
 	}
 }

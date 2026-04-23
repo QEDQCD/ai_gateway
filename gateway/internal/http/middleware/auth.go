@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -14,13 +15,31 @@ func RequirePlatformAPIKey(authService service.AuthService) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		raw := strings.TrimSpace(strings.TrimPrefix(c.Get("Authorization"), "Bearer "))
 		requestCtx := scopedRequestContext(c)
-		ctx, err := authService.Resolve(requestCtx, raw, c.Query("model"))
+		ctx, err := authService.Resolve(requestCtx, raw, requestedModel(c))
 		if err != nil {
 			return authError(err)
 		}
 		c.Locals("requestContext", ctx)
 		return c.Next()
 	}
+}
+
+func requestedModel(c *fiber.Ctx) string {
+	if model := strings.TrimSpace(c.Query("model")); model != "" {
+		return model
+	}
+
+	if len(c.Body()) == 0 {
+		return ""
+	}
+
+	var payload struct {
+		Model string `json:"model"`
+	}
+	if err := json.Unmarshal(c.Body(), &payload); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(payload.Model)
 }
 
 func authError(err error) error {

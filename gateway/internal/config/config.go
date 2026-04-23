@@ -16,6 +16,8 @@ type Config struct {
 	BootstrapProviderID              string
 	BootstrapProvider                string
 	BootstrapProviderDisplayName     string
+	BootstrapProviderBaseURL         string
+	BootstrapProviderAPIKey          string
 	BootstrapSupportedModels         []string
 	BootstrapQuotaExhaustedTenantIDs []string
 }
@@ -42,6 +44,8 @@ func Load() Config {
 		BootstrapProviderID:              defaultString(os.Getenv("GATEWAY_BOOTSTRAP_PROVIDER_ID"), "pc_bootstrap"),
 		BootstrapProvider:                bootstrapProvider,
 		BootstrapProviderDisplayName:     defaultString(os.Getenv("GATEWAY_BOOTSTRAP_PROVIDER_DISPLAY_NAME"), "OpenAI Primary"),
+		BootstrapProviderBaseURL:         os.Getenv("GATEWAY_BOOTSTRAP_PROVIDER_BASE_URL"),
+		BootstrapProviderAPIKey:          os.Getenv("GATEWAY_BOOTSTRAP_PROVIDER_API_KEY"),
 		BootstrapSupportedModels:         bootstrapSupportedModels,
 		BootstrapQuotaExhaustedTenantIDs: splitCommaSeparatedEnv(os.Getenv("GATEWAY_QUOTA_EXHAUSTED_TENANTS")),
 	}

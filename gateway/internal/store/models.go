@@ -31,6 +31,7 @@ type ProviderCredential struct {
 	Provider        string             `json:"provider"`
 	DisplayName     string             `json:"display_name"`
 	SupportedModels []string           `json:"supported_models"`
+	BaseURL         string             `json:"base_url"`
 	EncryptedSecret string             `json:"encrypted_secret"`
 	Status          string             `json:"status"`
 	CreatedAt       pgtype.Timestamptz `json:"created_at"`
