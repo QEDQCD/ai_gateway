@@ -7,7 +7,7 @@ import (
 )
 
 func unauthorizedError(err error) error {
-	return fiber.NewError(fiber.StatusUnauthorized, err.Error())
+	return authError(err)
 }
 
 func RequireResolvedRequestContext() fiber.Handler {

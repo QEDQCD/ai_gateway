@@ -12,7 +12,7 @@ import (
 var ErrRouteNotFound = errors.New("no active provider credential available")
 
 type RouteService interface {
-	Resolve(requestedModel string) (domain.ProviderRoute, error)
+	Resolve(ctx context.Context, requestedModel string) (domain.ProviderRoute, error)
 }
 
 type routeService struct {
@@ -23,8 +23,8 @@ func NewRouteService(repository store.AuthRepository) RouteService {
 	return routeService{repository: repository}
 }
 
-func (s routeService) Resolve(requestedModel string) (domain.ProviderRoute, error) {
-	credentials, err := s.repository.ListActiveProviderCredentials(context.Background())
+func (s routeService) Resolve(ctx context.Context, requestedModel string) (domain.ProviderRoute, error) {
+	credentials, err := s.repository.ListActiveProviderCredentials(ctx)
 	if err != nil {
 		return domain.ProviderRoute{}, err
 	}

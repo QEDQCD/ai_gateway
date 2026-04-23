@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 
 	"github.com/jackc/pgx/v5"
@@ -36,6 +38,24 @@ type AuthRepository interface {
 	ListActiveProviderCredentials(ctx context.Context) ([]ProviderCredentialRecord, error)
 }
 
+type BootstrapAuthConfig struct {
+	RawPlatformAPIKey    string
+	PlatformAPIKeyID     string
+	PlatformAPIKeyName   string
+	TenantID             string
+	TenantName           string
+	ProviderCredentialID string
+	Provider             string
+	ProviderDisplayName  string
+}
+
+type BootstrapAuthRepository struct {
+	platformKeyHash      string
+	platformAPIKeyRecord PlatformAPIKeyRecord
+	tenantRecord         TenantRecord
+	providerCredentials  []ProviderCredentialRecord
+}
+
 type authQueries interface {
 	GetPlatformAPIKeyByHash(ctx context.Context, keyHash string) (GetPlatformAPIKeyByHashRow, error)
 	GetTenantByID(ctx context.Context, id string) (GetTenantByIDRow, error)
@@ -48,6 +68,36 @@ type SQLAuthRepository struct {
 
 func NewAuthRepository(queries authQueries) *SQLAuthRepository {
 	return &SQLAuthRepository{queries: queries}
+}
+
+func NewBootstrapAuthRepository(cfg BootstrapAuthConfig) *BootstrapAuthRepository {
+	repo := &BootstrapAuthRepository{}
+	if cfg.RawPlatformAPIKey == "" {
+		return repo
+	}
+
+	repo.platformKeyHash = hashPlatformAPIKey(cfg.RawPlatformAPIKey)
+	repo.platformAPIKeyRecord = PlatformAPIKeyRecord{
+		ID:       cfg.PlatformAPIKeyID,
+		TenantID: cfg.TenantID,
+		Name:     cfg.PlatformAPIKeyName,
+		Status:   domain.StatusActive,
+	}
+	repo.tenantRecord = TenantRecord{
+		ID:     cfg.TenantID,
+		Name:   cfg.TenantName,
+		Status: domain.StatusActive,
+	}
+	repo.providerCredentials = []ProviderCredentialRecord{
+		{
+			ID:          cfg.ProviderCredentialID,
+			Provider:    cfg.Provider,
+			DisplayName: cfg.ProviderDisplayName,
+			Status:      domain.StatusActive,
+		},
+	}
+
+	return repo
 }
 
 func (r *SQLAuthRepository) FindPlatformAPIKeyByHash(ctx context.Context, keyHash string) (PlatformAPIKeyRecord, error) {
@@ -102,4 +152,28 @@ func (r *SQLAuthRepository) ListActiveProviderCredentials(ctx context.Context) (
 	return credentials, nil
 }
 
+func (r *BootstrapAuthRepository) FindPlatformAPIKeyByHash(_ context.Context, keyHash string) (PlatformAPIKeyRecord, error) {
+	if r.platformKeyHash == "" || keyHash != r.platformKeyHash {
+		return PlatformAPIKeyRecord{}, ErrAuthRecordNotFound
+	}
+	return r.platformAPIKeyRecord, nil
+}
+
+func (r *BootstrapAuthRepository) FindTenantByID(_ context.Context, tenantID string) (TenantRecord, error) {
+	if r.tenantRecord.ID == "" || tenantID != r.tenantRecord.ID {
+		return TenantRecord{}, ErrAuthRecordNotFound
+	}
+	return r.tenantRecord, nil
+}
+
+func (r *BootstrapAuthRepository) ListActiveProviderCredentials(context.Context) ([]ProviderCredentialRecord, error) {
+	return append([]ProviderCredentialRecord(nil), r.providerCredentials...), nil
+}
+
+func hashPlatformAPIKey(rawKey string) string {
+	sum := sha256.Sum256([]byte(rawKey))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
 var _ AuthRepository = (*SQLAuthRepository)(nil)
+var _ AuthRepository = (*BootstrapAuthRepository)(nil)

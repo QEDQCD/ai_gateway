@@ -1,9 +1,22 @@
 package config
 
-import "os"
+import (
+	"os"
+	"strings"
+)
 
 type Config struct {
 	ListenAddr string
+
+	BootstrapPlatformAPIKey          string
+	BootstrapPlatformAPIKeyID        string
+	BootstrapPlatformAPIKeyName      string
+	BootstrapTenantID                string
+	BootstrapTenantName              string
+	BootstrapProviderID              string
+	BootstrapProvider                string
+	BootstrapProviderDisplayName     string
+	BootstrapQuotaExhaustedTenantIDs []string
 }
 
 func Load() Config {
@@ -13,6 +26,38 @@ func Load() Config {
 	}
 
 	return Config{
-		ListenAddr: listenAddr,
+		ListenAddr:                       listenAddr,
+		BootstrapPlatformAPIKey:          os.Getenv("GATEWAY_BOOTSTRAP_PLATFORM_API_KEY"),
+		BootstrapPlatformAPIKeyID:        defaultString(os.Getenv("GATEWAY_BOOTSTRAP_PLATFORM_API_KEY_ID"), "pak_bootstrap"),
+		BootstrapPlatformAPIKeyName:      defaultString(os.Getenv("GATEWAY_BOOTSTRAP_PLATFORM_API_KEY_NAME"), "bootstrap platform key"),
+		BootstrapTenantID:                defaultString(os.Getenv("GATEWAY_BOOTSTRAP_TENANT_ID"), "tenant_bootstrap"),
+		BootstrapTenantName:              defaultString(os.Getenv("GATEWAY_BOOTSTRAP_TENANT_NAME"), "Bootstrap Tenant"),
+		BootstrapProviderID:              defaultString(os.Getenv("GATEWAY_BOOTSTRAP_PROVIDER_ID"), "pc_bootstrap"),
+		BootstrapProvider:                defaultString(os.Getenv("GATEWAY_BOOTSTRAP_PROVIDER"), "openai"),
+		BootstrapProviderDisplayName:     defaultString(os.Getenv("GATEWAY_BOOTSTRAP_PROVIDER_DISPLAY_NAME"), "OpenAI Primary"),
+		BootstrapQuotaExhaustedTenantIDs: splitCommaSeparatedEnv(os.Getenv("GATEWAY_QUOTA_EXHAUSTED_TENANTS")),
 	}
+}
+
+func defaultString(value string, fallback string) string {
+	if value == "" {
+		return fallback
+	}
+	return value
+}
+
+func splitCommaSeparatedEnv(value string) []string {
+	if value == "" {
+		return nil
+	}
+
+	parts := strings.Split(value, ",")
+	items := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			items = append(items, part)
+		}
+	}
+	return items
 }

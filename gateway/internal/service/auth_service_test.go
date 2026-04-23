@@ -17,6 +17,7 @@ func TestResolveRequestContextUsesPlatformKeyAndProviderCredential(t *testing.T)
 
 	rawKey := "platform-live-key"
 	expectedKeyHash := hashPlatformAPIKey(rawKey)
+	requestContext := context.WithValue(context.Background(), testContextKey{}, "request-123")
 
 	testCases := []struct {
 		name                  string
@@ -151,16 +152,36 @@ func TestResolveRequestContextUsesPlatformKeyAndProviderCredential(t *testing.T)
 				tenant:              tc.tenant,
 				providerCredentials: tc.providerCredentials,
 			}
-			quotaGuard := fakeQuotaGuard{err: tc.quotaErr}
+			quotaGuard := &fakeQuotaGuard{err: tc.quotaErr}
+			routeService := &capturingRouteService{
+				delegate: service.NewRouteService(repo),
+			}
 
-			authService := service.NewAuthService(repo, quotaGuard, service.NewRouteService(repo))
-			gotContext, err := authService.Resolve(rawKey, tc.requestedModel)
+			authService := service.NewAuthService(repo, quotaGuard, routeService)
+			gotContext, err := authService.Resolve(requestContext, rawKey, tc.requestedModel)
 
 			if repo.gotKeyHash != expectedKeyHash {
 				t.Fatalf("expected hashed key %q, got %q", expectedKeyHash, repo.gotKeyHash)
 			}
+			if repo.platformKeyCtx != requestContext {
+				t.Fatal("expected platform key lookup to use the request context")
+			}
+			if tc.platformKey.Status == domain.StatusActive && repo.tenantCtx != requestContext {
+				t.Fatal("expected tenant lookup to use the request context")
+			}
 			if repo.listProviderCredentialCalls != tc.wantCredentialLookups {
 				t.Fatalf("expected %d provider credential lookups, got %d", tc.wantCredentialLookups, repo.listProviderCredentialCalls)
+			}
+			if tc.platformKey.Status == domain.StatusActive && tc.tenant.Status == domain.StatusActive {
+				if quotaGuard.ctx != requestContext {
+					t.Fatal("expected quota check to use the request context")
+				}
+				if quotaGuard.tenantID != tc.tenant.ID {
+					t.Fatalf("expected quota check tenant %q, got %q", tc.tenant.ID, quotaGuard.tenantID)
+				}
+			}
+			if tc.wantCredentialLookups > 0 && routeService.ctx != requestContext {
+				t.Fatal("expected route resolution to use the request context")
 			}
 
 			if tc.wantErr != nil {
@@ -219,11 +240,15 @@ func TestRedisQuotaGuardCheckTenantQuota(t *testing.T) {
 
 			client := &fakeRedisQuotaClient{exhausted: tc.exhausted}
 			guard := service.NewRedisQuotaGuard(client)
+			requestContext := context.WithValue(context.Background(), testContextKey{}, tc.name)
 
-			err := guard.CheckTenantQuota("tenant_123")
+			err := guard.CheckTenantQuota(requestContext, "tenant_123")
 
 			if client.gotKey != "tenant_quota_exhausted:tenant_123" {
 				t.Fatalf("expected redis key %q, got %q", "tenant_quota_exhausted:tenant_123", client.gotKey)
+			}
+			if client.ctx != requestContext {
+				t.Fatal("expected redis quota client to use the request context")
 			}
 			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("expected error %v, got %v", tc.wantErr, err)
@@ -237,7 +262,7 @@ func TestUnauthorizedAuthServiceResolveReturnsUnauthorized(t *testing.T) {
 
 	authService := service.NewUnauthorizedAuthService()
 
-	_, err := authService.Resolve("platform-live-key", "openai")
+	_, err := authService.Resolve(context.Background(), "platform-live-key", "openai")
 
 	if !errors.Is(err, service.ErrUnauthorized) {
 		t.Fatalf("expected error %v, got %v", service.ErrUnauthorized, err)
@@ -249,40 +274,64 @@ type fakeAuthRepository struct {
 	tenant                      store.TenantRecord
 	providerCredentials         []store.ProviderCredentialRecord
 	gotKeyHash                  string
+	platformKeyCtx              context.Context
+	tenantCtx                   context.Context
 	listProviderCredentialCalls int
+	providerCredentialsCtx      context.Context
 }
 
-func (f *fakeAuthRepository) FindPlatformAPIKeyByHash(_ context.Context, keyHash string) (store.PlatformAPIKeyRecord, error) {
+func (f *fakeAuthRepository) FindPlatformAPIKeyByHash(ctx context.Context, keyHash string) (store.PlatformAPIKeyRecord, error) {
+	f.platformKeyCtx = ctx
 	f.gotKeyHash = keyHash
 	return f.platformKey, nil
 }
 
-func (f *fakeAuthRepository) FindTenantByID(_ context.Context, _ string) (store.TenantRecord, error) {
+func (f *fakeAuthRepository) FindTenantByID(ctx context.Context, _ string) (store.TenantRecord, error) {
+	f.tenantCtx = ctx
 	return f.tenant, nil
 }
 
-func (f *fakeAuthRepository) ListActiveProviderCredentials(_ context.Context) ([]store.ProviderCredentialRecord, error) {
+func (f *fakeAuthRepository) ListActiveProviderCredentials(ctx context.Context) ([]store.ProviderCredentialRecord, error) {
 	f.listProviderCredentialCalls++
+	f.providerCredentialsCtx = ctx
 	return f.providerCredentials, nil
 }
 
 type fakeQuotaGuard struct {
-	err error
+	err      error
+	ctx      context.Context
+	tenantID string
 }
 
-func (f fakeQuotaGuard) CheckTenantQuota(_ string) error {
+func (f *fakeQuotaGuard) CheckTenantQuota(ctx context.Context, tenantID string) error {
+	f.ctx = ctx
+	f.tenantID = tenantID
 	return f.err
 }
 
 type fakeRedisQuotaClient struct {
 	exhausted bool
 	gotKey    string
+	ctx       context.Context
 }
 
-func (f *fakeRedisQuotaClient) Exists(_ context.Context, key string) (bool, error) {
+func (f *fakeRedisQuotaClient) Exists(ctx context.Context, key string) (bool, error) {
+	f.ctx = ctx
 	f.gotKey = key
 	return f.exhausted, nil
 }
+
+type capturingRouteService struct {
+	delegate service.RouteService
+	ctx      context.Context
+}
+
+func (s *capturingRouteService) Resolve(ctx context.Context, requestedModel string) (domain.ProviderRoute, error) {
+	s.ctx = ctx
+	return s.delegate.Resolve(ctx, requestedModel)
+}
+
+type testContextKey struct{}
 
 func hashPlatformAPIKey(raw string) string {
 	sum := sha256.Sum256([]byte(raw))

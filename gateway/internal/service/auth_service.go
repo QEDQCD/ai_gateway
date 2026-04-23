@@ -18,11 +18,11 @@ var (
 )
 
 type AuthService interface {
-	Resolve(rawKey string, requestedModel string) (domain.RequestContext, error)
+	Resolve(ctx context.Context, rawKey string, requestedModel string) (domain.RequestContext, error)
 }
 
 type QuotaGuard interface {
-	CheckTenantQuota(tenantID string) error
+	CheckTenantQuota(ctx context.Context, tenantID string) error
 }
 
 type RedisQuotaClient interface {
@@ -74,13 +74,13 @@ func NewUnauthorizedAuthService() AuthService {
 	return unauthorizedAuthService{}
 }
 
-func (s authService) Resolve(rawKey string, requestedModel string) (domain.RequestContext, error) {
+func (s authService) Resolve(ctx context.Context, rawKey string, requestedModel string) (domain.RequestContext, error) {
 	rawKey = strings.TrimSpace(rawKey)
 	if rawKey == "" {
 		return domain.RequestContext{}, fmt.Errorf("%w: platform API key is required", ErrUnauthorized)
 	}
 
-	platformKey, err := s.repository.FindPlatformAPIKeyByHash(context.Background(), hashPlatformAPIKey(rawKey))
+	platformKey, err := s.repository.FindPlatformAPIKeyByHash(ctx, hashPlatformAPIKey(rawKey))
 	if err != nil {
 		if errors.Is(err, store.ErrAuthRecordNotFound) {
 			return domain.RequestContext{}, fmt.Errorf("%w: platform API key not found", ErrUnauthorized)
@@ -91,7 +91,7 @@ func (s authService) Resolve(rawKey string, requestedModel string) (domain.Reque
 		return domain.RequestContext{}, fmt.Errorf("%w: platform API key is %s", ErrUnauthorized, platformKey.Status)
 	}
 
-	tenant, err := s.repository.FindTenantByID(context.Background(), platformKey.TenantID)
+	tenant, err := s.repository.FindTenantByID(ctx, platformKey.TenantID)
 	if err != nil {
 		if errors.Is(err, store.ErrAuthRecordNotFound) {
 			return domain.RequestContext{}, fmt.Errorf("%w: tenant not found", ErrUnauthorized)
@@ -102,11 +102,11 @@ func (s authService) Resolve(rawKey string, requestedModel string) (domain.Reque
 		return domain.RequestContext{}, fmt.Errorf("%w: tenant is %s", ErrUnauthorized, tenant.Status)
 	}
 
-	if err := s.quotaGuard.CheckTenantQuota(tenant.ID); err != nil {
+	if err := s.quotaGuard.CheckTenantQuota(ctx, tenant.ID); err != nil {
 		return domain.RequestContext{}, err
 	}
 
-	route, err := s.routeService.Resolve(requestedModel)
+	route, err := s.routeService.Resolve(ctx, requestedModel)
 	if err != nil {
 		return domain.RequestContext{}, err
 	}
@@ -119,8 +119,8 @@ func (s authService) Resolve(rawKey string, requestedModel string) (domain.Reque
 	}, nil
 }
 
-func (g RedisQuotaGuard) CheckTenantQuota(tenantID string) error {
-	exhausted, err := g.client.Exists(context.Background(), g.keyPrefix+tenantID)
+func (g RedisQuotaGuard) CheckTenantQuota(ctx context.Context, tenantID string) error {
+	exhausted, err := g.client.Exists(ctx, g.keyPrefix+tenantID)
 	if err != nil {
 		return err
 	}
@@ -130,7 +130,7 @@ func (g RedisQuotaGuard) CheckTenantQuota(tenantID string) error {
 	return nil
 }
 
-func (unauthorizedAuthService) Resolve(string, string) (domain.RequestContext, error) {
+func (unauthorizedAuthService) Resolve(context.Context, string, string) (domain.RequestContext, error) {
 	return domain.RequestContext{}, fmt.Errorf("%w: auth service not configured", ErrUnauthorized)
 }
 
