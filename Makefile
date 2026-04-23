@@ -7,4 +7,5 @@ lint:
 	./scripts/lint.sh
 
 dev-up:
-	docker compose -f deploy/compose/compose.yml up -d
+	npm --prefix web run build
+	docker compose -f deploy/compose/compose.yml up -d --build
