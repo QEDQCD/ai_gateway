@@ -16,6 +16,7 @@ type Config struct {
 	BootstrapProviderID              string
 	BootstrapProvider                string
 	BootstrapProviderDisplayName     string
+	BootstrapSupportedModels         []string
 	BootstrapQuotaExhaustedTenantIDs []string
 }
 
@@ -23,6 +24,12 @@ func Load() Config {
 	listenAddr := os.Getenv("GATEWAY_LISTEN_ADDR")
 	if listenAddr == "" {
 		listenAddr = ":8080"
+	}
+
+	bootstrapProvider := defaultString(os.Getenv("GATEWAY_BOOTSTRAP_PROVIDER"), "openai")
+	bootstrapSupportedModels := splitCommaSeparatedEnv(os.Getenv("GATEWAY_BOOTSTRAP_SUPPORTED_MODELS"))
+	if len(bootstrapSupportedModels) == 0 {
+		bootstrapSupportedModels = defaultBootstrapSupportedModels(bootstrapProvider)
 	}
 
 	return Config{
@@ -33,8 +40,9 @@ func Load() Config {
 		BootstrapTenantID:                defaultString(os.Getenv("GATEWAY_BOOTSTRAP_TENANT_ID"), "tenant_bootstrap"),
 		BootstrapTenantName:              defaultString(os.Getenv("GATEWAY_BOOTSTRAP_TENANT_NAME"), "Bootstrap Tenant"),
 		BootstrapProviderID:              defaultString(os.Getenv("GATEWAY_BOOTSTRAP_PROVIDER_ID"), "pc_bootstrap"),
-		BootstrapProvider:                defaultString(os.Getenv("GATEWAY_BOOTSTRAP_PROVIDER"), "openai"),
+		BootstrapProvider:                bootstrapProvider,
 		BootstrapProviderDisplayName:     defaultString(os.Getenv("GATEWAY_BOOTSTRAP_PROVIDER_DISPLAY_NAME"), "OpenAI Primary"),
+		BootstrapSupportedModels:         bootstrapSupportedModels,
 		BootstrapQuotaExhaustedTenantIDs: splitCommaSeparatedEnv(os.Getenv("GATEWAY_QUOTA_EXHAUSTED_TENANTS")),
 	}
 }
@@ -60,4 +68,13 @@ func splitCommaSeparatedEnv(value string) []string {
 		}
 	}
 	return items
+}
+
+func defaultBootstrapSupportedModels(provider string) []string {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "openai":
+		return []string{"gpt-4o-mini"}
+	default:
+		return nil
+	}
 }

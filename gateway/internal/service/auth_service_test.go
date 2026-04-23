@@ -32,7 +32,7 @@ func TestResolveRequestContextUsesPlatformKeyAndProviderCredential(t *testing.T)
 	}{
 		{
 			name:           "active platform key and active provider credential resolves request context",
-			requestedModel: "openai",
+			requestedModel: "gpt-4o-mini",
 			platformKey: store.PlatformAPIKeyRecord{
 				ID:       "pak_123",
 				TenantID: "tenant_123",
@@ -50,7 +50,43 @@ func TestResolveRequestContextUsesPlatformKeyAndProviderCredential(t *testing.T)
 					Provider:    "anthropic",
 					DisplayName: "Anthropic Primary",
 					Status:      domain.StatusActive,
+					SupportedModels: []string{
+						"claude-3-5-sonnet",
+					},
 				},
+				{
+					ID:          "pc_456",
+					Provider:    "openai",
+					DisplayName: "OpenAI Primary",
+					Status:      domain.StatusActive,
+					SupportedModels: []string{
+						"gpt-4o-mini",
+					},
+				},
+			},
+			wantContext: domain.RequestContext{
+				TenantID:             "tenant_123",
+				PlatformAPIKeyID:     "pak_123",
+				SelectedProviderID:   "pc_456",
+				SelectedProviderName: "OpenAI Primary",
+			},
+			wantCredentialLookups: 1,
+		},
+		{
+			name:           "provider alias still resolves when supported models are unavailable",
+			requestedModel: "openai",
+			platformKey: store.PlatformAPIKeyRecord{
+				ID:       "pak_compat",
+				TenantID: "tenant_123",
+				Name:     "demo key",
+				Status:   domain.StatusActive,
+			},
+			tenant: store.TenantRecord{
+				ID:     "tenant_123",
+				Name:   "demo tenant",
+				Status: domain.StatusActive,
+			},
+			providerCredentials: []store.ProviderCredentialRecord{
 				{
 					ID:          "pc_456",
 					Provider:    "openai",
@@ -60,9 +96,123 @@ func TestResolveRequestContextUsesPlatformKeyAndProviderCredential(t *testing.T)
 			},
 			wantContext: domain.RequestContext{
 				TenantID:             "tenant_123",
-				PlatformAPIKeyID:     "pak_123",
+				PlatformAPIKeyID:     "pak_compat",
 				SelectedProviderID:   "pc_456",
 				SelectedProviderName: "OpenAI Primary",
+			},
+			wantCredentialLookups: 1,
+		},
+		{
+			name:           "requested model prefers supported model match over provider alias compatibility",
+			requestedModel: "gpt-4o-mini",
+			platformKey: store.PlatformAPIKeyRecord{
+				ID:       "pak_prefer_model",
+				TenantID: "tenant_123",
+				Name:     "demo key",
+				Status:   domain.StatusActive,
+			},
+			tenant: store.TenantRecord{
+				ID:     "tenant_123",
+				Name:   "demo tenant",
+				Status: domain.StatusActive,
+			},
+			providerCredentials: []store.ProviderCredentialRecord{
+				{
+					ID:          "pc_provider_alias",
+					Provider:    "gpt-4o-mini",
+					DisplayName: "Compatibility Alias",
+					Status:      domain.StatusActive,
+					SupportedModels: []string{
+						"claude-3-5-sonnet",
+					},
+				},
+				{
+					ID:          "pc_model_match",
+					Provider:    "openai",
+					DisplayName: "OpenAI Primary",
+					Status:      domain.StatusActive,
+					SupportedModels: []string{
+						"gpt-4o-mini",
+					},
+				},
+			},
+			wantContext: domain.RequestContext{
+				TenantID:             "tenant_123",
+				PlatformAPIKeyID:     "pak_prefer_model",
+				SelectedProviderID:   "pc_model_match",
+				SelectedProviderName: "OpenAI Primary",
+			},
+			wantCredentialLookups: 1,
+		},
+		{
+			name:           "display name compatibility resolves when model match is unavailable",
+			requestedModel: "OpenAI Primary",
+			platformKey: store.PlatformAPIKeyRecord{
+				ID:       "pak_display_name",
+				TenantID: "tenant_123",
+				Name:     "demo key",
+				Status:   domain.StatusActive,
+			},
+			tenant: store.TenantRecord{
+				ID:     "tenant_123",
+				Name:   "demo tenant",
+				Status: domain.StatusActive,
+			},
+			providerCredentials: []store.ProviderCredentialRecord{
+				{
+					ID:          "pc_display_name",
+					Provider:    "openai",
+					DisplayName: "OpenAI Primary",
+					Status:      domain.StatusActive,
+				},
+			},
+			wantContext: domain.RequestContext{
+				TenantID:             "tenant_123",
+				PlatformAPIKeyID:     "pak_display_name",
+				SelectedProviderID:   "pc_display_name",
+				SelectedProviderName: "OpenAI Primary",
+			},
+			wantCredentialLookups: 1,
+		},
+		{
+			name:           "missing requested model falls back to first active credential",
+			requestedModel: "",
+			platformKey: store.PlatformAPIKeyRecord{
+				ID:       "pak_first_active",
+				TenantID: "tenant_123",
+				Name:     "demo key",
+				Status:   domain.StatusActive,
+			},
+			tenant: store.TenantRecord{
+				ID:     "tenant_123",
+				Name:   "demo tenant",
+				Status: domain.StatusActive,
+			},
+			providerCredentials: []store.ProviderCredentialRecord{
+				{
+					ID:          "pc_first",
+					Provider:    "anthropic",
+					DisplayName: "Anthropic Primary",
+					Status:      domain.StatusActive,
+					SupportedModels: []string{
+						"claude-3-5-sonnet",
+					},
+				},
+				{
+					ID:          "pc_second",
+					Provider:    "openai",
+					DisplayName: "OpenAI Primary",
+					Status:      domain.StatusActive,
+					SupportedModels: []string{
+						"gpt-4o-mini",
+					},
+				},
+			},
+			wantContext: domain.RequestContext{
+				TenantID:             "tenant_123",
+				PlatformAPIKeyID:     "pak_first_active",
+				SelectedProviderID:   "pc_first",
+				SelectedProviderName: "Anthropic Primary",
 			},
 			wantCredentialLookups: 1,
 		},
@@ -92,7 +242,7 @@ func TestResolveRequestContextUsesPlatformKeyAndProviderCredential(t *testing.T)
 		},
 		{
 			name:           "requested model without matching active provider returns route not found",
-			requestedModel: "openai",
+			requestedModel: "gpt-4o-mini",
 			platformKey: store.PlatformAPIKeyRecord{
 				ID:       "pak_123",
 				TenantID: "tenant_123",
@@ -110,6 +260,9 @@ func TestResolveRequestContextUsesPlatformKeyAndProviderCredential(t *testing.T)
 					Provider:    "anthropic",
 					DisplayName: "Anthropic Primary",
 					Status:      domain.StatusActive,
+					SupportedModels: []string{
+						"claude-3-5-sonnet",
+					},
 				},
 			},
 			wantErr:               service.ErrRouteNotFound,

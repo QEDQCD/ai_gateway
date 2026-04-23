@@ -26,10 +26,11 @@ type TenantRecord struct {
 }
 
 type ProviderCredentialRecord struct {
-	ID          string
-	Provider    string
-	DisplayName string
-	Status      domain.Status
+	ID              string
+	Provider        string
+	DisplayName     string
+	Status          domain.Status
+	SupportedModels []string
 }
 
 type AuthRepository interface {
@@ -47,6 +48,7 @@ type BootstrapAuthConfig struct {
 	ProviderCredentialID string
 	Provider             string
 	ProviderDisplayName  string
+	SupportedModels      []string
 }
 
 type BootstrapAuthRepository struct {
@@ -90,10 +92,11 @@ func NewBootstrapAuthRepository(cfg BootstrapAuthConfig) *BootstrapAuthRepositor
 	}
 	repo.providerCredentials = []ProviderCredentialRecord{
 		{
-			ID:          cfg.ProviderCredentialID,
-			Provider:    cfg.Provider,
-			DisplayName: cfg.ProviderDisplayName,
-			Status:      domain.StatusActive,
+			ID:              cfg.ProviderCredentialID,
+			Provider:        cfg.Provider,
+			DisplayName:     cfg.ProviderDisplayName,
+			Status:          domain.StatusActive,
+			SupportedModels: append([]string(nil), cfg.SupportedModels...),
 		},
 	}
 

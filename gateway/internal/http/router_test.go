@@ -108,7 +108,7 @@ func TestAuthCheckRouteWithInjectedAuthServiceReturnsSuccess(t *testing.T) {
 		},
 	}
 	app := apphttp.NewRouterWithAuth(stub)
-	req := httptest.NewRequest(http.MethodGet, "/v1/auth-check?model=openai", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/auth-check?model=gpt-4o-mini", nil)
 	req.Header.Set("Authorization", "Bearer platform-live-key")
 
 	resp, err := app.Test(req)
@@ -129,8 +129,8 @@ func TestAuthCheckRouteWithInjectedAuthServiceReturnsSuccess(t *testing.T) {
 	if stub.rawKey != "platform-live-key" {
 		t.Fatalf("expected raw key %q, got %q", "platform-live-key", stub.rawKey)
 	}
-	if stub.requestedModel != "openai" {
-		t.Fatalf("expected requested model %q, got %q", "openai", stub.requestedModel)
+	if stub.requestedModel != "gpt-4o-mini" {
+		t.Fatalf("expected requested model %q, got %q", "gpt-4o-mini", stub.requestedModel)
 	}
 	if stub.ctx == nil {
 		t.Fatal("expected auth service to receive a request context")

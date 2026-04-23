@@ -38,6 +38,17 @@ func (s routeService) Resolve(ctx context.Context, requestedModel string) (domai
 	}
 
 	for _, credential := range credentials {
+		for _, supportedModel := range credential.SupportedModels {
+			if strings.EqualFold(strings.TrimSpace(supportedModel), requestedModel) {
+				return domain.ProviderRoute{
+					ProviderID:   credential.ID,
+					ProviderName: credential.DisplayName,
+				}, nil
+			}
+		}
+	}
+
+	for _, credential := range credentials {
 		if strings.EqualFold(credential.Provider, requestedModel) {
 			return domain.ProviderRoute{
 				ProviderID:   credential.ID,

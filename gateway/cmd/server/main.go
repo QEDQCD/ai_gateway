@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 
+	"github.com/gofiber/fiber/v2"
 	"github.com/liwenjian/ai_gateway/gateway/internal/config"
 	apphttp "github.com/liwenjian/ai_gateway/gateway/internal/http"
 	"github.com/liwenjian/ai_gateway/gateway/internal/service"
@@ -13,6 +14,14 @@ import (
 func main() {
 	cfg := config.Load()
 	logger := telemetry.NewLogger()
+	logger.Fatal(newServerApp(cfg).Listen(cfg.ListenAddr))
+}
+
+func newServerApp(cfg config.Config) *fiber.App {
+	return apphttp.NewRouterWithAuth(newBootstrapAuthService(cfg))
+}
+
+func newBootstrapAuthService(cfg config.Config) service.AuthService {
 	repository := store.NewBootstrapAuthRepository(store.BootstrapAuthConfig{
 		RawPlatformAPIKey:    cfg.BootstrapPlatformAPIKey,
 		PlatformAPIKeyID:     cfg.BootstrapPlatformAPIKeyID,
@@ -22,11 +31,10 @@ func main() {
 		ProviderCredentialID: cfg.BootstrapProviderID,
 		Provider:             cfg.BootstrapProvider,
 		ProviderDisplayName:  cfg.BootstrapProviderDisplayName,
+		SupportedModels:      cfg.BootstrapSupportedModels,
 	})
 	quotaGuard := service.NewRedisQuotaGuard(newStaticQuotaClient(cfg.BootstrapQuotaExhaustedTenantIDs))
-	authService := service.NewAuthService(repository, quotaGuard, service.NewRouteService(repository))
-
-	logger.Fatal(apphttp.NewRouterWithAuth(authService).Listen(cfg.ListenAddr))
+	return service.NewAuthService(repository, quotaGuard, service.NewRouteService(repository))
 }
 
 type staticQuotaClient struct {
