@@ -145,10 +145,11 @@ func (r *SQLAuthRepository) ListActiveProviderCredentials(ctx context.Context) (
 	credentials := make([]ProviderCredentialRecord, 0, len(rows))
 	for _, row := range rows {
 		credentials = append(credentials, ProviderCredentialRecord{
-			ID:          row.ID,
-			Provider:    row.Provider,
-			DisplayName: row.DisplayName,
-			Status:      domain.Status(row.Status),
+			ID:              row.ID,
+			Provider:        row.Provider,
+			DisplayName:     row.DisplayName,
+			Status:          domain.Status(row.Status),
+			SupportedModels: append([]string(nil), row.SupportedModels...),
 		})
 	}
 

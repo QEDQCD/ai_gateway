@@ -18,6 +18,7 @@ create table provider_credentials (
   id text primary key,
   provider text not null,
   display_name text not null,
+  supported_models text[] not null default '{}',
   encrypted_secret text not null,
   status text not null check (status in ('active', 'disabled')),
   created_at timestamptz not null default now()

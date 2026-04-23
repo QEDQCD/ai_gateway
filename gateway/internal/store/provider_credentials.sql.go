@@ -10,17 +10,18 @@ import (
 )
 
 const listActiveProviderCredentials = `-- name: ListActiveProviderCredentials :many
-select id, provider, display_name, encrypted_secret, status
+select id, provider, display_name, supported_models, encrypted_secret, status
 from provider_credentials
 where status = 'active'
 `
 
 type ListActiveProviderCredentialsRow struct {
-	ID              string `json:"id"`
-	Provider        string `json:"provider"`
-	DisplayName     string `json:"display_name"`
-	EncryptedSecret string `json:"encrypted_secret"`
-	Status          string `json:"status"`
+	ID              string   `json:"id"`
+	Provider        string   `json:"provider"`
+	DisplayName     string   `json:"display_name"`
+	SupportedModels []string `json:"supported_models"`
+	EncryptedSecret string   `json:"encrypted_secret"`
+	Status          string   `json:"status"`
 }
 
 func (q *Queries) ListActiveProviderCredentials(ctx context.Context) ([]ListActiveProviderCredentialsRow, error) {
@@ -36,6 +37,7 @@ func (q *Queries) ListActiveProviderCredentials(ctx context.Context) ([]ListActi
 			&i.ID,
 			&i.Provider,
 			&i.DisplayName,
+			&i.SupportedModels,
 			&i.EncryptedSecret,
 			&i.Status,
 		); err != nil {
