@@ -5,14 +5,10 @@ export type ConsoleRouteMeta = {
   description: string;
 };
 
-export const navigation = [
-  {
-    path: "/",
-    label: "Overview",
-    title: "Overview",
-    description: "Monitor gateway health, routing posture, and core platform signals.",
-  },
-];
+export type ConsoleNavigationItem = ConsoleRouteMeta & {
+  path: string;
+  label: string;
+};
 
 function isConsoleRouteMeta(handle: unknown): handle is ConsoleRouteMeta {
   if (!handle || typeof handle !== "object") {
@@ -22,13 +18,20 @@ function isConsoleRouteMeta(handle: unknown): handle is ConsoleRouteMeta {
   return typeof handle.title === "string" && typeof handle.description === "string";
 }
 
-export function AppLayout() {
+function toRouteMeta(navigationItem: ConsoleNavigationItem): ConsoleRouteMeta {
+  return {
+    title: navigationItem.title,
+    description: navigationItem.description,
+  };
+}
+
+export function AppLayout({ navigation }: { navigation: readonly ConsoleNavigationItem[] }) {
   const matches = useMatches();
   const current =
     matches.reduce<ConsoleRouteMeta | undefined>(
       (matchedMeta, match) => (isConsoleRouteMeta(match.handle) ? match.handle : matchedMeta),
       undefined,
-    ) ?? navigation[0];
+    ) ?? toRouteMeta(navigation[0]);
 
   return (
     <div className="app-shell">
@@ -50,6 +53,7 @@ export function AppLayout() {
         </nav>
         <div className="sidebar__status">
           <span className="status-badge status-badge--neutral">MVP</span>
+          <span className="status-badge status-badge--neutral">Bootstrap Mode</span>
           <span className="status-badge status-badge--healthy">Gateway Healthy</span>
         </div>
       </aside>
