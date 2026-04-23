@@ -143,6 +143,18 @@ a {
   margin: 0 0 12px;
 }
 
+.section-card p {
+  margin: 0;
+}
+
+.page-grid > .section-card + .section-card {
+  margin-top: 0;
+}
+
+.page-content .section-card p + p {
+  margin-top: 8px;
+}
+
 .stat-card__label {
   margin: 0;
   color: #647285;

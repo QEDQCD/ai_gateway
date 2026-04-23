@@ -15,3 +15,16 @@ test("renders the overview shell smoke test", async () => {
   ).toBeInTheDocument();
   expect(screen.getByText("Requests 24h")).toBeInTheDocument();
 });
+
+test("renders the routes shell smoke test", async () => {
+  render(<RouterProvider router={createTestRouter(["/routes"])} />);
+
+  expect(
+    await screen.findByRole("heading", { level: 1, name: "Routes" }),
+  ).toBeInTheDocument();
+  expect(
+    screen.getByText("Inspect model mappings, provider resolution, and fallback behavior."),
+  ).toBeInTheDocument();
+  expect(screen.getByRole("heading", { level: 2, name: "Routes" })).toBeInTheDocument();
+  expect(screen.getByRole("heading", { level: 3, name: "Routing Policy" })).toBeInTheDocument();
+});
