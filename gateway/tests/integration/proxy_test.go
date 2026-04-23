@@ -233,7 +233,8 @@ func newGatewayApp(t *testing.T, providerBaseURL string) (*fiber.App, *queue.Rec
 	usagePublisher := queue.NewRecordingUsagePublisher()
 	chatProxy := service.NewChatProxyService(provider.NewOpenAIClient(http.DefaultClient), usagePublisher)
 	embeddingProxy := service.NewEmbeddingProxyService(provider.NewOpenAIClient(http.DefaultClient), usagePublisher)
-	return apphttp.NewRouterWithServices(authService, chatProxy, embeddingProxy), usagePublisher
+	ragProxy := service.NewRAGProxyService(http.DefaultClient)
+	return apphttp.NewRouterWithServices(authService, chatProxy, embeddingProxy, ragProxy), usagePublisher
 }
 
 type staticQuotaClient struct{}
