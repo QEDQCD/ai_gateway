@@ -34,6 +34,8 @@ type RedisQuotaGuard struct {
 	keyPrefix string
 }
 
+type unauthorizedAuthService struct{}
+
 type authService struct {
 	repository   store.AuthRepository
 	quotaGuard   QuotaGuard
@@ -66,6 +68,10 @@ func NewRedisQuotaGuard(client RedisQuotaClient) RedisQuotaGuard {
 		client:    client,
 		keyPrefix: redisQuotaExhaustedKeyPrefix,
 	}
+}
+
+func NewUnauthorizedAuthService() AuthService {
+	return unauthorizedAuthService{}
 }
 
 func (s authService) Resolve(rawKey string, requestedModel string) (domain.RequestContext, error) {
@@ -122,6 +128,10 @@ func (g RedisQuotaGuard) CheckTenantQuota(tenantID string) error {
 		return ErrQuotaExceeded
 	}
 	return nil
+}
+
+func (unauthorizedAuthService) Resolve(string, string) (domain.RequestContext, error) {
+	return domain.RequestContext{}, fmt.Errorf("%w: auth service not configured", ErrUnauthorized)
 }
 
 func hashPlatformAPIKey(rawKey string) string {

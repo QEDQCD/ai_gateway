@@ -232,6 +232,18 @@ func TestRedisQuotaGuardCheckTenantQuota(t *testing.T) {
 	}
 }
 
+func TestUnauthorizedAuthServiceResolveReturnsUnauthorized(t *testing.T) {
+	t.Parallel()
+
+	authService := service.NewUnauthorizedAuthService()
+
+	_, err := authService.Resolve("platform-live-key", "openai")
+
+	if !errors.Is(err, service.ErrUnauthorized) {
+		t.Fatalf("expected error %v, got %v", service.ErrUnauthorized, err)
+	}
+}
+
 type fakeAuthRepository struct {
 	platformKey                 store.PlatformAPIKeyRecord
 	tenant                      store.TenantRecord
