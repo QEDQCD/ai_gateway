@@ -1,4 +1,4 @@
-import { NavLink, Outlet } from "react-router-dom";
+import { NavLink, Outlet, useMatches } from "react-router-dom";
 
 export type ConsoleRouteMeta = {
   title: string;
@@ -14,8 +14,21 @@ export const navigation = [
   },
 ];
 
+function isConsoleRouteMeta(handle: unknown): handle is ConsoleRouteMeta {
+  if (!handle || typeof handle !== "object") {
+    return false;
+  }
+
+  return typeof handle.title === "string" && typeof handle.description === "string";
+}
+
 export function AppLayout() {
-  const current = navigation[0];
+  const matches = useMatches();
+  const current =
+    matches.reduce<ConsoleRouteMeta | undefined>(
+      (matchedMeta, match) => (isConsoleRouteMeta(match.handle) ? match.handle : matchedMeta),
+      undefined,
+    ) ?? navigation[0];
 
   return (
     <div className="app-shell">
