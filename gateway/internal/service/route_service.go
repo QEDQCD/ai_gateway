@@ -4,12 +4,15 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"unicode"
 
 	"github.com/liwenjian/ai_gateway/gateway/internal/domain"
 	"github.com/liwenjian/ai_gateway/gateway/internal/store"
 )
 
 var ErrRouteNotFound = errors.New("no active provider credential available")
+
+const defaultRouteKey = "default"
 
 type RouteService interface {
 	Resolve(ctx context.Context, requestedModel string) (domain.ProviderRoute, error)
@@ -40,20 +43,20 @@ func (s routeService) Resolve(ctx context.Context, requestedModel string) (domai
 	for _, credential := range credentials {
 		for _, supportedModel := range credential.SupportedModels {
 			if strings.EqualFold(strings.TrimSpace(supportedModel), requestedModel) {
-				return routeFromCredential(credential), nil
+				return routeFromCredential(credential, supportedModel), nil
 			}
 		}
 	}
 
 	for _, credential := range credentials {
 		if strings.EqualFold(credential.Provider, requestedModel) {
-			return routeFromCredential(credential), nil
+			return routeFromCredential(credential, ""), nil
 		}
 	}
 
 	for _, credential := range credentials {
 		if strings.EqualFold(credential.DisplayName, requestedModel) {
-			return routeFromCredential(credential), nil
+			return routeFromCredential(credential, ""), nil
 		}
 	}
 
@@ -61,20 +64,82 @@ func (s routeService) Resolve(ctx context.Context, requestedModel string) (domai
 }
 
 func firstCredentialRoute(credentials []store.ProviderCredentialRecord) domain.ProviderRoute {
-	return routeFromCredential(credentials[0])
+	return routeFromCredential(credentials[0], "")
 }
 
-func routeFromCredential(credential store.ProviderCredentialRecord) domain.ProviderRoute {
+func routeFromCredential(credential store.ProviderCredentialRecord, requestedModel string) domain.ProviderRoute {
 	return domain.ProviderRoute{
-		RouteID:      deriveBootstrapRouteID(credential.ID),
+		RouteID:      RouteIDForCredential(credential.ID, credential.SupportedModels, requestedModel),
 		ProviderID:   credential.ID,
 		ProviderName: credential.DisplayName,
 		Target:       providerTargetFromCredential(credential),
 	}
 }
 
-func deriveBootstrapRouteID(providerCredentialID string) string {
-	return "route:" + providerCredentialID + ":default"
+func RouteIDForCredential(providerCredentialID string, supportedModels []string, requestedModel string) string {
+	return "route:" + providerCredentialID + ":" + routeKeyForCredential(supportedModels, requestedModel)
+}
+
+func routeKeyForCredential(supportedModels []string, requestedModel string) string {
+	requestedModel = strings.TrimSpace(requestedModel)
+	if requestedModel == "" {
+		return defaultRouteKey
+	}
+
+	firstSupportedModel := ""
+	for index, supportedModel := range supportedModels {
+		supportedModel = strings.TrimSpace(supportedModel)
+		if supportedModel == "" {
+			continue
+		}
+		if firstSupportedModel == "" {
+			firstSupportedModel = supportedModel
+		}
+		if strings.EqualFold(supportedModel, requestedModel) {
+			if index == 0 {
+				return defaultRouteKey
+			}
+			if routeKey := slugRouteKey(supportedModel); routeKey != "" {
+				return routeKey
+			}
+			return defaultRouteKey
+		}
+	}
+
+	if firstSupportedModel != "" {
+		return defaultRouteKey
+	}
+
+	if routeKey := slugRouteKey(requestedModel); routeKey != "" {
+		return routeKey
+	}
+	return defaultRouteKey
+}
+
+func slugRouteKey(value string) string {
+	value = strings.TrimSpace(strings.ToLower(value))
+	if value == "" {
+		return ""
+	}
+
+	var builder strings.Builder
+	lastDash := false
+	for _, r := range value {
+		switch {
+		case unicode.IsLetter(r) || unicode.IsDigit(r):
+			builder.WriteRune(r)
+			lastDash = false
+		case !lastDash:
+			builder.WriteByte('-')
+			lastDash = true
+		}
+	}
+
+	slug := strings.Trim(builder.String(), "-")
+	if slug == "" {
+		return ""
+	}
+	return slug
 }
 
 func providerTargetFromCredential(credential store.ProviderCredentialRecord) domain.ProviderTarget {

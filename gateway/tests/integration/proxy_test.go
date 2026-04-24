@@ -249,8 +249,8 @@ func TestEmbeddingsProxyReturnsSuccess(t *testing.T) {
 	if events[0].PlatformAPIKeyName != "demo key" {
 		t.Fatalf("expected platform api key name %q, got %q", "demo key", events[0].PlatformAPIKeyName)
 	}
-	if events[0].RouteID != "route:provider_qwen_primary:default" {
-		t.Fatalf("expected route id %q, got %q", "route:provider_qwen_primary:default", events[0].RouteID)
+	if events[0].RouteID != "route:provider_qwen_primary:text-embedding-3-small" {
+		t.Fatalf("expected route id %q, got %q", "route:provider_qwen_primary:text-embedding-3-small", events[0].RouteID)
 	}
 	if events[0].RequestID == "" {
 		t.Fatal("expected request id to be populated")

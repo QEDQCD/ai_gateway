@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/liwenjian/ai_gateway/gateway/internal/secret"
+	"github.com/liwenjian/ai_gateway/gateway/internal/service"
 )
 
 //go:embed migrations/*.sql
@@ -110,6 +111,9 @@ func SeedDemoData(ctx context.Context, db seedDB, cfg SeedConfig) error {
 	}
 
 	chatModel, embeddingModel, supportedModels := seededModels(cfg.Provider)
+	chatRouteID := service.RouteIDForCredential("provider_qwen_primary", supportedModels, chatModel)
+	embeddingRouteID := service.RouteIDForCredential("provider_qwen_primary", supportedModels, embeddingModel)
+	ragRouteID := service.RouteIDForCredential("provider_rag_service", []string{"rag-query"}, "rag-query")
 	providerDisplayName := escapeLiteral(cfg.ProviderDisplayName)
 	providerSecret, err := encryptSeedSecret(cfg.SecretCodec, cfg.ProviderAPIKey)
 	if err != nil {
@@ -172,9 +176,9 @@ func SeedDemoData(ctx context.Context, db seedDB, cfg SeedConfig) error {
 			chunk_count = excluded.chunk_count,
 			updated_at = excluded.updated_at;`,
 		fmt.Sprintf(`insert into route_catalog (id, requested_model, resolved_provider, provider_credential_id, endpoint, latency_ms, health_status, request_mode, updated_at) values
-			('route_chat_primary', '%s', '%s', 'provider_qwen_primary', '/v1/chat/completions', 218, 'healthy', '聊天', now() - interval '2 minutes'),
-			('route_embedding_primary', '%s', '%s', 'provider_qwen_primary', '/v1/embeddings', 64, 'healthy', '向量', now() - interval '3 minutes'),
-			('route_rag_primary', 'rag-query', '知识库检索服务', 'provider_rag_service', '/v1/rag/query', 312, 'warning', '知识库', now() - interval '5 minutes')
+			('%s', '%s', '%s', 'provider_qwen_primary', '/v1/chat/completions', 218, 'healthy', '聊天', now() - interval '2 minutes'),
+			('%s', '%s', '%s', 'provider_qwen_primary', '/v1/embeddings', 64, 'healthy', '向量', now() - interval '3 minutes'),
+			('%s', 'rag-query', '知识库检索服务', 'provider_rag_service', '/v1/rag/query', 312, 'warning', '知识库', now() - interval '5 minutes')
 		on conflict (id) do update set
 			requested_model = excluded.requested_model,
 			resolved_provider = excluded.resolved_provider,
@@ -183,7 +187,7 @@ func SeedDemoData(ctx context.Context, db seedDB, cfg SeedConfig) error {
 			latency_ms = excluded.latency_ms,
 			health_status = excluded.health_status,
 			request_mode = excluded.request_mode,
-			updated_at = excluded.updated_at;`, escapeLiteral(chatModel), providerDisplayName, escapeLiteral(embeddingModel), providerDisplayName),
+			updated_at = excluded.updated_at;`, chatRouteID, escapeLiteral(chatModel), providerDisplayName, embeddingRouteID, escapeLiteral(embeddingModel), providerDisplayName, ragRouteID),
 		fmt.Sprintf(`insert into audit_logs (tenant_id, platform_api_key_id, requested_model, endpoint, status_code, provider_display_name, latency_ms, created_at)
 		select * from (values
 			('tenant_alpha', 'pak_live_console', '%s', '/v1/chat/completions', 200, '%s', 218, now() - interval '3 minutes'),
@@ -268,6 +272,10 @@ func joinArrayLiteral(values []string) string {
 }
 
 func RuntimeSeedStatements() []string {
+	supportedModels := []string{"gpt-4o-mini", "text-embedding-3-small"}
+	chatRouteID := service.RouteIDForCredential("provider_openai_demo", supportedModels, "gpt-4o-mini")
+	embeddingRouteID := service.RouteIDForCredential("provider_openai_demo", supportedModels, "text-embedding-3-small")
+
 	return []string{
 		`
 		insert into tenants (id, name, status, created_at)
@@ -333,7 +341,7 @@ func RuntimeSeedStatements() []string {
 				'pak_demo',
 				'demo key',
 				'provider_openai_demo',
-				'route:provider_openai_demo:default',
+				'` + chatRouteID + `',
 				'/v1/chat/completions',
 				'gpt-4o-mini',
 				'gpt-4o-mini',
@@ -356,7 +364,7 @@ func RuntimeSeedStatements() []string {
 				'pak_demo',
 				'demo key',
 				'provider_openai_demo',
-				'route:provider_openai_demo:default',
+				'` + embeddingRouteID + `',
 				'/v1/embeddings',
 				'text-embedding-3-small',
 				'text-embedding-3-small',
@@ -372,6 +380,43 @@ func RuntimeSeedStatements() []string {
 				timestamptz '2026-04-24T10:05:00Z',
 				timestamptz '2026-04-24T10:05:00.095Z',
 				timestamptz '2026-04-24T10:05:01Z'
+			)
+		on conflict (id) do nothing;
+		`,
+		`
+		insert into route_catalog (
+			id,
+			requested_model,
+			resolved_provider,
+			provider_credential_id,
+			endpoint,
+			latency_ms,
+			health_status,
+			request_mode,
+			updated_at
+		)
+		values
+			(
+				'` + chatRouteID + `',
+				'gpt-4o-mini',
+				'OpenAI Primary',
+				'provider_openai_demo',
+				'/v1/chat/completions',
+				182,
+				'healthy',
+				'聊天',
+				timestamptz '2026-04-24T10:00:00Z'
+			),
+			(
+				'` + embeddingRouteID + `',
+				'text-embedding-3-small',
+				'OpenAI Primary',
+				'provider_openai_demo',
+				'/v1/embeddings',
+				95,
+				'warning',
+				'向量',
+				timestamptz '2026-04-24T10:05:00Z'
 			)
 		on conflict (id) do nothing;
 		`,
@@ -403,7 +448,7 @@ func RuntimeSeedStatements() []string {
 				'llmevt_demo_002',
 				'llmreq_demo_002',
 				'tenant_demo',
-				'usage_estimated',
+				'request_failed',
 				'estimated',
 				'rate_limited',
 				429,
@@ -433,7 +478,7 @@ func RuntimeSeedStatements() []string {
 				'tenant_demo',
 				'pak_demo',
 				'provider_openai_demo',
-				'route:provider_openai_demo:default',
+				'` + chatRouteID + `',
 				'/v1/chat/completions',
 				'upstream',
 				'success',
@@ -447,7 +492,7 @@ func RuntimeSeedStatements() []string {
 				'tenant_demo',
 				'pak_demo',
 				'provider_openai_demo',
-				'route:provider_openai_demo:default',
+				'` + embeddingRouteID + `',
 				'/v1/embeddings',
 				'estimated',
 				'rate_limited',

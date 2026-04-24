@@ -95,6 +95,21 @@ insert into llm_request_events (
 	$1, $2, $3, $4, $5, $6, $7, $8, $9
 )`
 
+const insertUsageLifecycleEventSQL = `
+insert into llm_request_events (
+	id,
+	request_log_id,
+	tenant_id,
+	event_type,
+	usage_source,
+	usage_status,
+	status_code,
+	detail,
+	created_at
+) values (
+	$1, $2, $3, $4, $5, $6, $7, $8, $9
+)`
+
 func NewNoopUsageRecorder() UsageRecorder {
 	return noopUsageRecorder{}
 }
@@ -136,6 +151,22 @@ func (r sqlUsageRecorder) Record(ctx context.Context, record UsageRecord) error 
 		record.ErrorCode,
 		record.ErrorMessage,
 		record.RequestStartedAt,
+		record.RequestCompletedAt,
+	)
+	if err != nil {
+		return err
+	}
+
+	eventType, detail := lifecycleEventForRecord(record)
+	_, err = r.db.Exec(ctx, insertUsageLifecycleEventSQL,
+		uuid.NewString(),
+		record.RequestID,
+		record.TenantID,
+		eventType,
+		string(record.UsageSource),
+		string(record.Status),
+		record.StatusCode,
+		detail,
 		record.RequestCompletedAt,
 	)
 	return err
@@ -261,6 +292,7 @@ func (r UsageRecord) UsageEvent() queue.UsageEvent {
 		Endpoint:             r.RequestPath,
 		StatusCode:           r.StatusCode,
 		LatencyMS:            r.LatencyMS,
+		OccurredAt:           r.RequestCompletedAt,
 	}
 }
 
@@ -326,6 +358,18 @@ func (r *UsageRecord) ensureDefaults() {
 	if r.LatencyMS <= 0 {
 		r.LatencyMS = durationMilliseconds(r.RequestCompletedAt.Sub(r.RequestStartedAt))
 	}
+}
+
+func lifecycleEventForRecord(record UsageRecord) (string, string) {
+	if record.Status == UsageStatusSuccess {
+		if record.UsageSource == UsageSourceEstimated {
+			return "usage_estimated", "usage estimated after request completed"
+		}
+		return "response_received", "upstream response recorded"
+	}
+
+	detail := firstNonEmpty(strings.TrimSpace(record.ErrorMessage), "request failed")
+	return "request_failed", detail
 }
 
 func normalizeUsage(upstream *TokenUsage, estimated TokenUsage) (TokenUsage, UsageSource) {

@@ -327,6 +327,63 @@ func TestRuntimeMigrationsRejectCrossTenantUsageRows(t *testing.T) {
 	}
 }
 
+func TestRuntimeSeedRouteIDsAlignWithObservabilityRows(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	container, dsn := startPostgresContainer(ctx, t)
+	t.Cleanup(func() {
+		_ = container.Terminate(context.Background())
+	})
+
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("pgx.Connect failed: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = conn.Close(context.Background())
+	})
+
+	for _, migration := range readMigrations(t) {
+		if _, err := conn.Exec(ctx, migration); err != nil {
+			t.Fatalf("conn.Exec migration failed: %v", err)
+		}
+	}
+	for _, statement := range RuntimeSeedStatements() {
+		if _, err := conn.Exec(ctx, statement); err != nil {
+			t.Fatalf("conn.Exec seed failed: %v", err)
+		}
+	}
+
+	var logOrphans int
+	if err := conn.QueryRow(ctx, `
+		select count(*)
+		from llm_request_logs l
+		left join route_catalog r on r.id = l.route_id
+		where r.id is null
+	`).Scan(&logOrphans); err != nil {
+		t.Fatalf("QueryRow llm_request_logs orphan count failed: %v", err)
+	}
+	if logOrphans != 0 {
+		t.Fatalf("expected llm_request_logs route_id values to match route_catalog ids, got %d orphans", logOrphans)
+	}
+
+	var aggOrphans int
+	if err := conn.QueryRow(ctx, `
+		select count(*)
+		from llm_usage_agg_hourly a
+		left join route_catalog r on r.id = a.route_id
+		where r.id is null
+	`).Scan(&aggOrphans); err != nil {
+		t.Fatalf("QueryRow llm_usage_agg_hourly orphan count failed: %v", err)
+	}
+	if aggOrphans != 0 {
+		t.Fatalf("expected llm_usage_agg_hourly route_id values to match route_catalog ids, got %d orphans", aggOrphans)
+	}
+}
+
 func TestRuntimeSeedStatementsAreIdempotent(t *testing.T) {
 	t.Parallel()
 
