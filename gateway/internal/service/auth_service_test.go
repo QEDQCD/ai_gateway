@@ -67,8 +67,10 @@ func TestResolveRequestContextUsesPlatformKeyAndProviderCredential(t *testing.T)
 			wantContext: domain.RequestContext{
 				TenantID:             "tenant_123",
 				PlatformAPIKeyID:     "pak_123",
+				PlatformAPIKeyName:   "demo key",
 				SelectedProviderID:   "pc_456",
 				SelectedProviderName: "OpenAI Primary",
+				RouteID:              "route:pc_456:default",
 			},
 			wantCredentialLookups: 1,
 		},
@@ -97,8 +99,10 @@ func TestResolveRequestContextUsesPlatformKeyAndProviderCredential(t *testing.T)
 			wantContext: domain.RequestContext{
 				TenantID:             "tenant_123",
 				PlatformAPIKeyID:     "pak_compat",
+				PlatformAPIKeyName:   "demo key",
 				SelectedProviderID:   "pc_456",
 				SelectedProviderName: "OpenAI Primary",
+				RouteID:              "route:pc_456:default",
 			},
 			wantCredentialLookups: 1,
 		},
@@ -139,8 +143,10 @@ func TestResolveRequestContextUsesPlatformKeyAndProviderCredential(t *testing.T)
 			wantContext: domain.RequestContext{
 				TenantID:             "tenant_123",
 				PlatformAPIKeyID:     "pak_prefer_model",
+				PlatformAPIKeyName:   "demo key",
 				SelectedProviderID:   "pc_model_match",
 				SelectedProviderName: "OpenAI Primary",
+				RouteID:              "route:pc_model_match:default",
 			},
 			wantCredentialLookups: 1,
 		},
@@ -169,8 +175,10 @@ func TestResolveRequestContextUsesPlatformKeyAndProviderCredential(t *testing.T)
 			wantContext: domain.RequestContext{
 				TenantID:             "tenant_123",
 				PlatformAPIKeyID:     "pak_display_name",
+				PlatformAPIKeyName:   "demo key",
 				SelectedProviderID:   "pc_display_name",
 				SelectedProviderName: "OpenAI Primary",
+				RouteID:              "route:pc_display_name:default",
 			},
 			wantCredentialLookups: 1,
 		},
@@ -211,8 +219,10 @@ func TestResolveRequestContextUsesPlatformKeyAndProviderCredential(t *testing.T)
 			wantContext: domain.RequestContext{
 				TenantID:             "tenant_123",
 				PlatformAPIKeyID:     "pak_first_active",
+				PlatformAPIKeyName:   "demo key",
 				SelectedProviderID:   "pc_first",
 				SelectedProviderName: "Anthropic Primary",
+				RouteID:              "route:pc_first:default",
 			},
 			wantCredentialLookups: 1,
 		},
@@ -346,6 +356,15 @@ func TestResolveRequestContextUsesPlatformKeyAndProviderCredential(t *testing.T)
 
 			if err != nil {
 				t.Fatalf("Resolve returned unexpected error: %v", err)
+			}
+			if gotContext.PlatformAPIKeyName == "" {
+				t.Fatal("expected request context PlatformAPIKeyName to be populated")
+			}
+			if gotContext.RouteID == "" {
+				t.Fatal("expected request context RouteID to be populated")
+			}
+			if gotContext.RouteID == gotContext.SelectedProviderID {
+				t.Fatalf("expected route id to differ from provider credential id, got %q", gotContext.RouteID)
 			}
 			if gotContext != tc.wantContext {
 				t.Fatalf("expected context %+v, got %+v", tc.wantContext, gotContext)

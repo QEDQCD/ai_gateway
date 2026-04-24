@@ -7,9 +7,19 @@ import (
 )
 
 type UsageEvent struct {
+	RequestID            string `json:"request_id"`
 	TenantID             string `json:"tenant_id"`
 	PlatformAPIKeyID     string `json:"platform_api_key_id"`
+	PlatformAPIKeyName   string `json:"platform_api_key_name"`
 	ProviderCredentialID string `json:"provider_credential_id"`
+	RouteID              string `json:"route_id"`
+	Provider             string `json:"provider"`
+	Model                string `json:"model"`
+	Status               string `json:"status"`
+	UsageSource          string `json:"usage_source"`
+	PromptTokens         int    `json:"prompt_tokens"`
+	CompletionTokens     int    `json:"completion_tokens"`
+	TotalTokens          int    `json:"total_tokens"`
 	Endpoint             string `json:"endpoint"`
 	StatusCode           int    `json:"status_code"`
 	LatencyMS            int64  `json:"latency_ms"`

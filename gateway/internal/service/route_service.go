@@ -40,32 +40,20 @@ func (s routeService) Resolve(ctx context.Context, requestedModel string) (domai
 	for _, credential := range credentials {
 		for _, supportedModel := range credential.SupportedModels {
 			if strings.EqualFold(strings.TrimSpace(supportedModel), requestedModel) {
-				return domain.ProviderRoute{
-					ProviderID:   credential.ID,
-					ProviderName: credential.DisplayName,
-					Target:       providerTargetFromCredential(credential),
-				}, nil
+				return routeFromCredential(credential), nil
 			}
 		}
 	}
 
 	for _, credential := range credentials {
 		if strings.EqualFold(credential.Provider, requestedModel) {
-			return domain.ProviderRoute{
-				ProviderID:   credential.ID,
-				ProviderName: credential.DisplayName,
-				Target:       providerTargetFromCredential(credential),
-			}, nil
+			return routeFromCredential(credential), nil
 		}
 	}
 
 	for _, credential := range credentials {
 		if strings.EqualFold(credential.DisplayName, requestedModel) {
-			return domain.ProviderRoute{
-				ProviderID:   credential.ID,
-				ProviderName: credential.DisplayName,
-				Target:       providerTargetFromCredential(credential),
-			}, nil
+			return routeFromCredential(credential), nil
 		}
 	}
 
@@ -73,11 +61,20 @@ func (s routeService) Resolve(ctx context.Context, requestedModel string) (domai
 }
 
 func firstCredentialRoute(credentials []store.ProviderCredentialRecord) domain.ProviderRoute {
+	return routeFromCredential(credentials[0])
+}
+
+func routeFromCredential(credential store.ProviderCredentialRecord) domain.ProviderRoute {
 	return domain.ProviderRoute{
-		ProviderID:   credentials[0].ID,
-		ProviderName: credentials[0].DisplayName,
-		Target:       providerTargetFromCredential(credentials[0]),
+		RouteID:      deriveBootstrapRouteID(credential.ID),
+		ProviderID:   credential.ID,
+		ProviderName: credential.DisplayName,
+		Target:       providerTargetFromCredential(credential),
 	}
+}
+
+func deriveBootstrapRouteID(providerCredentialID string) string {
+	return "route:" + providerCredentialID + ":default"
 }
 
 func providerTargetFromCredential(credential store.ProviderCredentialRecord) domain.ProviderTarget {

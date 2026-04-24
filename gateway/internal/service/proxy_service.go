@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"time"
 
@@ -12,6 +13,8 @@ import (
 )
 
 var ErrProxyUnavailable = errors.New("proxy service not configured")
+
+const publishFailureRecordTimeout = 2 * time.Second
 
 type StatusError struct {
 	Code    int
@@ -34,6 +37,8 @@ type ChatChoice struct {
 }
 
 type ChatResponse struct {
+	Model   string       `json:"model,omitempty"`
+	Usage   *TokenUsage  `json:"usage,omitempty"`
 	Choices []ChatChoice `json:"choices"`
 }
 
@@ -47,7 +52,9 @@ type EmbeddingsDatum struct {
 }
 
 type EmbeddingsResponse struct {
-	Data []EmbeddingsDatum `json:"data"`
+	Model string            `json:"model,omitempty"`
+	Usage *TokenUsage       `json:"usage,omitempty"`
+	Data  []EmbeddingsDatum `json:"data"`
 }
 
 type UpstreamChatClient interface {
@@ -71,35 +78,45 @@ type EmbeddingProxyService interface {
 type chatProxyService struct {
 	client    UpstreamChatClient
 	publisher queue.UsagePublisher
+	recorder  UsageRecorder
 }
 
 type embeddingProxyService struct {
 	client    UpstreamEmbeddingClient
 	publisher queue.UsagePublisher
+	recorder  UsageRecorder
 }
 
 type unavailableChatProxyService struct{}
 
 type unavailableEmbeddingProxyService struct{}
 
-func NewChatProxyService(client UpstreamChatClient, publisher queue.UsagePublisher) ChatProxyService {
+func NewChatProxyService(client UpstreamChatClient, publisher queue.UsagePublisher, recorders ...UsageRecorder) ChatProxyService {
 	if client == nil {
 		return unavailableChatProxyService{}
 	}
 	if publisher == nil {
 		publisher = queue.NewNoopUsagePublisher()
 	}
-	return chatProxyService{client: client, publisher: publisher}
+	return chatProxyService{
+		client:    client,
+		publisher: publisher,
+		recorder:  firstUsageRecorder(recorders...),
+	}
 }
 
-func NewEmbeddingProxyService(client UpstreamEmbeddingClient, publisher queue.UsagePublisher) EmbeddingProxyService {
+func NewEmbeddingProxyService(client UpstreamEmbeddingClient, publisher queue.UsagePublisher, recorders ...UsageRecorder) EmbeddingProxyService {
 	if client == nil {
 		return unavailableEmbeddingProxyService{}
 	}
 	if publisher == nil {
 		publisher = queue.NewNoopUsagePublisher()
 	}
-	return embeddingProxyService{client: client, publisher: publisher}
+	return embeddingProxyService{
+		client:    client,
+		publisher: publisher,
+		recorder:  firstUsageRecorder(recorders...),
+	}
 }
 
 func NewUnavailableChatProxyService() ChatProxyService {
@@ -120,13 +137,16 @@ func (s chatProxyService) Complete(ctx context.Context, req ChatRequest, resolve
 		}
 	}
 	if err := validateProviderTarget(requestContext); err != nil {
-		s.publish(ctx, requestContext, "/v1/chat/completions", http.StatusBadGateway, 0)
+		now := time.Now().UTC()
+		s.record(ctx, NewChatUsageRecord(requestIDFromContext(ctx), requestContext, req, ChatResponse{}, http.StatusBadGateway, now, now, err))
 		return ChatResponse{}, err
 	}
 
-	start := time.Now()
+	requestID := requestIDFromContext(ctx)
+	start := time.Now().UTC()
 	resp, statusCode, err := s.client.Complete(ctx, requestContext.ProviderTarget, req)
-	s.publish(ctx, requestContext, "/v1/chat/completions", statusCode, time.Since(start))
+	record := NewChatUsageRecord(requestID, requestContext, req, resp, statusCode, start, time.Now().UTC(), err)
+	s.record(ctx, record)
 	if err != nil {
 		return ChatResponse{}, StatusError{
 			Code:    defaultStatusCode(statusCode),
@@ -147,13 +167,16 @@ func (s embeddingProxyService) Create(ctx context.Context, req EmbeddingsRequest
 		}
 	}
 	if err := validateProviderTarget(requestContext); err != nil {
-		s.publish(ctx, requestContext, "/v1/embeddings", http.StatusBadGateway, 0)
+		now := time.Now().UTC()
+		s.record(ctx, NewEmbeddingsUsageRecord(requestIDFromContext(ctx), requestContext, req, EmbeddingsResponse{}, http.StatusBadGateway, now, now, err))
 		return EmbeddingsResponse{}, err
 	}
 
-	start := time.Now()
+	requestID := requestIDFromContext(ctx)
+	start := time.Now().UTC()
 	resp, statusCode, err := s.client.CreateEmbedding(ctx, requestContext.ProviderTarget, req)
-	s.publish(ctx, requestContext, "/v1/embeddings", statusCode, time.Since(start))
+	record := NewEmbeddingsUsageRecord(requestID, requestContext, req, resp, statusCode, start, time.Now().UTC(), err)
+	s.record(ctx, record)
 	if err != nil {
 		return EmbeddingsResponse{}, StatusError{
 			Code:    defaultStatusCode(statusCode),
@@ -164,26 +187,30 @@ func (s embeddingProxyService) Create(ctx context.Context, req EmbeddingsRequest
 	return resp, nil
 }
 
-func (s chatProxyService) publish(ctx context.Context, requestContext domain.RequestContext, endpoint string, statusCode int, latency time.Duration) {
-	_ = s.publisher.Publish(ctx, queue.UsageEvent{
-		TenantID:             requestContext.TenantID,
-		PlatformAPIKeyID:     requestContext.PlatformAPIKeyID,
-		ProviderCredentialID: requestContext.SelectedProviderID,
-		Endpoint:             endpoint,
-		StatusCode:           defaultStatusCode(statusCode),
-		LatencyMS:            durationMilliseconds(latency),
-	})
+func (s chatProxyService) record(ctx context.Context, record UsageRecord) {
+	if err := s.recorder.Record(ctx, record); err != nil {
+		logUsageFailure("record", record, err)
+		return
+	}
+	if err := s.publisher.Publish(ctx, record.UsageEvent()); err != nil {
+		logUsageFailure("publish", record, err)
+		if persistErr := persistPublishFailure(record, s.recorder, err); persistErr != nil {
+			logUsageFailure("publish_failure_persist", record, persistErr)
+		}
+	}
 }
 
-func (s embeddingProxyService) publish(ctx context.Context, requestContext domain.RequestContext, endpoint string, statusCode int, latency time.Duration) {
-	_ = s.publisher.Publish(ctx, queue.UsageEvent{
-		TenantID:             requestContext.TenantID,
-		PlatformAPIKeyID:     requestContext.PlatformAPIKeyID,
-		ProviderCredentialID: requestContext.SelectedProviderID,
-		Endpoint:             endpoint,
-		StatusCode:           defaultStatusCode(statusCode),
-		LatencyMS:            durationMilliseconds(latency),
-	})
+func (s embeddingProxyService) record(ctx context.Context, record UsageRecord) {
+	if err := s.recorder.Record(ctx, record); err != nil {
+		logUsageFailure("record", record, err)
+		return
+	}
+	if err := s.publisher.Publish(ctx, record.UsageEvent()); err != nil {
+		logUsageFailure("publish", record, err)
+		if persistErr := persistPublishFailure(record, s.recorder, err); persistErr != nil {
+			logUsageFailure("publish_failure_persist", record, persistErr)
+		}
+	}
 }
 
 func (unavailableChatProxyService) Complete(context.Context, ChatRequest, any) (ChatResponse, error) {
@@ -204,13 +231,15 @@ func (unavailableEmbeddingProxyService) Create(context.Context, EmbeddingsReques
 
 func (s chatProxyService) RecordFailure(ctx context.Context, resolved any, statusCode int) {
 	if requestContext, ok := resolvedRequestContext(resolved); ok {
-		s.publish(ctx, requestContext, "/v1/chat/completions", statusCode, 0)
+		now := time.Now().UTC()
+		s.record(ctx, NewFailureUsageRecord(requestIDFromContext(ctx), requestContext, "/v1/chat/completions", statusCode, now, now, nil))
 	}
 }
 
 func (s embeddingProxyService) RecordFailure(ctx context.Context, resolved any, statusCode int) {
 	if requestContext, ok := resolvedRequestContext(resolved); ok {
-		s.publish(ctx, requestContext, "/v1/embeddings", statusCode, 0)
+		now := time.Now().UTC()
+		s.record(ctx, NewFailureUsageRecord(requestIDFromContext(ctx), requestContext, "/v1/embeddings", statusCode, now, now, nil))
 	}
 }
 
@@ -268,4 +297,23 @@ func durationMilliseconds(latency time.Duration) int64 {
 		return 1
 	}
 	return latency.Milliseconds()
+}
+
+func firstUsageRecorder(recorders ...UsageRecorder) UsageRecorder {
+	for _, recorder := range recorders {
+		if recorder != nil {
+			return recorder
+		}
+	}
+	return NewNoopUsageRecorder()
+}
+
+func logUsageFailure(stage string, record UsageRecord, err error) {
+	log.Printf("usage %s failed: request_id=%s route_id=%s err=%v", stage, record.RequestID, record.RouteID, err)
+}
+
+func persistPublishFailure(record UsageRecord, recorder UsageRecorder, publishErr error) error {
+	ctx, cancel := context.WithTimeout(context.Background(), publishFailureRecordTimeout)
+	defer cancel()
+	return recorder.RecordPublishFailure(ctx, record, publishErr)
 }
