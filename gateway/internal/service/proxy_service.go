@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/liwenjian/ai_gateway/gateway/internal/domain"
-	"github.com/liwenjian/ai_gateway/gateway/internal/queue"
+	"github.com/example/ai_gateway/gateway/internal/domain"
+	"github.com/example/ai_gateway/gateway/internal/queue"
 )
 
 var ErrProxyUnavailable = errors.New("proxy service not configured")

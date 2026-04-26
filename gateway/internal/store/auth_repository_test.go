@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/liwenjian/ai_gateway/gateway/internal/domain"
-	"github.com/liwenjian/ai_gateway/gateway/internal/secret"
+	"github.com/example/ai_gateway/gateway/internal/domain"
+	"github.com/example/ai_gateway/gateway/internal/secret"
 )
 
 func TestSQLAuthRepositoryListActiveProviderCredentialsMapsSupportedModels(t *testing.T) {

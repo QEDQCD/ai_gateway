@@ -1,7 +1,7 @@
 # AI Gateway 项目设计文档
 
 - 日期：2026-04-22
-- 项目目录：`/root/liwenjian/ai_gateway`
+- 项目目录：`$PROJECT_ROOT`
 - 项目定位：面向外部客户的 SaaS AI API 网关
 - 设计目标：以 API 网关为主角，构建一个可真实上线的 AI 平台型作品集项目，并通过企业知识库问答场景证明网关价值
 

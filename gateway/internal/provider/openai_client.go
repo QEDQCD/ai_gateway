@@ -9,8 +9,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/liwenjian/ai_gateway/gateway/internal/domain"
-	"github.com/liwenjian/ai_gateway/gateway/internal/service"
+	"github.com/example/ai_gateway/gateway/internal/domain"
+	"github.com/example/ai_gateway/gateway/internal/service"
 )
 
 type OpenAIClient struct {

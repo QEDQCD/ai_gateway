@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/liwenjian/ai_gateway/gateway/internal/domain"
-	apphttp "github.com/liwenjian/ai_gateway/gateway/internal/http"
-	"github.com/liwenjian/ai_gateway/gateway/internal/service"
+	"github.com/example/ai_gateway/gateway/internal/domain"
+	apphttp "github.com/example/ai_gateway/gateway/internal/http"
+	"github.com/example/ai_gateway/gateway/internal/service"
 )
 
 func TestHealthRouteReturnsOK(t *testing.T) {

@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/liwenjian/ai_gateway/gateway/internal/queue"
-	"github.com/liwenjian/ai_gateway/gateway/internal/store"
+	"github.com/example/ai_gateway/gateway/internal/queue"
+	"github.com/example/ai_gateway/gateway/internal/store"
 )
 
 const upsertUsageAggregateHourlySQL = `

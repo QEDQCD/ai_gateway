@@ -7,9 +7,9 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/example/ai_gateway/gateway/internal/domain"
+	"github.com/example/ai_gateway/gateway/internal/secret"
 	"github.com/jackc/pgx/v5"
-	"github.com/liwenjian/ai_gateway/gateway/internal/domain"
-	"github.com/liwenjian/ai_gateway/gateway/internal/secret"
 )
 
 var ErrAuthRecordNotFound = errors.New("auth record not found")

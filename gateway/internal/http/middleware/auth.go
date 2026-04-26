@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/example/ai_gateway/gateway/internal/service"
 	"github.com/gofiber/fiber/v2"
-	"github.com/liwenjian/ai_gateway/gateway/internal/service"
 )
 
 func RequirePlatformAPIKey(authService service.AuthService) fiber.Handler {

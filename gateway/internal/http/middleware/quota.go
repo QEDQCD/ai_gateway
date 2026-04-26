@@ -1,9 +1,9 @@
 package middleware
 
 import (
+	"github.com/example/ai_gateway/gateway/internal/domain"
+	"github.com/example/ai_gateway/gateway/internal/service"
 	"github.com/gofiber/fiber/v2"
-	"github.com/liwenjian/ai_gateway/gateway/internal/domain"
-	"github.com/liwenjian/ai_gateway/gateway/internal/service"
 )
 
 func unauthorizedError(err error) error {

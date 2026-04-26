@@ -7,11 +7,11 @@ import (
 	"testing"
 	"time"
 
+	gatewaydb "github.com/example/ai_gateway/gateway/db"
+	"github.com/example/ai_gateway/gateway/internal/service"
+	"github.com/example/ai_gateway/gateway/internal/store"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	gatewaydb "github.com/liwenjian/ai_gateway/gateway/db"
-	"github.com/liwenjian/ai_gateway/gateway/internal/service"
-	"github.com/liwenjian/ai_gateway/gateway/internal/store"
 )
 
 func TestNewUsageRecorderRequiresTransactionalDB(t *testing.T) {

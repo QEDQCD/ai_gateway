@@ -165,7 +165,7 @@ coverage/
 创建最小可用声明：
 
 ```go
-module github.com/liwenjian/ai_gateway/gateway
+module github.com/example/ai_gateway/gateway
 
 go 1.22
 ```
@@ -224,7 +224,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	apphttp "github.com/liwenjian/ai_gateway/gateway/internal/http"
+	apphttp "github.com/example/ai_gateway/gateway/internal/http"
 )
 
 func TestHealthRouteReturnsOK(t *testing.T) {
@@ -262,7 +262,7 @@ package http
 
 import (
 	"github.com/gofiber/fiber/v2"
-	"github.com/liwenjian/ai_gateway/gateway/internal/http/handlers"
+	"github.com/example/ai_gateway/gateway/internal/http/handlers"
 )
 
 func NewRouter() *fiber.App {
@@ -278,7 +278,7 @@ package main
 import (
 	"log"
 
-	apphttp "github.com/liwenjian/ai_gateway/gateway/internal/http"
+	apphttp "github.com/example/ai_gateway/gateway/internal/http"
 )
 
 func main() {

@@ -92,7 +92,7 @@ func TestApplyMigrationsCreatesUsageObservabilityTables(t *testing.T) {
 
 - [ ] **Step 2: 运行失败测试，确认当前迁移还没有这些表**
 
-Run: `cd /root/liwenjian/ai_gateway/gateway && go test ./db -run TestApplyMigrationsCreatesUsageObservabilityTables -v`
+Run: `cd $PROJECT_ROOT/gateway && go test ./db -run TestApplyMigrationsCreatesUsageObservabilityTables -v`
 Expected: FAIL，提示缺少 `llm_request_logs` / `llm_request_events` / `llm_usage_agg_hourly`
 
 - [ ] **Step 3: 添加迁移、扩展请求上下文并定义 usage 领域结构**
@@ -217,13 +217,13 @@ select * from (values
 where not exists (select 1 from llm_request_logs);`, cfg.Provider, chatModel, cfg.ProviderBaseURL, cfg.Provider, embeddingModel, cfg.ProviderBaseURL)
 ```
 
-Run: `cd /root/liwenjian/ai_gateway/gateway && go test ./db -run 'TestApplyMigrationsCreatesUsageObservabilityTables|TestSeedDemoDataEncryptsProviderSecrets' -v`
+Run: `cd $PROJECT_ROOT/gateway && go test ./db -run 'TestApplyMigrationsCreatesUsageObservabilityTables|TestSeedDemoDataEncryptsProviderSecrets' -v`
 Expected: PASS，包含新表检查和种子加密检查
 
 - [ ] **Step 5: 提交这一层**
 
 ```bash
-cd /root/liwenjian/ai_gateway/gateway
+cd $PROJECT_ROOT/gateway
 git add db/migrations/0006_add_llm_usage_tables.sql db/runtime.go db/runtime_test.go internal/domain/routing.go internal/service/usage_types.go
 git commit -m "feat: add usage observability schema"
 ```
@@ -335,7 +335,7 @@ func TestClassifyUsageErrorMapsTimeoutAndRateLimit(t *testing.T) {
 
 - [ ] **Step 2: 运行测试，确认 recorder 还不存在**
 
-Run: `cd /root/liwenjian/ai_gateway/gateway && go test ./internal/service -run 'TestUsageRecorderStoresEstimatedUsageWhenUpstreamUsageMissing|TestClassifyUsageErrorMapsTimeoutAndRateLimit' -v`
+Run: `cd $PROJECT_ROOT/gateway && go test ./internal/service -run 'TestUsageRecorderStoresEstimatedUsageWhenUpstreamUsageMissing|TestClassifyUsageErrorMapsTimeoutAndRateLimit' -v`
 Expected: FAIL，提示 `UsageRecord` / `Record` / `classifyUsageError` 未定义
 
 - [ ] **Step 3: 实现 usage 记录器、轻量估算器和扩展 usage 事件结构**
@@ -432,13 +432,13 @@ type UsageEvent struct {
 
 - [ ] **Step 4: 让 recorder 测试通过**
 
-Run: `cd /root/liwenjian/ai_gateway/gateway && go test ./internal/service -run 'TestUsageRecorderStoresEstimatedUsageWhenUpstreamUsageMissing|TestClassifyUsageErrorMapsTimeoutAndRateLimit' -v`
+Run: `cd $PROJECT_ROOT/gateway && go test ./internal/service -run 'TestUsageRecorderStoresEstimatedUsageWhenUpstreamUsageMissing|TestClassifyUsageErrorMapsTimeoutAndRateLimit' -v`
 Expected: PASS，断言 `usage_source`、`total_tokens`、`error_category` 正确
 
 - [ ] **Step 5: 提交这一层**
 
 ```bash
-cd /root/liwenjian/ai_gateway/gateway
+cd $PROJECT_ROOT/gateway
 git add internal/service/usage_recording.go internal/service/usage_recording_test.go internal/queue/usage_publisher.go
 git commit -m "feat: add usage recorder and normalization"
 ```
@@ -521,7 +521,7 @@ func TestEmbeddingsProxyMarksRateLimitedFailures(t *testing.T) {
 
 - [ ] **Step 2: 运行代理集成测试，确认会因为新字段未发布而失败**
 
-Run: `cd /root/liwenjian/ai_gateway/gateway && go test ./tests/integration -run 'TestChatCompletionProxyPublishesUsageWithUpstreamTokens|TestEmbeddingsProxyMarksRateLimitedFailures' -v`
+Run: `cd $PROJECT_ROOT/gateway && go test ./tests/integration -run 'TestChatCompletionProxyPublishesUsageWithUpstreamTokens|TestEmbeddingsProxyMarksRateLimitedFailures' -v`
 Expected: FAIL，提示 `TotalTokens` / `UsageSource` / `ErrorCategory` 不存在或值不对
 
 - [ ] **Step 3: 在 chat、embeddings、RAG 代理里接入 request_id、usage 解析和失败分类**
@@ -658,13 +658,13 @@ func (s ragProxyService) Query(ctx context.Context, req RAGQueryRequest, resolve
 
 - [ ] **Step 4: 跑完整代理测试，确认旧行为不回退且新字段生效**
 
-Run: `cd /root/liwenjian/ai_gateway/gateway && go test ./tests/integration -v`
+Run: `cd $PROJECT_ROOT/gateway && go test ./tests/integration -v`
 Expected: PASS，原有代理测试仍通过，新增 usage 字段断言也通过
 
 - [ ] **Step 5: 提交这一层**
 
 ```bash
-cd /root/liwenjian/ai_gateway/gateway
+cd $PROJECT_ROOT/gateway
 git add internal/service/proxy_service.go internal/service/rag_proxy_service.go internal/http/handlers/chat.go internal/http/handlers/embeddings.go internal/http/handlers/rag.go tests/integration/proxy_test.go
 git commit -m "feat: instrument proxy usage collection"
 ```
@@ -728,7 +728,7 @@ func newTestUsageAggregator(t *testing.T) (postgresUsageAggregator, consoleDB) {
 
 - [ ] **Step 2: 运行测试，确认 aggregator 尚未实现**
 
-Run: `cd /root/liwenjian/ai_gateway/gateway && go test ./internal/service -run TestUsageAggregatorUpsertsHourlyBucket -v`
+Run: `cd $PROJECT_ROOT/gateway && go test ./internal/service -run TestUsageAggregatorUpsertsHourlyBucket -v`
 Expected: FAIL，提示 `Aggregate` 或 `newTestUsageAggregator` 未定义
 
 - [ ] **Step 3: 实现聚合服务、RabbitMQ consumer，并在主程序里启动**
@@ -793,13 +793,13 @@ if strings.TrimSpace(cfg.RabbitMQURL) != "" {
 
 - [ ] **Step 4: 让聚合测试通过**
 
-Run: `cd /root/liwenjian/ai_gateway/gateway && go test ./internal/service -run TestUsageAggregatorUpsertsHourlyBucket -v`
+Run: `cd $PROJECT_ROOT/gateway && go test ./internal/service -run TestUsageAggregatorUpsertsHourlyBucket -v`
 Expected: PASS，断言小时 bucket 已 upsert
 
 - [ ] **Step 5: 提交这一层**
 
 ```bash
-cd /root/liwenjian/ai_gateway/gateway
+cd $PROJECT_ROOT/gateway
 git add internal/queue/usage_consumer.go internal/service/usage_aggregator.go internal/service/usage_aggregator_test.go cmd/server/main.go
 git commit -m "feat: aggregate usage events hourly"
 ```
@@ -885,7 +885,7 @@ func TestAdminUsageOverviewRouteReturnsConsoleData(t *testing.T) {
 
 - [ ] **Step 2: 运行失败测试，确认 ConsoleService 还没有 usage 接口**
 
-Run: `cd /root/liwenjian/ai_gateway/gateway && go test ./internal/service ./internal/http -run 'TestPostgresConsoleServiceUsageOverview|TestAdminUsageOverviewRouteReturnsConsoleData' -v`
+Run: `cd $PROJECT_ROOT/gateway && go test ./internal/service ./internal/http -run 'TestPostgresConsoleServiceUsageOverview|TestAdminUsageOverviewRouteReturnsConsoleData' -v`
 Expected: FAIL，提示 `UsageOverview` / `usageOverview` / 路由未定义
 
 - [ ] **Step 3: 扩展 ConsoleService 类型和 Postgres 查询实现**
@@ -1033,13 +1033,13 @@ admin.Get("/usage/failures", handlers.ConsoleUsageFailures(deps.ConsoleService))
 admin.Get("/usage/requests", handlers.ConsoleUsageRequests(deps.ConsoleService))
 ```
 
-Run: `cd /root/liwenjian/ai_gateway/gateway && go test ./internal/service ./internal/http -v`
+Run: `cd $PROJECT_ROOT/gateway && go test ./internal/service ./internal/http -v`
 Expected: PASS，usage 查询与路由测试都通过
 
 - [ ] **Step 5: 提交这一层**
 
 ```bash
-cd /root/liwenjian/ai_gateway/gateway
+cd $PROJECT_ROOT/gateway
 git add internal/service/console_service.go internal/service/postgres_console_service.go internal/service/postgres_console_service_test.go internal/http/handlers/admin.go internal/http/router.go internal/http/router_test.go
 git commit -m "feat: add admin usage query endpoints"
 ```
@@ -1067,7 +1067,7 @@ test("renders usage observability route", async () => {
 
 - [ ] **Step 2: 运行测试，确认 `/usage` 路由还不存在**
 
-Run: `cd /root/liwenjian/ai_gateway/web && npm test -- --runInBand router.test.tsx`
+Run: `cd $PROJECT_ROOT/web && npm test -- --runInBand router.test.tsx`
 Expected: FAIL，提示找不到 “调用观测” 文本或 `/usage` 路由未注册
 
 - [ ] **Step 3: 扩展 console API 类型、路由配置和 usage 页面**
@@ -1176,13 +1176,13 @@ export function UsagePage() {
 
 - [ ] **Step 4: 让前端测试通过，并做一次构建校验**
 
-Run: `cd /root/liwenjian/ai_gateway/web && npm test -- --runInBand router.test.tsx && npm run build`
+Run: `cd $PROJECT_ROOT/web && npm test -- --runInBand router.test.tsx && npm run build`
 Expected: PASS，路由测试通过且 Vite build 成功
 
 - [ ] **Step 5: 提交这一层**
 
 ```bash
-cd /root/liwenjian/ai_gateway/web
+cd $PROJECT_ROOT/web
 git add src/lib/console-api.ts src/app/router.tsx src/pages/usage.tsx src/components/console.tsx src/styles.css src/test/router.test.tsx
 git commit -m "feat: add usage observability page"
 ```
@@ -1236,7 +1236,7 @@ expect(screen.getByText("成功率")).toBeInTheDocument();
 
 - [ ] **Step 2: 运行最终验证测试，确认还需要补 dashboard 摘要和数据库写入链路**
 
-Run: `cd /root/liwenjian/ai_gateway/gateway && go test ./tests/integration -run TestChatCompletionProxyPersistsUsageLog -v`
+Run: `cd $PROJECT_ROOT/gateway && go test ./tests/integration -run TestChatCompletionProxyPersistsUsageLog -v`
 Expected: 如果链路没打通会 FAIL；修完后应 PASS
 
 - [ ] **Step 3: 把 usage 摘要回填到总览页，并收口接口文案**
@@ -1265,16 +1265,16 @@ return OverviewPageData{
 
 - [ ] **Step 4: 执行完整验证**
 
-Run: `cd /root/liwenjian/ai_gateway/gateway && go test ./...`
+Run: `cd $PROJECT_ROOT/gateway && go test ./...`
 Expected: PASS
 
-Run: `cd /root/liwenjian/ai_gateway/web && npm test -- --runInBand && npm run build`
+Run: `cd $PROJECT_ROOT/web && npm test -- --runInBand && npm run build`
 Expected: PASS
 
 - [ ] **Step 5: 提交收尾**
 
 ```bash
-cd /root/liwenjian/ai_gateway
+cd $PROJECT_ROOT
 git add gateway/internal/service/postgres_console_service.go gateway/tests/integration/proxy_test.go web/src/pages/dashboard.tsx web/src/test/router.test.tsx
 git commit -m "feat: finalize usage observability rollout"
 ```

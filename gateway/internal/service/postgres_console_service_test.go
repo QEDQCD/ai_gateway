@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
+	gatewaydb "github.com/example/ai_gateway/gateway/db"
+	"github.com/example/ai_gateway/gateway/internal/service"
 	"github.com/jackc/pgx/v5"
-	gatewaydb "github.com/liwenjian/ai_gateway/gateway/db"
-	"github.com/liwenjian/ai_gateway/gateway/internal/service"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
@@ -204,7 +204,22 @@ func TestPostgresConsoleServiceAuditUsesUsageLogsAndEvents(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	console, _ := newUsageConsoleService(t, ctx)
+	console, conn := newUsageConsoleService(t, ctx)
+
+	if _, err := conn.Exec(ctx, `
+		update llm_request_logs
+		set
+			request_started_at = now() - interval '30 minutes',
+			request_completed_at = now() - interval '30 minutes' + interval '182 milliseconds',
+			created_at = now() - interval '30 minutes'
+		where id = 'llmreq_demo_001';
+
+		update llm_request_events
+		set created_at = now() - interval '30 minutes' + interval '182 milliseconds'
+		where id = 'llmevt_demo_001';
+	`); err != nil {
+		t.Fatalf("refresh recent usage seed failed: %v", err)
+	}
 
 	payload, err := console.Audit(ctx)
 	if err != nil {
@@ -326,7 +341,25 @@ func TestPostgresConsoleServiceUsageLatencyWall(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	console, _ := newUsageConsoleService(t, ctx)
+	console, conn := newUsageConsoleService(t, ctx)
+
+	if _, err := conn.Exec(ctx, `
+		update llm_request_logs
+		set
+			request_started_at = now() - interval '30 minutes',
+			request_completed_at = now() - interval '30 minutes' + interval '182 milliseconds',
+			created_at = now() - interval '30 minutes'
+		where id = 'llmreq_demo_001';
+
+		update llm_request_logs
+		set
+			request_started_at = now() - interval '20 minutes',
+			request_completed_at = now() - interval '20 minutes' + interval '95 milliseconds',
+			created_at = now() - interval '20 minutes'
+		where id = 'llmreq_demo_002';
+	`); err != nil {
+		t.Fatalf("refresh latency wall seed failed: %v", err)
+	}
 
 	payload, err := console.UsageLatencyWall(ctx, service.UsageQuery{Window: "24h"})
 	if err != nil {

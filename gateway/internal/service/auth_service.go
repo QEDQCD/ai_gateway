@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/liwenjian/ai_gateway/gateway/internal/domain"
-	"github.com/liwenjian/ai_gateway/gateway/internal/store"
+	"github.com/example/ai_gateway/gateway/internal/domain"
+	"github.com/example/ai_gateway/gateway/internal/store"
 )
 
 var (

@@ -76,7 +76,7 @@ ai_gateway/
 ### 1. 准备环境变量文件
 
 ```bash
-cd /root/liwenjian/ai_gateway
+cd ai_gateway
 cp deploy/compose/.env.example deploy/compose/.env.local
 ```
 
@@ -85,7 +85,7 @@ cp deploy/compose/.env.example deploy/compose/.env.local
 ### 2. 准备本地 secrets 目录
 
 ```bash
-mkdir -p /root/liwenjian/.ai_gateway_secrets
+mkdir -p "${HOME}/.ai_gateway_secrets"
 ```
 
 至少需要准备以下文件：
@@ -105,11 +105,11 @@ mkdir -p /root/liwenjian/.ai_gateway_secrets
 示例命令：
 
 ```bash
-printf 'your-dashscope-api-key\n' > /root/liwenjian/.ai_gateway_secrets/dashscope_api_key
-printf 'your-seed-platform-api-key\n' > /root/liwenjian/.ai_gateway_secrets/gateway_seed_platform_api_key
-openssl rand -base64 32 > /root/liwenjian/.ai_gateway_secrets/provider_master_key
-cp deploy/redis/users.acl.example /root/liwenjian/.ai_gateway_secrets/redis.users.acl
-printf "example-console-user:$(openssl passwd -apr1 'change-me-console-password')\n" > /root/liwenjian/.ai_gateway_secrets/web_console.htpasswd
+printf 'your-dashscope-api-key\n' > "${HOME}/.ai_gateway_secrets/dashscope_api_key"
+printf 'your-seed-platform-api-key\n' > "${HOME}/.ai_gateway_secrets/gateway_seed_platform_api_key"
+openssl rand -base64 32 > "${HOME}/.ai_gateway_secrets/provider_master_key"
+cp deploy/redis/users.acl.example "${HOME}/.ai_gateway_secrets/redis.users.acl"
+printf "example-console-user:$(openssl passwd -apr1 'change-me-console-password')\n" > "${HOME}/.ai_gateway_secrets/web_console.htpasswd"
 ```
 
 如果你修改了 `.env.local` 里的 Redis 用户名或密码，需要同步修改 `redis.users.acl`。

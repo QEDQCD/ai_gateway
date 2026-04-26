@@ -24,7 +24,7 @@
 
 ### 2.1 左下角状态块处理
 
-- 隐藏 [layout.tsx](/root/liwenjian/ai_gateway/web/src/app/layout.tsx) 中侧栏底部的 `控制台阶段 / 启动模式 / 网关健康` 整块。
+- 隐藏 [layout.tsx]($PROJECT_ROOT/web/src/app/layout.tsx) 中侧栏底部的 `控制台阶段 / 启动模式 / 网关健康` 整块。
 - 顶部状态 badge 继续保留：
   - `网关健康`
   - `配额保护`
@@ -279,17 +279,17 @@ fallback 规则：
 
 ### 5.1 需要修改的主要文件
 
-- [layout.tsx](/root/liwenjian/ai_gateway/web/src/app/layout.tsx)
+- [layout.tsx]($PROJECT_ROOT/web/src/app/layout.tsx)
   - 删除左下角状态块渲染
-- [api-keys.tsx](/root/liwenjian/ai_gateway/web/src/pages/api-keys.tsx)
+- [api-keys.tsx]($PROJECT_ROOT/web/src/pages/api-keys.tsx)
   - 脱敏展示、复制按钮、多选下拉
-- [usage.tsx](/root/liwenjian/ai_gateway/web/src/pages/usage.tsx)
+- [usage.tsx]($PROJECT_ROOT/web/src/pages/usage.tsx)
   - 视觉重构
-- [audit.tsx](/root/liwenjian/ai_gateway/web/src/pages/audit.tsx)
+- [audit.tsx]($PROJECT_ROOT/web/src/pages/audit.tsx)
   - 更贴近真实审计数据的展示
-- [console-api.ts](/root/liwenjian/ai_gateway/web/src/lib/console-api.ts)
+- [console-api.ts]($PROJECT_ROOT/web/src/lib/console-api.ts)
   - 增加脱敏/复制所需类型兼容
-- [styles.css](/root/liwenjian/ai_gateway/web/src/styles.css)
+- [styles.css]($PROJECT_ROOT/web/src/styles.css)
   - 深色可视化风格和多选下拉样式
 
 ### 5.2 组件策略

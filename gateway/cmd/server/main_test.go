@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/example/ai_gateway/gateway/internal/config"
 	"github.com/jackc/pgx/v5"
-	"github.com/liwenjian/ai_gateway/gateway/internal/config"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )

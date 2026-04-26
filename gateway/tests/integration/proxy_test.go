@@ -9,13 +9,13 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/example/ai_gateway/gateway/internal/domain"
+	apphttp "github.com/example/ai_gateway/gateway/internal/http"
+	"github.com/example/ai_gateway/gateway/internal/provider"
+	"github.com/example/ai_gateway/gateway/internal/queue"
+	"github.com/example/ai_gateway/gateway/internal/service"
+	"github.com/example/ai_gateway/gateway/internal/store"
 	"github.com/gofiber/fiber/v2"
-	"github.com/liwenjian/ai_gateway/gateway/internal/domain"
-	apphttp "github.com/liwenjian/ai_gateway/gateway/internal/http"
-	"github.com/liwenjian/ai_gateway/gateway/internal/provider"
-	"github.com/liwenjian/ai_gateway/gateway/internal/queue"
-	"github.com/liwenjian/ai_gateway/gateway/internal/service"
-	"github.com/liwenjian/ai_gateway/gateway/internal/store"
 )
 
 func TestChatCompletionProxy(t *testing.T) {

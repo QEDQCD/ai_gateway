@@ -6,11 +6,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/example/ai_gateway/gateway/internal/domain"
+	"github.com/example/ai_gateway/gateway/internal/queue"
+	"github.com/example/ai_gateway/gateway/internal/store"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/liwenjian/ai_gateway/gateway/internal/domain"
-	"github.com/liwenjian/ai_gateway/gateway/internal/queue"
-	"github.com/liwenjian/ai_gateway/gateway/internal/store"
 )
 
 type TokenUsage struct {

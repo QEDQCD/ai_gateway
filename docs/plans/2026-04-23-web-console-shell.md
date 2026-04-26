@@ -131,7 +131,7 @@ test("renders dashboard route", async () => {
 
 - [ ] **Step 3: Run the smoke test and verify it fails because the router does not exist yet**
 
-Run: `cd /root/liwenjian/ai_gateway/web && npm test -- --runInBand`
+Run: `cd $PROJECT_ROOT/web && npm test -- --runInBand`
 Expected: FAIL with an import error similar to `Cannot find module '../app/router'`
 
 ## Task 2: Build the App Shell, Router, and Default Overview Route
@@ -481,7 +481,7 @@ export function DashboardPage() {
 
 - [ ] **Step 4: Run the smoke test and verify it passes with the default route**
 
-Run: `cd /root/liwenjian/ai_gateway/web && npm test -- --runInBand`
+Run: `cd $PROJECT_ROOT/web && npm test -- --runInBand`
 Expected: PASS with `renders dashboard route`
 
 ## Task 3: Expand the Route Tree and Add the Six Primary Pages
@@ -927,7 +927,7 @@ export function createTestRouter(initialEntries: string[] = ["/"]) {
 
 - [ ] **Step 4: Re-run the route smoke test**
 
-Run: `cd /root/liwenjian/ai_gateway/web && npm test -- --runInBand`
+Run: `cd $PROJECT_ROOT/web && npm test -- --runInBand`
 Expected: PASS
 
 ## Task 4: Final Shell Polish and Commit
@@ -977,12 +977,12 @@ If the first pass feels too sparse or too cramped, keep the changes local to `st
 
 - [ ] **Step 3: Run the web test suite again**
 
-Run: `cd /root/liwenjian/ai_gateway/web && npm test -- --runInBand`
+Run: `cd $PROJECT_ROOT/web && npm test -- --runInBand`
 Expected: PASS with both router tests green
 
 - [ ] **Step 4: Commit the Task 8 implementation**
 
 ```bash
-git -C /root/liwenjian/ai_gateway add web
-git -C /root/liwenjian/ai_gateway commit -m "feat: add console shell and primary routes"
+git -C $PROJECT_ROOT add web
+git -C $PROJECT_ROOT commit -m "feat: add console shell and primary routes"
 ```

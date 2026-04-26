@@ -10,11 +10,11 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/example/ai_gateway/gateway/internal/secret"
+	"github.com/example/ai_gateway/gateway/internal/service"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/liwenjian/ai_gateway/gateway/internal/secret"
-	"github.com/liwenjian/ai_gateway/gateway/internal/service"
 )
 
 //go:embed migrations/*.sql

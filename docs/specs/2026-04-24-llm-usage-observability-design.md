@@ -1,9 +1,9 @@
 # AI Gateway 调用观测与 Token 计量设计文档
 
 - 日期：2026-04-24
-- 项目目录：`/root/liwenjian/ai_gateway`
+- 项目目录：`$PROJECT_ROOT`
 - 设计主题：面向平台管理员与租户的 LLM 调用观测、Token 计量与失败分析
-- 参考项目：`/root/liwenjian/relay-pulse`
+- 参考项目：`relay-pulse`
 
 ## 1. 背景
 

@@ -19,7 +19,7 @@ services:
       - "31879:6379"
     volumes:
       - ../../deploy/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
-      - ${REDIS_ACL_FILE:-/root/liwenjian/.ai_gateway_secrets/redis.users.acl}:/usr/local/etc/redis/users.acl:ro
+      - ${REDIS_ACL_FILE:-../../.ai_gateway_secrets/redis.users.acl}:/usr/local/etc/redis/users.acl:ro
 
   rabbitmq:
     image: rabbitmq:3.13-management-alpine
@@ -58,7 +58,7 @@ services:
     ports:
       - "31427:8000"
     volumes:
-      - ${AI_GATEWAY_SECRET_DIR:-/root/liwenjian/.ai_gateway_secrets}/dashscope_api_key:/run/secrets/dashscope_api_key:ro
+      - ${AI_GATEWAY_SECRET_DIR:-../../.ai_gateway_secrets}/dashscope_api_key:/run/secrets/dashscope_api_key:ro
 
   gateway:
     build:
@@ -90,9 +90,9 @@ services:
     ports:
       - "32658:8080"
     volumes:
-      - ${AI_GATEWAY_SECRET_DIR:-/root/liwenjian/.ai_gateway_secrets}/gateway_seed_platform_api_key:/run/secrets/gateway_seed_platform_api_key:ro
-      - ${AI_GATEWAY_SECRET_DIR:-/root/liwenjian/.ai_gateway_secrets}/dashscope_api_key:/run/secrets/dashscope_api_key:ro
-      - ${AI_GATEWAY_SECRET_DIR:-/root/liwenjian/.ai_gateway_secrets}/provider_master_key:/run/secrets/provider_master_key:ro
+      - ${AI_GATEWAY_SECRET_DIR:-../../.ai_gateway_secrets}/gateway_seed_platform_api_key:/run/secrets/gateway_seed_platform_api_key:ro
+      - ${AI_GATEWAY_SECRET_DIR:-../../.ai_gateway_secrets}/dashscope_api_key:/run/secrets/dashscope_api_key:ro
+      - ${AI_GATEWAY_SECRET_DIR:-../../.ai_gateway_secrets}/provider_master_key:/run/secrets/provider_master_key:ro
 
   web:
     build:
@@ -102,7 +102,7 @@ services:
     depends_on:
       - gateway
     volumes:
-      - ${WEB_HTPASSWD_FILE:-/root/liwenjian/.ai_gateway_secrets/web_console.htpasswd}:/run/secrets/web_console.htpasswd:ro
+      - ${WEB_HTPASSWD_FILE:-../../.ai_gateway_secrets/web_console.htpasswd}:/run/secrets/web_console.htpasswd:ro
     ports:
       - "31873:8080"
 

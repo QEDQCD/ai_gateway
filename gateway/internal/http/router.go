@@ -1,10 +1,10 @@
 package http
 
 import (
+	"github.com/example/ai_gateway/gateway/internal/http/handlers"
+	"github.com/example/ai_gateway/gateway/internal/http/middleware"
+	"github.com/example/ai_gateway/gateway/internal/service"
 	"github.com/gofiber/fiber/v2"
-	"github.com/liwenjian/ai_gateway/gateway/internal/http/handlers"
-	"github.com/liwenjian/ai_gateway/gateway/internal/http/middleware"
-	"github.com/liwenjian/ai_gateway/gateway/internal/service"
 )
 
 type RouterDependencies struct {

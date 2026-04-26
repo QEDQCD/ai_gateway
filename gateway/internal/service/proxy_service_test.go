@@ -5,9 +5,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/liwenjian/ai_gateway/gateway/internal/domain"
-	"github.com/liwenjian/ai_gateway/gateway/internal/queue"
-	"github.com/liwenjian/ai_gateway/gateway/internal/service"
+	"github.com/example/ai_gateway/gateway/internal/domain"
+	"github.com/example/ai_gateway/gateway/internal/queue"
+	"github.com/example/ai_gateway/gateway/internal/service"
 )
 
 func TestChatProxySkipsPublishFailurePersistenceOnConsumerOnlyError(t *testing.T) {

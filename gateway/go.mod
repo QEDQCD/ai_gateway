@@ -1,4 +1,4 @@
-module github.com/liwenjian/ai_gateway/gateway
+module github.com/example/ai_gateway/gateway
 
 go 1.22
 

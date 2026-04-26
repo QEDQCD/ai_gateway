@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/example/ai_gateway/gateway/internal/domain"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/liwenjian/ai_gateway/gateway/internal/domain"
 )
 
 type consoleDB interface {

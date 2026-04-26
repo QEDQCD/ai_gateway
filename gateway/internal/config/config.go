@@ -5,7 +5,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/liwenjian/ai_gateway/gateway/internal/secret"
+	"github.com/example/ai_gateway/gateway/internal/secret"
 )
 
 type Config struct {

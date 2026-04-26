@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
+	gatewaydb "github.com/example/ai_gateway/gateway/db"
+	"github.com/example/ai_gateway/gateway/internal/queue"
+	"github.com/example/ai_gateway/gateway/internal/service"
 	"github.com/jackc/pgx/v5"
-	gatewaydb "github.com/liwenjian/ai_gateway/gateway/db"
-	"github.com/liwenjian/ai_gateway/gateway/internal/queue"
-	"github.com/liwenjian/ai_gateway/gateway/internal/service"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )

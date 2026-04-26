@@ -5,8 +5,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/example/ai_gateway/gateway/internal/service"
 	"github.com/gofiber/fiber/v2"
-	"github.com/liwenjian/ai_gateway/gateway/internal/service"
 )
 
 func ConsoleOverview(console service.ConsoleService) fiber.Handler {

@@ -14,41 +14,41 @@
 
 ### Frontend
 
-- Modify: `/root/liwenjian/ai_gateway/web/src/app/router.tsx`
+- Modify: `$PROJECT_ROOT/web/src/app/router.tsx`
   - 移除 `知识库` 导航项
-- Modify: `/root/liwenjian/ai_gateway/web/src/app/layout.tsx`
+- Modify: `$PROJECT_ROOT/web/src/app/layout.tsx`
   - 左侧状态入口与顶部状态 badge 改为真实交互
-- Modify: `/root/liwenjian/ai_gateway/web/src/lib/console-api.ts`
+- Modify: `$PROJECT_ROOT/web/src/lib/console-api.ts`
   - 新增系统状态与 API Key 管理请求
-- Modify: `/root/liwenjian/ai_gateway/web/src/pages/api-keys.tsx`
+- Modify: `$PROJECT_ROOT/web/src/pages/api-keys.tsx`
   - 行选择、弹窗、创建/轮换/停用闭环
-- Modify: `/root/liwenjian/ai_gateway/web/src/styles.css`
+- Modify: `$PROJECT_ROOT/web/src/styles.css`
   - 状态入口、弹层、API Key 操作区样式
-- Modify: `/root/liwenjian/ai_gateway/web/src/test/router.test.tsx`
+- Modify: `$PROJECT_ROOT/web/src/test/router.test.tsx`
   - 导航隐藏、状态入口、API Key 生命周期、回归测试
 
 ### Backend
 
-- Modify: `/root/liwenjian/ai_gateway/gateway/internal/service/console_service.go`
+- Modify: `$PROJECT_ROOT/gateway/internal/service/console_service.go`
   - 增加系统状态 DTO 与 API Key 管理方法
-- Modify: `/root/liwenjian/ai_gateway/gateway/internal/service/postgres_console_service.go`
+- Modify: `$PROJECT_ROOT/gateway/internal/service/postgres_console_service.go`
   - 实现系统状态读取与 API Key 创建/轮换/停用
-- Modify: `/root/liwenjian/ai_gateway/gateway/internal/http/handlers/admin.go`
+- Modify: `$PROJECT_ROOT/gateway/internal/http/handlers/admin.go`
   - 新增系统状态与 API Key 管理 handler
-- Modify: `/root/liwenjian/ai_gateway/gateway/internal/http/router.go`
+- Modify: `$PROJECT_ROOT/gateway/internal/http/router.go`
   - 注册新增 `/admin/system/status` 和 `/admin/api-keys/*` 路由
-- Modify: `/root/liwenjian/ai_gateway/gateway/internal/store/auth_repository.go`
+- Modify: `$PROJECT_ROOT/gateway/internal/store/auth_repository.go`
   - 补充平台 key 管理查询/写入接口
-- Modify: `/root/liwenjian/ai_gateway/gateway/internal/http/router_test.go`
+- Modify: `$PROJECT_ROOT/gateway/internal/http/router_test.go`
   - 路由、鉴权、query/body、错误码测试
-- Modify: `/root/liwenjian/ai_gateway/gateway/internal/service/postgres_console_service_test.go`
+- Modify: `$PROJECT_ROOT/gateway/internal/service/postgres_console_service_test.go`
   - 系统状态与 API Key 生命周期测试
-- Modify: `/root/liwenjian/ai_gateway/gateway/internal/store/auth_repository_test.go`
+- Modify: `$PROJECT_ROOT/gateway/internal/store/auth_repository_test.go`
   - 创建/轮换/停用持久化测试
 
 ### Optional migration
 
-- Create if needed: `/root/liwenjian/ai_gateway/gateway/db/migrations/0007_extend_platform_api_keys_for_example-console-user.sql`
+- Create if needed: `$PROJECT_ROOT/gateway/db/migrations/0007_extend_platform_api_keys_for_example-console-user.sql`
   - 仅当现有表结构无法支持轮换时间、停用状态或额外元数据时新增
 
 ---
@@ -56,17 +56,17 @@
 ### Task 1: Hide RAG Frontend Entry And Wire Console Status API
 
 **Files:**
-- Modify: `/root/liwenjian/ai_gateway/web/src/app/router.tsx`
-- Modify: `/root/liwenjian/ai_gateway/web/src/app/layout.tsx`
-- Modify: `/root/liwenjian/ai_gateway/web/src/lib/console-api.ts`
-- Modify: `/root/liwenjian/ai_gateway/web/src/test/router.test.tsx`
-- Modify: `/root/liwenjian/ai_gateway/web/src/styles.css`
-- Modify: `/root/liwenjian/ai_gateway/gateway/internal/service/console_service.go`
-- Modify: `/root/liwenjian/ai_gateway/gateway/internal/service/postgres_console_service.go`
-- Modify: `/root/liwenjian/ai_gateway/gateway/internal/http/handlers/admin.go`
-- Modify: `/root/liwenjian/ai_gateway/gateway/internal/http/router.go`
-- Test: `/root/liwenjian/ai_gateway/gateway/internal/http/router_test.go`
-- Test: `/root/liwenjian/ai_gateway/gateway/internal/service/postgres_console_service_test.go`
+- Modify: `$PROJECT_ROOT/web/src/app/router.tsx`
+- Modify: `$PROJECT_ROOT/web/src/app/layout.tsx`
+- Modify: `$PROJECT_ROOT/web/src/lib/console-api.ts`
+- Modify: `$PROJECT_ROOT/web/src/test/router.test.tsx`
+- Modify: `$PROJECT_ROOT/web/src/styles.css`
+- Modify: `$PROJECT_ROOT/gateway/internal/service/console_service.go`
+- Modify: `$PROJECT_ROOT/gateway/internal/service/postgres_console_service.go`
+- Modify: `$PROJECT_ROOT/gateway/internal/http/handlers/admin.go`
+- Modify: `$PROJECT_ROOT/gateway/internal/http/router.go`
+- Test: `$PROJECT_ROOT/gateway/internal/http/router_test.go`
+- Test: `$PROJECT_ROOT/gateway/internal/service/postgres_console_service_test.go`
 
 - [ ] **Step 1: Write the failing frontend tests for hidden knowledge-base nav and clickable status entries**
 
@@ -130,7 +130,7 @@ test("左侧状态入口点击后展示真实系统状态", async () => {
 
 - [ ] **Step 2: Run frontend test to verify it fails**
 
-Run: `cd /root/liwenjian/ai_gateway/web && npm test -- --runInBand src/test/router.test.tsx`
+Run: `cd $PROJECT_ROOT/web && npm test -- --runInBand src/test/router.test.tsx`
 Expected: FAIL because `知识库` 仍存在导航，状态 badge 不是按钮，且 `/api/admin/system/status` 尚未实现
 
 - [ ] **Step 3: Write the failing backend tests for system status endpoint**
@@ -170,7 +170,7 @@ func TestAdminSystemStatusRouteReturnsConsoleStatus(t *testing.T) {
 
 - [ ] **Step 4: Run backend test to verify it fails**
 
-Run: `cd /root/liwenjian/ai_gateway/gateway && go test ./internal/http ./internal/service -count=1`
+Run: `cd $PROJECT_ROOT/gateway && go test ./internal/http ./internal/service -count=1`
 Expected: FAIL because `ConsoleSystemStatus` and `/admin/system/status` route do not exist
 
 - [ ] **Step 5: Implement backend system status DTO and route**
@@ -234,10 +234,10 @@ export const navigation = [
 
 - [ ] **Step 7: Run focused tests to verify they pass**
 
-Run: `cd /root/liwenjian/ai_gateway/web && npm test -- --runInBand src/test/router.test.tsx`
+Run: `cd $PROJECT_ROOT/web && npm test -- --runInBand src/test/router.test.tsx`
 Expected: PASS with hidden `知识库` nav and working status entry
 
-Run: `cd /root/liwenjian/ai_gateway/gateway && go test ./internal/http ./internal/service -count=1`
+Run: `cd $PROJECT_ROOT/gateway && go test ./internal/http ./internal/service -count=1`
 Expected: PASS with `/admin/system/status` route registered
 
 - [ ] **Step 8: Commit**
@@ -250,15 +250,15 @@ git commit -m "feat: add console status entry behavior"
 ### Task 2: Add API Key Management Persistence And Admin Endpoints
 
 **Files:**
-- Modify: `/root/liwenjian/ai_gateway/gateway/internal/store/auth_repository.go`
-- Modify: `/root/liwenjian/ai_gateway/gateway/internal/service/console_service.go`
-- Modify: `/root/liwenjian/ai_gateway/gateway/internal/service/postgres_console_service.go`
-- Modify: `/root/liwenjian/ai_gateway/gateway/internal/http/handlers/admin.go`
-- Modify: `/root/liwenjian/ai_gateway/gateway/internal/http/router.go`
-- Test: `/root/liwenjian/ai_gateway/gateway/internal/store/auth_repository_test.go`
-- Test: `/root/liwenjian/ai_gateway/gateway/internal/service/postgres_console_service_test.go`
-- Test: `/root/liwenjian/ai_gateway/gateway/internal/http/router_test.go`
-- Create if required: `/root/liwenjian/ai_gateway/gateway/db/migrations/0007_extend_platform_api_keys_for_example-console-user.sql`
+- Modify: `$PROJECT_ROOT/gateway/internal/store/auth_repository.go`
+- Modify: `$PROJECT_ROOT/gateway/internal/service/console_service.go`
+- Modify: `$PROJECT_ROOT/gateway/internal/service/postgres_console_service.go`
+- Modify: `$PROJECT_ROOT/gateway/internal/http/handlers/admin.go`
+- Modify: `$PROJECT_ROOT/gateway/internal/http/router.go`
+- Test: `$PROJECT_ROOT/gateway/internal/store/auth_repository_test.go`
+- Test: `$PROJECT_ROOT/gateway/internal/service/postgres_console_service_test.go`
+- Test: `$PROJECT_ROOT/gateway/internal/http/router_test.go`
+- Create if required: `$PROJECT_ROOT/gateway/db/migrations/0007_extend_platform_api_keys_for_example-console-user.sql`
 
 - [ ] **Step 1: Write failing repository and service tests for create/rotate/deactivate**
 
@@ -299,7 +299,7 @@ func TestPostgresConsoleServiceRotatePlatformAPIKeyReturnsRawKeyOnce(t *testing.
 
 - [ ] **Step 2: Run backend tests to verify they fail**
 
-Run: `cd /root/liwenjian/ai_gateway/gateway && go test ./internal/store ./internal/service ./internal/http -count=1`
+Run: `cd $PROJECT_ROOT/gateway && go test ./internal/store ./internal/service ./internal/http -count=1`
 Expected: FAIL because repository/service methods and DTOs do not exist
 
 - [ ] **Step 3: Implement repository methods and migration if needed**
@@ -335,7 +335,7 @@ admin.Post("/api-keys/:id/deactivate", handlers.ConsoleDeactivateAPIKey(deps.Con
 
 - [ ] **Step 5: Run backend tests to verify they pass**
 
-Run: `cd /root/liwenjian/ai_gateway/gateway && go test ./internal/store ./internal/service ./internal/http -count=1`
+Run: `cd $PROJECT_ROOT/gateway && go test ./internal/store ./internal/service ./internal/http -count=1`
 Expected: PASS with create/rotate/deactivate endpoints returning correct JSON and error codes
 
 - [ ] **Step 6: Commit**
@@ -348,11 +348,11 @@ git commit -m "feat: add admin api key lifecycle endpoints"
 ### Task 3: Build API Key Management UI With Real Feedback
 
 **Files:**
-- Modify: `/root/liwenjian/ai_gateway/web/src/lib/console-api.ts`
-- Modify: `/root/liwenjian/ai_gateway/web/src/pages/api-keys.tsx`
-- Modify: `/root/liwenjian/ai_gateway/web/src/components/console.tsx`
-- Modify: `/root/liwenjian/ai_gateway/web/src/styles.css`
-- Test: `/root/liwenjian/ai_gateway/web/src/test/router.test.tsx`
+- Modify: `$PROJECT_ROOT/web/src/lib/console-api.ts`
+- Modify: `$PROJECT_ROOT/web/src/pages/api-keys.tsx`
+- Modify: `$PROJECT_ROOT/web/src/components/console.tsx`
+- Modify: `$PROJECT_ROOT/web/src/styles.css`
+- Test: `$PROJECT_ROOT/web/src/test/router.test.tsx`
 
 - [ ] **Step 1: Write failing UI tests for create/rotate/deactivate**
 
@@ -393,7 +393,7 @@ test("API 密钥页支持新建密钥并展示一次性明文", async () => {
 
 - [ ] **Step 2: Run frontend test to verify it fails**
 
-Run: `cd /root/liwenjian/ai_gateway/web && npm test -- --runInBand src/test/router.test.tsx`
+Run: `cd $PROJECT_ROOT/web && npm test -- --runInBand src/test/router.test.tsx`
 Expected: FAIL because page has no modal, row selection, or mutation requests
 
 - [ ] **Step 3: Implement minimal API helpers and page state machine**
@@ -442,10 +442,10 @@ async function handleDeactivate() {
 
 - [ ] **Step 5: Run frontend tests and build**
 
-Run: `cd /root/liwenjian/ai_gateway/web && npm test -- --runInBand`
+Run: `cd $PROJECT_ROOT/web && npm test -- --runInBand`
 Expected: PASS with API Key lifecycle tests green
 
-Run: `cd /root/liwenjian/ai_gateway/web && npm run build`
+Run: `cd $PROJECT_ROOT/web && npm run build`
 Expected: PASS
 
 - [ ] **Step 6: Commit**
@@ -458,8 +458,8 @@ git commit -m "feat: add api key lifecycle console ui"
 ### Task 4: Full Regression Sweep And Deployment Validation
 
 **Files:**
-- Modify if needed: `/root/liwenjian/ai_gateway/scripts/test.sh`
-- Modify if needed: `/root/liwenjian/ai_gateway/README.md`
+- Modify if needed: `$PROJECT_ROOT/scripts/test.sh`
+- Modify if needed: `$PROJECT_ROOT/README.md`
 - Test: existing compose deployment and manual verification
 
 - [ ] **Step 1: Add regression expectations to tests first if any visible gap remains**
@@ -489,12 +489,12 @@ func TestAdminSystemStatusRouteRequiresBasicAuth(t *testing.T) {
 
 - [ ] **Step 2: Run the full automated suite**
 
-Run: `cd /root/liwenjian/ai_gateway && ./scripts/test.sh`
+Run: `cd $PROJECT_ROOT && ./scripts/test.sh`
 Expected: all Go tests, pytest, and web tests PASS
 
 - [ ] **Step 3: Rebuild and redeploy compose services**
 
-Run: `cd /root/liwenjian/ai_gateway && docker compose -f deploy/compose/compose.yml up -d --build gateway web`
+Run: `cd $PROJECT_ROOT && docker compose -f deploy/compose/compose.yml up -d --build gateway web`
 Expected: `gateway` and `web` containers stay `Up`
 
 - [ ] **Step 4: Perform manual verification**

@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/example/ai_gateway/gateway/internal/secret"
+	"github.com/example/ai_gateway/gateway/internal/service"
+	"github.com/example/ai_gateway/gateway/internal/store"
 	"github.com/jackc/pgx/v5"
-	"github.com/liwenjian/ai_gateway/gateway/internal/secret"
-	"github.com/liwenjian/ai_gateway/gateway/internal/service"
-	"github.com/liwenjian/ai_gateway/gateway/internal/store"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
