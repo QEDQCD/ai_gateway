@@ -59,7 +59,7 @@ func TestSeedDemoDataEncryptsProviderSecrets(t *testing.T) {
 	}
 
 	var encryptedSecret string
-	if err := conn.QueryRow(ctx, `select encrypted_secret from provider_credentials where id = 'provider_qwen_primary';`).Scan(&encryptedSecret); err != nil {
+	if err := conn.QueryRow(ctx, `select encrypted_secret from provider_credentials where id = 'provider_dashscope_primary';`).Scan(&encryptedSecret); err != nil {
 		t.Fatalf("QueryRow failed: %v", err)
 	}
 	if encryptedSecret == "seed-provider-key" {
@@ -78,13 +78,115 @@ func TestSeedDemoDataEncryptsProviderSecrets(t *testing.T) {
 
 	var providerSecret string
 	for _, credential := range credentials {
-		if credential.ID == "provider_qwen_primary" {
+		if credential.ID == "provider_dashscope_primary" {
 			providerSecret = credential.APIKey
 			break
 		}
 	}
 	if providerSecret != "seed-provider-key" {
 		t.Fatalf("expected decrypted provider key %q, got %q", "seed-provider-key", providerSecret)
+	}
+}
+
+func TestSeedDemoDataAlignsProviderCredentialAndRouteSemantics(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	container, dsn := startPostgresContainer(ctx, t)
+	t.Cleanup(func() {
+		_ = container.Terminate(context.Background())
+	})
+
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("pgx.Connect failed: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = conn.Close(context.Background())
+	})
+
+	for _, migration := range readMigrations(t) {
+		if _, err := conn.Exec(ctx, migration); err != nil {
+			t.Fatalf("conn.Exec migration failed: %v", err)
+		}
+	}
+
+	codec, err := secret.NewCodec("0123456789abcdef0123456789abcdef")
+	if err != nil {
+		t.Fatalf("secret.NewCodec failed: %v", err)
+	}
+
+	cfg := SeedConfig{
+		PlatformAPIKey:      "platform-live-key",
+		ProviderBaseURL:     "https://api.openai.example/v1",
+		ProviderAPIKey:      "seed-provider-key",
+		Provider:            "openai",
+		ProviderDisplayName: "OpenAI Primary",
+		SecretCodec:         codec,
+	}
+	if err := SeedDemoData(ctx, conn, cfg); err != nil {
+		t.Fatalf("SeedDemoData failed: %v", err)
+	}
+
+	wantCredentialID := "provider_openai_primary"
+	wantChatRouteID := service.RouteIDForCredential(wantCredentialID, []string{"gpt-4o-mini", "text-embedding-3-small"}, "gpt-4o-mini")
+	wantEmbeddingRouteID := service.RouteIDForCredential(wantCredentialID, []string{"gpt-4o-mini", "text-embedding-3-small"}, "text-embedding-3-small")
+
+	var provider string
+	var displayName string
+	if err := conn.QueryRow(ctx, `
+		select provider, display_name
+		from provider_credentials
+		where id = $1
+	`, wantCredentialID).Scan(&provider, &displayName); err != nil {
+		t.Fatalf("QueryRow provider_credentials failed: %v", err)
+	}
+	if provider != cfg.Provider {
+		t.Fatalf("expected provider %q, got %q", cfg.Provider, provider)
+	}
+	if displayName != cfg.ProviderDisplayName {
+		t.Fatalf("expected display_name %q, got %q", cfg.ProviderDisplayName, displayName)
+	}
+
+	rows, err := conn.Query(ctx, `
+		select id, requested_model, resolved_provider, provider_credential_id
+		from route_catalog
+		where provider_credential_id = $1
+		order by requested_model
+	`, wantCredentialID)
+	if err != nil {
+		t.Fatalf("Query route_catalog failed: %v", err)
+	}
+	defer rows.Close()
+
+	gotRoutes := map[string]string{}
+	for rows.Next() {
+		var id string
+		var requestedModel string
+		var resolvedProvider string
+		var providerCredentialID string
+		if err := rows.Scan(&id, &requestedModel, &resolvedProvider, &providerCredentialID); err != nil {
+			t.Fatalf("rows.Scan failed: %v", err)
+		}
+		if providerCredentialID != wantCredentialID {
+			t.Fatalf("expected provider_credential_id %q, got %q", wantCredentialID, providerCredentialID)
+		}
+		if resolvedProvider != cfg.ProviderDisplayName {
+			t.Fatalf("expected resolved_provider %q, got %q", cfg.ProviderDisplayName, resolvedProvider)
+		}
+		gotRoutes[requestedModel] = id
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows.Err failed: %v", err)
+	}
+
+	if gotRoutes["gpt-4o-mini"] != wantChatRouteID {
+		t.Fatalf("expected chat route_id %q, got %q", wantChatRouteID, gotRoutes["gpt-4o-mini"])
+	}
+	if gotRoutes["text-embedding-3-small"] != wantEmbeddingRouteID {
+		t.Fatalf("expected embedding route_id %q, got %q", wantEmbeddingRouteID, gotRoutes["text-embedding-3-small"])
 	}
 }
 
@@ -227,6 +329,46 @@ func TestRuntimeMigrationsValidateUsageStatusAndSource(t *testing.T) {
 	for _, source := range service.AllUsageSources() {
 		if _, err := conn.Exec(ctx, validUsageLogInsertSQL("llm_demo_"+source, "success", source, "tenant_demo", "pak_demo")); err != nil {
 			t.Fatalf("expected usage_source %q to be accepted: %v", source, err)
+		}
+	}
+}
+
+func TestRuntimeMigrationsCreateUsageRequestStartedAtIndexes(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	container, dsn := startPostgresContainer(ctx, t)
+	t.Cleanup(func() {
+		_ = container.Terminate(context.Background())
+	})
+
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("pgx.Connect failed: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = conn.Close(context.Background())
+	})
+
+	for _, migration := range readMigrations(t) {
+		if _, err := conn.Exec(ctx, migration); err != nil {
+			t.Fatalf("conn.Exec migration failed: %v", err)
+		}
+	}
+
+	for _, indexName := range []string{
+		"idx_llm_request_logs_tenant_request_started_at",
+		"idx_llm_request_logs_platform_api_key_request_started_at",
+		"idx_llm_request_logs_provider_credential_request_started_at",
+	} {
+		var found string
+		if err := conn.QueryRow(ctx, `select coalesce(to_regclass($1)::text, '')`, indexName).Scan(&found); err != nil {
+			t.Fatalf("QueryRow index existence failed: %v", err)
+		}
+		if found != indexName {
+			t.Fatalf("expected index %q to exist, got %q", indexName, found)
 		}
 	}
 }

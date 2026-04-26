@@ -32,17 +32,21 @@ type RAGProxyService interface {
 
 type ragProxyService struct {
 	baseURL    string
+	username   string
+	password   string
 	httpClient *http.Client
 }
 
 type unavailableRAGProxyService struct{}
 
-func NewRAGProxyService(baseURL string, httpClient *http.Client) RAGProxyService {
+func NewRAGProxyService(baseURL string, username string, password string, httpClient *http.Client) RAGProxyService {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
 	return ragProxyService{
 		baseURL:    strings.TrimRight(baseURL, "/"),
+		username:   strings.TrimSpace(username),
+		password:   strings.TrimSpace(password),
 		httpClient: httpClient,
 	}
 }
@@ -98,6 +102,9 @@ func (s ragProxyService) doJSONRequest(ctx context.Context, url string, payload 
 		return 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if s.username != "" || s.password != "" {
+		req.SetBasicAuth(s.username, s.password)
+	}
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {

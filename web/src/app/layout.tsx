@@ -1,5 +1,8 @@
 import { NavLink, Outlet, useMatches } from "react-router-dom";
 
+import { getSystemStatus } from "../lib/console-api";
+import { useRemoteData } from "../lib/use-remote-data";
+
 export type ConsoleRouteMeta = {
   title: string;
   description: string;
@@ -8,6 +11,10 @@ export type ConsoleRouteMeta = {
 export type ConsoleNavigationItem = ConsoleRouteMeta & {
   path: string;
   label: string;
+};
+const fallbackRouteMeta: ConsoleRouteMeta = {
+  title: "控制台",
+  description: "请选择左侧导航以查看对应页面。",
 };
 
 function isConsoleRouteMeta(handle: unknown): handle is ConsoleRouteMeta {
@@ -25,18 +32,28 @@ function toRouteMeta(navigationItem: ConsoleNavigationItem): ConsoleRouteMeta {
   };
 }
 
+function getBadgeClassName(isHealthy: boolean) {
+  return isHealthy ? "status-badge status-badge--healthy" : "status-badge status-badge--neutral";
+}
+
 export function AppLayout({ navigation }: { navigation: readonly ConsoleNavigationItem[] }) {
   const matches = useMatches();
+  const { data: systemStatus, error: systemStatusError } = useRemoteData(getSystemStatus);
+  const firstNavigationMeta = navigation[0] ? toRouteMeta(navigation[0]) : fallbackRouteMeta;
   const current =
     matches.reduce<ConsoleRouteMeta | undefined>(
       (matchedMeta, match) => (isConsoleRouteMeta(match.handle) ? match.handle : matchedMeta),
       undefined,
-    ) ?? toRouteMeta(navigation[0]);
+    ) ?? firstNavigationMeta;
+  const statusPlaceholder = systemStatusError ? "状态获取失败" : "状态加载中";
+  const gatewayHealth = systemStatus?.gateway_health ?? statusPlaceholder;
+  const quotaProtection = systemStatus?.quota_protection ?? statusPlaceholder;
+  const isGatewayHealthy = gatewayHealth === "健康";
 
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <div className="sidebar__brand">AI Gateway Console</div>
+        <div className="sidebar__brand">AI 网关控制台</div>
         <nav className="sidebar__nav">
           {navigation.map((item) => (
             <NavLink
@@ -51,11 +68,6 @@ export function AppLayout({ navigation }: { navigation: readonly ConsoleNavigati
             </NavLink>
           ))}
         </nav>
-        <div className="sidebar__status">
-          <span className="status-badge status-badge--neutral">MVP</span>
-          <span className="status-badge status-badge--neutral">Bootstrap Mode</span>
-          <span className="status-badge status-badge--healthy">Gateway Healthy</span>
-        </div>
       </aside>
       <div className="shell-main">
         <header className="topbar">
@@ -64,8 +76,8 @@ export function AppLayout({ navigation }: { navigation: readonly ConsoleNavigati
             <p>{current.description}</p>
           </div>
           <div className="topbar__badges">
-            <span className="status-badge status-badge--healthy">Gateway Healthy</span>
-            <span className="status-badge status-badge--neutral">Quota Guard Active</span>
+            <span className={getBadgeClassName(isGatewayHealthy)}>{gatewayHealth}</span>
+            <span className="status-badge status-badge--neutral">配额保护 {quotaProtection}</span>
           </div>
         </header>
         <main className="page-content">

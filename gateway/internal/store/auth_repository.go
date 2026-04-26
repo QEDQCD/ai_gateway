@@ -5,9 +5,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/liwenjian/ai_gateway/gateway/internal/domain"
+	"github.com/liwenjian/ai_gateway/gateway/internal/secret"
 )
 
 var ErrAuthRecordNotFound = errors.New("auth record not found")
@@ -69,11 +71,16 @@ type authQueries interface {
 }
 
 type SQLAuthRepository struct {
-	queries authQueries
+	queries     authQueries
+	secretCodec *secret.Codec
 }
 
-func NewAuthRepository(queries authQueries) *SQLAuthRepository {
-	return &SQLAuthRepository{queries: queries}
+func NewAuthRepository(queries authQueries, secretCodec ...*secret.Codec) *SQLAuthRepository {
+	repo := &SQLAuthRepository{queries: queries}
+	if len(secretCodec) > 0 {
+		repo.secretCodec = secretCodec[0]
+	}
+	return repo
 }
 
 func NewBootstrapAuthRepository(cfg BootstrapAuthConfig) *BootstrapAuthRepository {
@@ -150,12 +157,21 @@ func (r *SQLAuthRepository) ListActiveProviderCredentials(ctx context.Context) (
 
 	credentials := make([]ProviderCredentialRecord, 0, len(rows))
 	for _, row := range rows {
+		apiKey := row.EncryptedSecret
+		if r.secretCodec != nil && strings.HasPrefix(row.EncryptedSecret, secret.EncryptedSecretPrefix) {
+			decryptedSecret, err := r.secretCodec.Decrypt(row.EncryptedSecret)
+			if err != nil {
+				return nil, err
+			}
+			apiKey = decryptedSecret
+		}
+
 		credentials = append(credentials, ProviderCredentialRecord{
 			ID:              row.ID,
 			Provider:        row.Provider,
 			DisplayName:     row.DisplayName,
 			BaseURL:         row.BaseURL,
-			APIKey:          row.EncryptedSecret,
+			APIKey:          apiKey,
 			Status:          domain.Status(row.Status),
 			SupportedModels: append([]string(nil), row.SupportedModels...),
 		})

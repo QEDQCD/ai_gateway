@@ -7,6 +7,6 @@ import "./styles.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <RouterProvider router={createAppRouter()} />
+    <RouterProvider router={createAppRouter()} future={{ v7_startTransition: true }} />
   </React.StrictMode>,
 );

@@ -110,9 +110,10 @@ func SeedDemoData(ctx context.Context, db seedDB, cfg SeedConfig) error {
 		cfg.ProviderDisplayName = defaultSeedProviderDisplayName(cfg.Provider)
 	}
 
+	providerCredentialID := seedProviderCredentialID(cfg.Provider)
 	chatModel, embeddingModel, supportedModels := seededModels(cfg.Provider)
-	chatRouteID := service.RouteIDForCredential("provider_qwen_primary", supportedModels, chatModel)
-	embeddingRouteID := service.RouteIDForCredential("provider_qwen_primary", supportedModels, embeddingModel)
+	chatRouteID := service.RouteIDForCredential(providerCredentialID, supportedModels, chatModel)
+	embeddingRouteID := service.RouteIDForCredential(providerCredentialID, supportedModels, embeddingModel)
 	ragRouteID := service.RouteIDForCredential("provider_rag_service", []string{"rag-query"}, "rag-query")
 	providerDisplayName := escapeLiteral(cfg.ProviderDisplayName)
 	providerSecret, err := encryptSeedSecret(cfg.SecretCodec, cfg.ProviderAPIKey)
@@ -144,7 +145,7 @@ func SeedDemoData(ctx context.Context, db seedDB, cfg SeedConfig) error {
 			scopes = excluded.scopes,
 			last_used_at = excluded.last_used_at;`, keyHash),
 		fmt.Sprintf(`insert into provider_credentials (id, provider, display_name, encrypted_secret, status, supported_models, base_url) values
-			('provider_qwen_primary', '%s', '%s', '%s', 'active', '{%s}', '%s'),
+			('%s', '%s', '%s', '%s', 'active', '{%s}', '%s'),
 			('provider_rag_service', 'rag', '知识库检索服务', '%s', 'active', '{"rag-query"}', 'http://rag-service:8000')
 		on conflict (id) do update set
 			provider = excluded.provider,
@@ -152,7 +153,7 @@ func SeedDemoData(ctx context.Context, db seedDB, cfg SeedConfig) error {
 			encrypted_secret = excluded.encrypted_secret,
 			status = excluded.status,
 			supported_models = excluded.supported_models,
-			base_url = excluded.base_url;`, cfg.Provider, providerDisplayName, escapeLiteral(providerSecret), joinArrayLiteral(supportedModels), escapeLiteral(cfg.ProviderBaseURL), escapeLiteral(ragSecret)),
+			base_url = excluded.base_url;`, providerCredentialID, cfg.Provider, providerDisplayName, escapeLiteral(providerSecret), joinArrayLiteral(supportedModels), escapeLiteral(cfg.ProviderBaseURL), escapeLiteral(ragSecret)),
 		`insert into knowledge_bases (id, tenant_id, name, status, document_count, chunk_count, updated_at) values
 			('kb_product_docs', 'tenant_alpha', '产品文档库', 'ready', 84, 8400, now() - interval '12 minutes'),
 			('kb_support_archive', 'tenant_beta', '支持工单库', 'indexing', 62, 4000, now() - interval '28 minutes')
@@ -176,18 +177,17 @@ func SeedDemoData(ctx context.Context, db seedDB, cfg SeedConfig) error {
 			chunk_count = excluded.chunk_count,
 			updated_at = excluded.updated_at;`,
 		fmt.Sprintf(`insert into route_catalog (id, requested_model, resolved_provider, provider_credential_id, endpoint, latency_ms, health_status, request_mode, updated_at) values
-			('%s', '%s', '%s', 'provider_qwen_primary', '/v1/chat/completions', 218, 'healthy', '聊天', now() - interval '2 minutes'),
-			('%s', '%s', '%s', 'provider_qwen_primary', '/v1/embeddings', 64, 'healthy', '向量', now() - interval '3 minutes'),
+			('%s', '%s', '%s', '%s', '/v1/chat/completions', 218, 'healthy', '聊天', now() - interval '2 minutes'),
+			('%s', '%s', '%s', '%s', '/v1/embeddings', 64, 'healthy', '向量', now() - interval '3 minutes'),
 			('%s', 'rag-query', '知识库检索服务', 'provider_rag_service', '/v1/rag/query', 312, 'warning', '知识库', now() - interval '5 minutes')
-		on conflict (id) do update set
-			requested_model = excluded.requested_model,
+		on conflict (requested_model) do update set
 			resolved_provider = excluded.resolved_provider,
 			provider_credential_id = excluded.provider_credential_id,
 			endpoint = excluded.endpoint,
 			latency_ms = excluded.latency_ms,
 			health_status = excluded.health_status,
 			request_mode = excluded.request_mode,
-			updated_at = excluded.updated_at;`, chatRouteID, escapeLiteral(chatModel), providerDisplayName, embeddingRouteID, escapeLiteral(embeddingModel), providerDisplayName, ragRouteID),
+			updated_at = excluded.updated_at;`, chatRouteID, escapeLiteral(chatModel), providerDisplayName, providerCredentialID, embeddingRouteID, escapeLiteral(embeddingModel), providerDisplayName, providerCredentialID, ragRouteID),
 		fmt.Sprintf(`insert into audit_logs (tenant_id, platform_api_key_id, requested_model, endpoint, status_code, provider_display_name, latency_ms, created_at)
 		select * from (values
 			('tenant_alpha', 'pak_live_console', '%s', '/v1/chat/completions', 200, '%s', 218, now() - interval '3 minutes'),
@@ -251,6 +251,32 @@ func defaultSeedProviderDisplayName(provider string) string {
 	default:
 		return "模型服务主路由"
 	}
+}
+
+func seedProviderCredentialID(provider string) string {
+	provider = strings.TrimSpace(strings.ToLower(provider))
+	if provider == "" {
+		provider = "provider"
+	}
+
+	var builder strings.Builder
+	lastUnderscore := false
+	for _, r := range provider {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			builder.WriteRune(r)
+			lastUnderscore = false
+		case !lastUnderscore:
+			builder.WriteByte('_')
+			lastUnderscore = true
+		}
+	}
+
+	slug := strings.Trim(builder.String(), "_")
+	if slug == "" {
+		slug = "provider"
+	}
+	return "provider_" + slug + "_primary"
 }
 
 func encryptSeedSecret(codec *secret.Codec, value string) (string, error) {

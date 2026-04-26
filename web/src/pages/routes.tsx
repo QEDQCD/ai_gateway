@@ -1,60 +1,45 @@
-import { StatCard } from "./dashboard";
+import {
+  DataTable,
+  ErrorSection,
+  LoadingSection,
+  StatCard,
+  SummarySection,
+} from "../components/console";
+import { getRoutes } from "../lib/console-api";
+import { useRemoteData } from "../lib/use-remote-data";
 
 export function RoutesPage() {
+  const { data, loading, error } = useRemoteData(getRoutes);
+
+  if (loading) {
+    return <LoadingSection text="正在加载路由策略..." />;
+  }
+
+  if (error || !data) {
+    return <ErrorSection message={error ?? "路由数据加载失败。"} />;
+  }
+
   return (
     <div className="page-grid">
       <div className="stats-grid">
-        <StatCard label="Active Providers" value="4" />
-        <StatCard label="Model Mappings" value="19" />
-        <StatCard label="Fallback Policy" value="Enabled" />
-        <StatCard label="Bootstrap Mode" value="Active" />
+        {data.stats.map((item) => (
+          <StatCard key={item.label} label={item.label} value={item.value} />
+        ))}
       </div>
       <section className="section-card">
-        <h2>Routes</h2>
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>Requested Model</th>
-              <th>Resolved Provider</th>
-              <th>Credential</th>
-              <th>Latency</th>
-              <th>Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td>gpt-4o-mini</td>
-              <td>OpenAI Primary</td>
-              <td>provider_qwen_primary</td>
-              <td>218 ms</td>
-              <td>Healthy</td>
-            </tr>
-            <tr>
-              <td>text-embedding-3-small</td>
-              <td>OpenAI Primary</td>
-              <td>provider_qwen_primary</td>
-              <td>64 ms</td>
-              <td>Healthy</td>
-            </tr>
-            <tr>
-              <td>RAG Query</td>
-              <td>RAG Service</td>
-              <td>rag-service</td>
-              <td>312 ms</td>
-              <td>Warning</td>
-            </tr>
-          </tbody>
-        </table>
+        <h2>路由明细</h2>
+        <DataTable
+          columns={["请求模型", "解析供应商", "凭证", "延迟", "状态"]}
+          rows={data.items.map((item) => [
+            item.requested_model,
+            item.resolved_provider,
+            item.credential,
+            item.latency,
+            item.status,
+          ])}
+        />
       </section>
-      <section className="section-card">
-        <h3>Routing Policy</h3>
-        <p>Bootstrap Mode: enabled</p>
-        <p>Model-first Resolution: active</p>
-        <p>
-          Requests resolve to managed credentials before upstream dispatch, then fall back
-          according to route policy.
-        </p>
-      </section>
+      <SummarySection title="路由策略说明" items={data.policy_summary} />
     </div>
   );
 }

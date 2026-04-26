@@ -1,53 +1,46 @@
-import { StatCard } from "./dashboard";
+import {
+  DataTable,
+  ErrorSection,
+  LoadingSection,
+  StatCard,
+  SummarySection,
+} from "../components/console";
+import { getKnowledgeBases } from "../lib/console-api";
+import { useRemoteData } from "../lib/use-remote-data";
 
 export function KnowledgeBasePage() {
+  const { data, loading, error } = useRemoteData(getKnowledgeBases);
+
+  if (loading) {
+    return <LoadingSection text="正在加载知识库..." />;
+  }
+
+  if (error || !data) {
+    return <ErrorSection message={error ?? "知识库数据加载失败。"} />;
+  }
+
   return (
     <div className="page-grid">
       <div className="stats-grid">
-        <StatCard label="Documents" value="184" />
-        <StatCard label="Chunks" value="12.4k" />
-        <StatCard label="Last Ingest" value="8m ago" />
-        <StatCard label="Queue Status" value="Healthy" />
+        {data.stats.map((item) => (
+          <StatCard key={item.label} label={item.label} value={item.value} />
+        ))}
       </div>
       <section className="section-card">
-        <h2>Knowledge Base</h2>
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>Knowledge Base</th>
-              <th>Documents</th>
-              <th>Status</th>
-              <th>Updated At</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td>Product Docs</td>
-              <td>84</td>
-              <td>Ready</td>
-              <td>09:10</td>
-            </tr>
-            <tr>
-              <td>Support Archive</td>
-              <td>62</td>
-              <td>Indexing</td>
-              <td>08:44</td>
-            </tr>
-          </tbody>
-        </table>
+        <h2>知识库列表</h2>
+        <DataTable
+          columns={["知识库", "文档数", "状态", "更新时间"]}
+          rows={data.items.map((item) => [
+            item.name,
+            item.documents,
+            item.status,
+            item.updated_at,
+          ])}
+        />
       </section>
       <div className="two-column-grid">
-        <section className="section-card">
-          <h3>RAG Query Flow</h3>
-          <p>
-            Query enters the gateway, resolves to the RAG service, then joins retrieval
-            context before final response assembly.
-          </p>
-        </section>
-        <section className="section-card">
-          <h3>Ingest Queue</h3>
-          <p>3 files pending chunk refresh, 1 index rebuild in progress, no failed ingest jobs.</p>
-        </section>
+        <SummarySection title="检索流程" items={data.flow_summary} />
+        <SummarySection title="导入队列" items={data.queue_summary} />
       </div>
     </div>
   );

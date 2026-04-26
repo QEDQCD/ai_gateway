@@ -193,9 +193,16 @@ func (s chatProxyService) record(ctx context.Context, record UsageRecord) {
 		return
 	}
 	if err := s.publisher.Publish(ctx, record.UsageEvent()); err != nil {
-		logUsageFailure("publish", record, err)
-		if persistErr := persistPublishFailure(record, s.recorder, err); persistErr != nil {
-			logUsageFailure("publish_failure_persist", record, persistErr)
+		publishErr := queue.PublishFailure(err)
+		stage := "consume"
+		if publishErr != nil {
+			stage = "publish"
+		}
+		logUsageFailure(stage, record, err)
+		if publishErr != nil {
+			if persistErr := persistPublishFailure(record, s.recorder, publishErr); persistErr != nil {
+				logUsageFailure("publish_failure_persist", record, persistErr)
+			}
 		}
 	}
 }
@@ -206,9 +213,16 @@ func (s embeddingProxyService) record(ctx context.Context, record UsageRecord) {
 		return
 	}
 	if err := s.publisher.Publish(ctx, record.UsageEvent()); err != nil {
-		logUsageFailure("publish", record, err)
-		if persistErr := persistPublishFailure(record, s.recorder, err); persistErr != nil {
-			logUsageFailure("publish_failure_persist", record, persistErr)
+		publishErr := queue.PublishFailure(err)
+		stage := "consume"
+		if publishErr != nil {
+			stage = "publish"
+		}
+		logUsageFailure(stage, record, err)
+		if publishErr != nil {
+			if persistErr := persistPublishFailure(record, s.recorder, publishErr); persistErr != nil {
+				logUsageFailure("publish_failure_persist", record, persistErr)
+			}
 		}
 	}
 }

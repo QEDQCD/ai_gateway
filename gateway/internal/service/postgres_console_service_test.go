@@ -1,0 +1,1563 @@
+package service_test
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	gatewaydb "github.com/liwenjian/ai_gateway/gateway/db"
+	"github.com/liwenjian/ai_gateway/gateway/internal/service"
+	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/wait"
+)
+
+func TestPostgresConsoleServiceSystemStatus(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, _ := newUsageConsoleService(t, ctx)
+
+	payload, err := console.SystemStatus(ctx)
+	if err != nil {
+		t.Fatalf("SystemStatus failed: %v", err)
+	}
+
+	if payload.ConsoleStage != "控制台预览版" {
+		t.Fatalf("expected console_stage 控制台预览版, got %q", payload.ConsoleStage)
+	}
+	if payload.RunMode != "数据库模式" {
+		t.Fatalf("expected run_mode 数据库模式, got %q", payload.RunMode)
+	}
+	if payload.GatewayHealth != "告警" {
+		t.Fatalf("expected gateway_health 告警, got %q", payload.GatewayHealth)
+	}
+	if payload.QuotaProtection != "已启用" {
+		t.Fatalf("expected quota_protection 已启用, got %q", payload.QuotaProtection)
+	}
+	if payload.ConsoleEntry != "31873" {
+		t.Fatalf("expected console_entry 31873, got %q", payload.ConsoleEntry)
+	}
+	if payload.GatewayAdminAPI != "32658" {
+		t.Fatalf("expected gateway_admin_api 32658, got %q", payload.GatewayAdminAPI)
+	}
+	if len(payload.InternalServices) != 1 || payload.InternalServices[0] != "31427" {
+		t.Fatalf("expected internal_services [31427], got %#v", payload.InternalServices)
+	}
+	if !containsString(payload.HiddenModules, "RAG 控制台") || !containsString(payload.HiddenModules, "知识库") {
+		t.Fatalf("expected hidden_modules to include RAG 控制台 and 知识库, got %#v", payload.HiddenModules)
+	}
+}
+
+func TestPostgresConsoleServiceCreateAPIKey(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	result, err := console.CreateAPIKey(ctx, service.CreateAPIKeyRequest{
+		TenantID: "tenant_demo",
+		Name:     "prod-gateway-2",
+		Scopes:   []string{"chat", "embeddings"},
+	})
+	if err != nil {
+		t.Fatalf("CreateAPIKey failed: %v", err)
+	}
+
+	if strings.TrimSpace(result.RawKey) == "" {
+		t.Fatal("expected created raw key")
+	}
+	if result.Item.Status != "启用" {
+		t.Fatalf("expected status 启用, got %q", result.Item.Status)
+	}
+
+	var count int
+	if err := conn.QueryRow(ctx, `select count(*) from platform_api_keys where id = $1 and tenant_id = $2 and status = 'active';`, result.Item.ID, "tenant_demo").Scan(&count); err != nil {
+		t.Fatalf("QueryRow platform_api_keys failed: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected created key to persist, got count %d", count)
+	}
+}
+
+func TestPostgresConsoleServiceRotateAPIKeyReturnsRawKeyOnce(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	result, err := console.RotateAPIKey(ctx, "pak_demo", service.RotateAPIKeyRequest{})
+	if err != nil {
+		t.Fatalf("RotateAPIKey failed: %v", err)
+	}
+
+	if strings.TrimSpace(result.RawKey) == "" {
+		t.Fatal("expected rotated raw key")
+	}
+	if result.Item.Tenant != "tenant_demo" {
+		t.Fatalf("expected tenant tenant_demo, got %q", result.Item.Tenant)
+	}
+
+	var oldStatus string
+	if err := conn.QueryRow(ctx, `select status from platform_api_keys where id = 'pak_demo';`).Scan(&oldStatus); err != nil {
+		t.Fatalf("QueryRow old platform_api_keys failed: %v", err)
+	}
+	if oldStatus != "disabled" {
+		t.Fatalf("expected old key disabled, got %q", oldStatus)
+	}
+}
+
+func TestPostgresConsoleServiceDeactivateAPIKey(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	result, err := console.DeactivateAPIKey(ctx, "pak_demo")
+	if err != nil {
+		t.Fatalf("DeactivateAPIKey failed: %v", err)
+	}
+
+	if result.Item.Status != "停用" {
+		t.Fatalf("expected status 停用, got %q", result.Item.Status)
+	}
+
+	var status string
+	if err := conn.QueryRow(ctx, `select status from platform_api_keys where id = 'pak_demo';`).Scan(&status); err != nil {
+		t.Fatalf("QueryRow platform_api_keys failed: %v", err)
+	}
+	if status != "disabled" {
+		t.Fatalf("expected disabled status in db, got %q", status)
+	}
+}
+
+func TestPostgresConsoleServiceDeleteUnusedAPIKey(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	created, err := console.CreateAPIKey(ctx, service.CreateAPIKeyRequest{
+		TenantID: "tenant_demo",
+		Name:     "unused-delete-me",
+		Scopes:   []string{"chat"},
+	})
+	if err != nil {
+		t.Fatalf("CreateAPIKey failed: %v", err)
+	}
+
+	result, err := console.DeleteAPIKey(ctx, created.Item.ID)
+	if err != nil {
+		t.Fatalf("DeleteAPIKey failed: %v", err)
+	}
+
+	if result.Item.Status != "已删除" {
+		t.Fatalf("expected status 已删除, got %q", result.Item.Status)
+	}
+
+	var count int
+	if err := conn.QueryRow(ctx, `select count(*) from platform_api_keys where id = $1;`, created.Item.ID).Scan(&count); err != nil {
+		t.Fatalf("QueryRow platform_api_keys failed: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected deleted key to be removed, got count %d", count)
+	}
+}
+
+func TestPostgresConsoleServiceDeleteReferencedAPIKeyReturnsConflict(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, _ := newUsageConsoleService(t, ctx)
+
+	_, err := console.DeleteAPIKey(ctx, "pak_demo")
+	if err == nil {
+		t.Fatal("expected DeleteAPIKey to fail for referenced key")
+	}
+
+	var statusErr service.StatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("expected StatusError, got %T", err)
+	}
+	if statusErr.Code != 409 {
+		t.Fatalf("expected conflict status, got %d", statusErr.Code)
+	}
+}
+
+func TestPostgresConsoleServiceAuditUsesUsageLogsAndEvents(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, _ := newUsageConsoleService(t, ctx)
+
+	payload, err := console.Audit(ctx)
+	if err != nil {
+		t.Fatalf("Audit failed: %v", err)
+	}
+
+	if len(payload.Metrics) != 4 {
+		t.Fatalf("expected 4 metrics, got %d", len(payload.Metrics))
+	}
+	if len(payload.Events) == 0 {
+		t.Fatal("expected audit events from llm_request_events")
+	}
+	if len(payload.Items) == 0 {
+		t.Fatal("expected audit items from llm_request_logs")
+	}
+	if payload.Items[0].RequestModel == "" {
+		t.Fatal("expected request_model to be populated")
+	}
+	if payload.Items[0].UsageSource == "" {
+		t.Fatal("expected usage_source to be populated")
+	}
+}
+
+func TestPostgresConsoleServiceAuditFallsBackToAuditLogsWhenUsageDataMissing(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	if _, err := conn.Exec(ctx, `delete from llm_request_events; delete from llm_request_logs;`); err != nil {
+		t.Fatalf("delete usage tables failed: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `
+		insert into audit_logs (
+			tenant_id,
+			platform_api_key_id,
+			requested_model,
+			endpoint,
+			status_code,
+			provider_display_name,
+			latency_ms,
+			created_at
+		) values (
+			'tenant_demo',
+			'pak_demo',
+			'qwen-flash',
+			'/v1/chat/completions',
+			200,
+			'DashScope 主路由',
+			88,
+			now()
+		);
+	`); err != nil {
+		t.Fatalf("insert fallback audit log failed: %v", err)
+	}
+
+	payload, err := console.Audit(ctx)
+	if err != nil {
+		t.Fatalf("Audit failed: %v", err)
+	}
+
+	if len(payload.Items) == 0 {
+		t.Fatal("expected fallback audit items")
+	}
+	if payload.Items[0].RequestModel != "-" {
+		t.Fatalf("expected fallback request_model '-', got %q", payload.Items[0].RequestModel)
+	}
+	if payload.Items[0].UsageSource != "审计回退" {
+		t.Fatalf("expected fallback usage_source 审计回退, got %q", payload.Items[0].UsageSource)
+	}
+}
+
+func TestPostgresConsoleServiceUsageOverview(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	payload, err := console.UsageOverview(ctx, service.UsageQuery{
+		From: mustParseUsageTime(t, "2026-04-24T09:00:00Z"),
+		To:   mustParseUsageTime(t, "2026-04-24T11:00:00Z"),
+	})
+	if err != nil {
+		t.Fatalf("UsageOverview failed: %v", err)
+	}
+
+	if payload.TotalRequests != 2 {
+		t.Fatalf("expected total_requests 2, got %d", payload.TotalRequests)
+	}
+	if payload.SuccessRate != "50.00%" {
+		t.Fatalf("expected success_rate 50.00%%, got %q", payload.SuccessRate)
+	}
+	if payload.TotalTokens != "188" {
+		t.Fatalf("expected total_tokens 188, got %q", payload.TotalTokens)
+	}
+	if payload.AverageLatency != "139 ms" {
+		t.Fatalf("expected average_latency 139 ms, got %q", payload.AverageLatency)
+	}
+	if payload.EstimatedShare != "50.00%" {
+		t.Fatalf("expected estimated_share 50.00%%, got %q", payload.EstimatedShare)
+	}
+
+	var logCount int
+	if err := conn.QueryRow(ctx, `select count(*) from llm_request_logs`).Scan(&logCount); err != nil {
+		t.Fatalf("QueryRow llm_request_logs failed: %v", err)
+	}
+	if logCount < 2 {
+		t.Fatalf("expected demo data to include llm_request_logs, got %d rows", logCount)
+	}
+}
+
+func TestPostgresConsoleServiceUsageLatencyWall(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, _ := newUsageConsoleService(t, ctx)
+
+	payload, err := console.UsageLatencyWall(ctx, service.UsageQuery{Window: "24h"})
+	if err != nil {
+		t.Fatalf("UsageLatencyWall failed: %v", err)
+	}
+
+	if payload.WindowLabel != "最近 24 小时" {
+		t.Fatalf("expected 最近 24 小时, got %q", payload.WindowLabel)
+	}
+	if len(payload.Buckets) == 0 {
+		t.Fatal("expected latency wall buckets")
+	}
+	if len(payload.Lanes) == 0 {
+		t.Fatal("expected latency wall lanes")
+	}
+	if payload.Lanes[0].Model == "" {
+		t.Fatal("expected lane model to be populated")
+	}
+	if len(payload.Lanes[0].Cells) != len(payload.Buckets) {
+		t.Fatalf("expected cells to align with buckets, got %d cells and %d buckets", len(payload.Lanes[0].Cells), len(payload.Buckets))
+	}
+}
+
+func TestPostgresConsoleServiceUsageOverviewFiltersByErrorCategory(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, _ := newUsageConsoleService(t, ctx)
+
+	payload, err := console.UsageOverview(ctx, service.UsageQuery{
+		From:          mustParseUsageTime(t, "2026-04-24T09:00:00Z"),
+		To:            mustParseUsageTime(t, "2026-04-24T11:00:00Z"),
+		ErrorCategory: "rate_limit",
+	})
+	if err != nil {
+		t.Fatalf("UsageOverview failed: %v", err)
+	}
+
+	if payload.TotalRequests != 1 {
+		t.Fatalf("expected total_requests 1, got %d", payload.TotalRequests)
+	}
+	if payload.SuccessRate != "0.00%" {
+		t.Fatalf("expected success_rate 0.00%%, got %q", payload.SuccessRate)
+	}
+	if payload.TotalTokens != "16" {
+		t.Fatalf("expected total_tokens 16, got %q", payload.TotalTokens)
+	}
+	if payload.AverageLatency != "95 ms" {
+		t.Fatalf("expected average_latency 95 ms, got %q", payload.AverageLatency)
+	}
+	if payload.EstimatedShare != "100.00%" {
+		t.Fatalf("expected estimated_share 100.00%%, got %q", payload.EstimatedShare)
+	}
+}
+
+func TestPostgresConsoleServiceUsageOverviewHonorsPartialHourWindow(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, _ := newUsageConsoleService(t, ctx)
+
+	payload, err := console.UsageOverview(ctx, service.UsageQuery{
+		From: mustParseUsageTime(t, "2026-04-24T10:05:00Z"),
+		To:   mustParseUsageTime(t, "2026-04-24T10:30:00Z"),
+	})
+	if err != nil {
+		t.Fatalf("UsageOverview failed: %v", err)
+	}
+
+	if payload.TotalRequests != 1 {
+		t.Fatalf("expected total_requests 1, got %d", payload.TotalRequests)
+	}
+	if payload.TotalTokens != "16" {
+		t.Fatalf("expected total_tokens 16, got %q", payload.TotalTokens)
+	}
+	if payload.AverageLatency != "95 ms" {
+		t.Fatalf("expected average_latency 95 ms, got %q", payload.AverageLatency)
+	}
+}
+
+func TestPostgresConsoleServiceUsageOverviewUsesRequestStartedAtWindow(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	if _, err := conn.Exec(ctx, `
+		insert into llm_request_logs (
+			id,
+			tenant_id,
+			platform_api_key_id,
+			platform_api_key_name,
+			provider_credential_id,
+			route_id,
+			request_path,
+			request_model,
+			upstream_model,
+			usage_source,
+			usage_status,
+			status_code,
+			latency_ms,
+			prompt_tokens,
+			completion_tokens,
+			total_tokens,
+			error_code,
+			error_message,
+			request_started_at,
+			request_completed_at,
+			created_at
+		) values (
+			'llmreq_demo_delayed',
+			'tenant_demo',
+			'pak_demo',
+			'demo key',
+			'provider_openai_demo',
+			'route:provider_openai_demo:default',
+			'/v1/chat/completions',
+			'gpt-4o-mini',
+			'gpt-4o-mini',
+			'upstream',
+			'success',
+			200,
+			120,
+			18,
+			6,
+			24,
+			'',
+			'',
+			timestamptz '2026-04-24T10:15:00Z',
+			timestamptz '2026-04-24T10:15:00.120Z',
+			timestamptz '2026-04-24T12:15:00Z'
+		)
+	`); err != nil {
+		t.Fatalf("insert delayed llm_request_logs failed: %v", err)
+	}
+
+	payload, err := console.UsageOverview(ctx, service.UsageQuery{
+		From: mustParseUsageTime(t, "2026-04-24T10:10:00Z"),
+		To:   mustParseUsageTime(t, "2026-04-24T10:20:00Z"),
+	})
+	if err != nil {
+		t.Fatalf("UsageOverview failed: %v", err)
+	}
+
+	if payload.TotalRequests != 1 {
+		t.Fatalf("expected total_requests 1, got %d", payload.TotalRequests)
+	}
+	if payload.TotalTokens != "24" {
+		t.Fatalf("expected total_tokens 24, got %q", payload.TotalTokens)
+	}
+}
+
+func TestPostgresConsoleServiceUsageTrends(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	if _, err := conn.Exec(ctx, `
+		insert into llm_request_logs (
+			id,
+			tenant_id,
+			platform_api_key_id,
+			platform_api_key_name,
+			provider_credential_id,
+			route_id,
+			request_path,
+			request_model,
+			upstream_model,
+			usage_source,
+			usage_status,
+			status_code,
+			latency_ms,
+			prompt_tokens,
+			completion_tokens,
+			total_tokens,
+			error_code,
+			error_message,
+			request_started_at,
+			request_completed_at,
+			created_at
+		) values (
+			'llmreq_demo_011',
+			'tenant_demo',
+			'pak_demo',
+			'demo key',
+			'provider_openai_demo',
+			'route:provider_openai_demo:default',
+			'/v1/chat/completions',
+			'gpt-4o-mini',
+			'gpt-4o-mini',
+			'upstream',
+			'success',
+			200,
+			205,
+			90,
+			30,
+			120,
+			'',
+			'',
+			timestamptz '2026-04-24T11:00:00Z',
+			timestamptz '2026-04-24T11:00:00.205Z',
+			timestamptz '2026-04-24T11:00:01Z'
+		)
+	`); err != nil {
+		t.Fatalf("insert llm_request_logs failed: %v", err)
+	}
+
+	payload, err := console.UsageTrends(ctx, service.UsageQuery{
+		From: mustParseUsageTime(t, "2026-04-24T09:00:00Z"),
+		To:   mustParseUsageTime(t, "2026-04-24T12:00:00Z"),
+	})
+	if err != nil {
+		t.Fatalf("UsageTrends failed: %v", err)
+	}
+
+	if len(payload.Requests) != 2 {
+		t.Fatalf("expected 2 request trend points, got %d", len(payload.Requests))
+	}
+	if payload.Requests[0].Value != "2" {
+		t.Fatalf("expected first request trend value 2, got %q", payload.Requests[0].Value)
+	}
+	if payload.Tokens[0].Value != "188" {
+		t.Fatalf("expected first token trend value 188, got %q", payload.Tokens[0].Value)
+	}
+	if payload.Success[0].Value != "50.00%" {
+		t.Fatalf("expected first success trend value 50.00%%, got %q", payload.Success[0].Value)
+	}
+	if payload.Requests[1].Value != "1" {
+		t.Fatalf("expected second request trend value 1, got %q", payload.Requests[1].Value)
+	}
+	if payload.Tokens[1].Value != "120" {
+		t.Fatalf("expected second token trend value 120, got %q", payload.Tokens[1].Value)
+	}
+	if payload.Success[1].Value != "100.00%" {
+		t.Fatalf("expected second success trend value 100.00%%, got %q", payload.Success[1].Value)
+	}
+}
+
+func TestPostgresConsoleServiceUsageTrendsFiltersByErrorCategory(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, _ := newUsageConsoleService(t, ctx)
+
+	payload, err := console.UsageTrends(ctx, service.UsageQuery{
+		From:          mustParseUsageTime(t, "2026-04-24T09:00:00Z"),
+		To:            mustParseUsageTime(t, "2026-04-24T11:00:00Z"),
+		ErrorCategory: "rate_limit",
+	})
+	if err != nil {
+		t.Fatalf("UsageTrends failed: %v", err)
+	}
+
+	if len(payload.Requests) != 1 {
+		t.Fatalf("expected 1 request trend point, got %d", len(payload.Requests))
+	}
+	if payload.Requests[0].Value != "1" {
+		t.Fatalf("expected request trend value 1, got %q", payload.Requests[0].Value)
+	}
+	if payload.Tokens[0].Value != "16" {
+		t.Fatalf("expected token trend value 16, got %q", payload.Tokens[0].Value)
+	}
+	if payload.Success[0].Value != "0.00%" {
+		t.Fatalf("expected success trend value 0.00%%, got %q", payload.Success[0].Value)
+	}
+}
+
+func TestPostgresConsoleServiceUsageTrendsHonorsPartialHourWindow(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, _ := newUsageConsoleService(t, ctx)
+
+	payload, err := console.UsageTrends(ctx, service.UsageQuery{
+		From: mustParseUsageTime(t, "2026-04-24T10:05:00Z"),
+		To:   mustParseUsageTime(t, "2026-04-24T10:30:00Z"),
+	})
+	if err != nil {
+		t.Fatalf("UsageTrends failed: %v", err)
+	}
+
+	if len(payload.Requests) != 1 {
+		t.Fatalf("expected 1 request trend point, got %d", len(payload.Requests))
+	}
+	if payload.Requests[0].Value != "1" {
+		t.Fatalf("expected request trend value 1, got %q", payload.Requests[0].Value)
+	}
+	if payload.Tokens[0].Value != "16" {
+		t.Fatalf("expected token trend value 16, got %q", payload.Tokens[0].Value)
+	}
+	if payload.Success[0].Value != "0.00%" {
+		t.Fatalf("expected success trend value 0.00%%, got %q", payload.Success[0].Value)
+	}
+}
+
+func TestPostgresConsoleServiceUsageFailures(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	if _, err := conn.Exec(ctx, `
+		insert into llm_request_logs (
+			id,
+			tenant_id,
+			platform_api_key_id,
+			platform_api_key_name,
+			provider_credential_id,
+			route_id,
+			request_path,
+			request_model,
+			upstream_model,
+			usage_source,
+			usage_status,
+			status_code,
+			latency_ms,
+			prompt_tokens,
+			completion_tokens,
+			total_tokens,
+			error_code,
+			error_message,
+			request_started_at,
+			request_completed_at,
+			created_at
+		) values (
+			'llmreq_demo_003',
+			'tenant_demo',
+			'pak_demo',
+			'demo key',
+			'provider_openai_demo',
+			'route:provider_openai_demo:default',
+			'/v1/chat/completions',
+			'gpt-4o-mini',
+			'gpt-4o-mini',
+			'upstream',
+			'upstream_error',
+			502,
+			410,
+			32,
+			8,
+			40,
+			'bad_gateway',
+			'upstream returned 502',
+			timestamptz '2026-04-24T10:30:00Z',
+			timestamptz '2026-04-24T10:30:00.410Z',
+			timestamptz '2026-04-24T10:30:01Z'
+		)
+	`); err != nil {
+		t.Fatalf("insert llm_request_logs failed: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `
+		insert into llm_request_events (
+			id,
+			request_log_id,
+			tenant_id,
+			event_type,
+			usage_source,
+			usage_status,
+			status_code,
+			detail,
+			created_at
+		) values (
+			'llmevt_demo_003',
+			'llmreq_demo_003',
+			'tenant_demo',
+			'request_failed',
+			'upstream',
+			'upstream_error',
+			502,
+			'demo upstream 502',
+			timestamptz '2026-04-24T10:30:00.410Z'
+		)
+	`); err != nil {
+		t.Fatalf("insert llm_request_events failed: %v", err)
+	}
+
+	payload, err := console.UsageFailures(ctx, service.UsageQuery{
+		From: mustParseUsageTime(t, "2026-04-24T09:00:00Z"),
+		To:   mustParseUsageTime(t, "2026-04-24T11:00:00Z"),
+	})
+	if err != nil {
+		t.Fatalf("UsageFailures failed: %v", err)
+	}
+
+	if len(payload.Breakdown) < 2 {
+		t.Fatalf("expected at least 2 failure buckets, got %d", len(payload.Breakdown))
+	}
+	if !containsFailureBucket(payload.Breakdown, "上游服务异常", "1 次") {
+		t.Fatalf("expected breakdown to contain 上游服务异常=1 次, got %#v", payload.Breakdown)
+	}
+	if len(payload.RecentEvents) == 0 {
+		t.Fatal("expected recent_events to be returned")
+	}
+	if payload.RecentEvents[0] == "" {
+		t.Fatal("expected recent event summary to be non-empty")
+	}
+	if !strings.Contains(payload.RecentEvents[0], "上游服务异常") {
+		t.Fatalf("expected recent event summary to use failure-category label, got %q", payload.RecentEvents[0])
+	}
+}
+
+func TestPostgresConsoleServiceUsageFailuresIncludesUsagePublishFailedEvents(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	if _, err := conn.Exec(ctx, `
+		insert into llm_request_logs (
+			id,
+			tenant_id,
+			platform_api_key_id,
+			platform_api_key_name,
+			provider_credential_id,
+			route_id,
+			request_path,
+			request_model,
+			upstream_model,
+			usage_source,
+			usage_status,
+			status_code,
+			latency_ms,
+			prompt_tokens,
+			completion_tokens,
+			total_tokens,
+			error_code,
+			error_message,
+			request_started_at,
+			request_completed_at,
+			created_at
+		) values (
+			'llmreq_demo_publish_fail',
+			'tenant_demo',
+			'pak_demo',
+			'demo key',
+			'provider_openai_demo',
+			'route:provider_openai_demo:default',
+			'/v1/chat/completions',
+			'gpt-4o-mini',
+			'gpt-4o-mini',
+			'upstream',
+			'success',
+			200,
+			188,
+			60,
+			20,
+			80,
+			'',
+			'',
+			timestamptz '2026-04-24T10:20:00Z',
+			timestamptz '2026-04-24T10:20:00.188Z',
+			timestamptz '2026-04-24T10:20:01Z'
+		)
+	`); err != nil {
+		t.Fatalf("insert publish-fail llm_request_logs failed: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `
+		insert into llm_request_events (
+			id,
+			request_log_id,
+			tenant_id,
+			event_type,
+			usage_source,
+			usage_status,
+			status_code,
+			detail,
+			created_at
+		) values (
+			'llmevt_demo_publish_fail',
+			'llmreq_demo_publish_fail',
+			'tenant_demo',
+			'usage_publish_failed',
+			'upstream',
+			'success',
+			200,
+			'demo publish retry exhausted',
+			timestamptz '2026-04-24T10:20:00.188Z'
+		)
+	`); err != nil {
+		t.Fatalf("insert publish-fail llm_request_events failed: %v", err)
+	}
+
+	payload, err := console.UsageFailures(ctx, service.UsageQuery{
+		From: mustParseUsageTime(t, "2026-04-24T10:00:00Z"),
+		To:   mustParseUsageTime(t, "2026-04-24T11:00:00Z"),
+	})
+	if err != nil {
+		t.Fatalf("UsageFailures failed: %v", err)
+	}
+
+	if !containsRecentEvent(payload.RecentEvents, "计量事件投递失败") {
+		t.Fatalf("expected recent_events to include usage publish failure, got %#v", payload.RecentEvents)
+	}
+	if !containsRecentEvent(payload.RecentEvents, "网关内部错误 · 用户调用 gpt-4o-mini 已完成，但计量事件投递失败") {
+		t.Fatalf("expected recent_events to categorize usage publish failure with meaningful detail, got %#v", payload.RecentEvents)
+	}
+}
+
+func TestPostgresConsoleServiceUsageFailuresUsesRequestStartedAtWindow(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	if _, err := conn.Exec(ctx, `
+		insert into llm_request_logs (
+			id,
+			tenant_id,
+			platform_api_key_id,
+			platform_api_key_name,
+			provider_credential_id,
+			route_id,
+			request_path,
+			request_model,
+			upstream_model,
+			usage_source,
+			usage_status,
+			status_code,
+			latency_ms,
+			prompt_tokens,
+			completion_tokens,
+			total_tokens,
+			error_code,
+			error_message,
+			request_started_at,
+			request_completed_at,
+			created_at
+		) values (
+			'llmreq_demo_delayed_fail',
+			'tenant_demo',
+			'pak_demo',
+			'demo key',
+			'provider_openai_demo',
+			'route:provider_openai_demo:default',
+			'/v1/chat/completions',
+			'gpt-4o-mini',
+			'gpt-4o-mini',
+			'upstream',
+			'upstream_error',
+			502,
+			320,
+			20,
+			4,
+			24,
+			'bad_gateway',
+			'delayed persistence',
+			timestamptz '2026-04-24T10:12:00Z',
+			timestamptz '2026-04-24T10:12:00.320Z',
+			timestamptz '2026-04-24T12:12:00Z'
+		)
+	`); err != nil {
+		t.Fatalf("insert delayed failure log failed: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `
+		insert into llm_request_events (
+			id,
+			request_log_id,
+			tenant_id,
+			event_type,
+			usage_source,
+			usage_status,
+			status_code,
+			detail,
+			created_at
+		) values (
+			'llmevt_demo_delayed_fail',
+			'llmreq_demo_delayed_fail',
+			'tenant_demo',
+			'request_failed',
+			'upstream',
+			'upstream_error',
+			502,
+			'delayed event persistence',
+			timestamptz '2026-04-24T12:12:00.320Z'
+		)
+	`); err != nil {
+		t.Fatalf("insert delayed failure event failed: %v", err)
+	}
+
+	payload, err := console.UsageFailures(ctx, service.UsageQuery{
+		From: mustParseUsageTime(t, "2026-04-24T10:10:00Z"),
+		To:   mustParseUsageTime(t, "2026-04-24T10:20:00Z"),
+	})
+	if err != nil {
+		t.Fatalf("UsageFailures failed: %v", err)
+	}
+
+	if !containsRecentEvent(payload.RecentEvents, "delayed event persistence") {
+		t.Fatalf("expected recent_events to use request_started_at window, got %#v", payload.RecentEvents)
+	}
+}
+
+func TestPostgresConsoleServiceUsageFailuresMergesEquivalentLabels(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	if _, err := conn.Exec(ctx, `
+		insert into llm_request_logs (
+			id,
+			tenant_id,
+			platform_api_key_id,
+			platform_api_key_name,
+			provider_credential_id,
+			route_id,
+			request_path,
+			request_model,
+			upstream_model,
+			usage_source,
+			usage_status,
+			status_code,
+			latency_ms,
+			prompt_tokens,
+			completion_tokens,
+			total_tokens,
+			error_code,
+			error_message,
+			request_started_at,
+			request_completed_at,
+			created_at
+		) values (
+			'llmreq_demo_rate_limited',
+			'tenant_demo',
+			'pak_demo',
+			'demo key',
+			'provider_openai_demo',
+			'route:provider_openai_demo:default',
+			'/v1/chat/completions',
+			'gpt-4o-mini',
+			'gpt-4o-mini',
+			'upstream',
+			'rate_limited',
+			429,
+			140,
+			10,
+			0,
+			10,
+			'rate_limited',
+			'provider throttled',
+			timestamptz '2026-04-24T10:25:00Z',
+			timestamptz '2026-04-24T10:25:00.140Z',
+			timestamptz '2026-04-24T10:25:01Z'
+		)
+	`); err != nil {
+		t.Fatalf("insert rate-limited failure log failed: %v", err)
+	}
+
+	payload, err := console.UsageFailures(ctx, service.UsageQuery{
+		From: mustParseUsageTime(t, "2026-04-24T10:00:00Z"),
+		To:   mustParseUsageTime(t, "2026-04-24T11:00:00Z"),
+	})
+	if err != nil {
+		t.Fatalf("UsageFailures failed: %v", err)
+	}
+
+	if !containsFailureBucket(payload.Breakdown, "限流", "2 次") {
+		t.Fatalf("expected equivalent rate-limit labels to merge, got %#v", payload.Breakdown)
+	}
+}
+
+func TestPostgresConsoleServiceUsageOverviewFiltersByMergedFailureCategory(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	if _, err := conn.Exec(ctx, `
+		insert into llm_request_logs (
+			id,
+			tenant_id,
+			platform_api_key_id,
+			platform_api_key_name,
+			provider_credential_id,
+			route_id,
+			request_path,
+			request_model,
+			upstream_model,
+			usage_source,
+			usage_status,
+			status_code,
+			latency_ms,
+			prompt_tokens,
+			completion_tokens,
+			total_tokens,
+			error_code,
+			error_message,
+			request_started_at,
+			request_completed_at,
+			created_at
+		) values (
+			'llmreq_demo_rate_limit_alias',
+			'tenant_demo',
+			'pak_demo',
+			'demo key',
+			'provider_openai_demo',
+			'route:provider_openai_demo:default',
+			'/v1/chat/completions',
+			'gpt-4o-mini',
+			'gpt-4o-mini',
+			'upstream',
+			'rate_limited',
+			429,
+			140,
+			10,
+			0,
+			10,
+			'rate_limited',
+			'provider throttled',
+			timestamptz '2026-04-24T10:25:00Z',
+			timestamptz '2026-04-24T10:25:00.140Z',
+			timestamptz '2026-04-24T10:25:01Z'
+		)
+	`); err != nil {
+		t.Fatalf("insert aliased failure log failed: %v", err)
+	}
+
+	payload, err := console.UsageOverview(ctx, service.UsageQuery{
+		From:          mustParseUsageTime(t, "2026-04-24T10:00:00Z"),
+		To:            mustParseUsageTime(t, "2026-04-24T11:00:00Z"),
+		ErrorCategory: "rate_limit",
+	})
+	if err != nil {
+		t.Fatalf("UsageOverview failed: %v", err)
+	}
+
+	if payload.TotalRequests != 2 {
+		t.Fatalf("expected merged failure category to include 2 requests, got %d", payload.TotalRequests)
+	}
+	if payload.TotalTokens != "26" {
+		t.Fatalf("expected merged failure category total_tokens 26, got %q", payload.TotalTokens)
+	}
+}
+
+func TestPostgresConsoleServiceUsageFailuresFiltersByMergedFailureCategory(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	if _, err := conn.Exec(ctx, `
+		insert into llm_request_logs (
+			id,
+			tenant_id,
+			platform_api_key_id,
+			platform_api_key_name,
+			provider_credential_id,
+			route_id,
+			request_path,
+			request_model,
+			upstream_model,
+			usage_source,
+			usage_status,
+			status_code,
+			latency_ms,
+			prompt_tokens,
+			completion_tokens,
+			total_tokens,
+			error_code,
+			error_message,
+			request_started_at,
+			request_completed_at,
+			created_at
+		) values (
+			'llmreq_demo_rate_limit_filter_alias',
+			'tenant_demo',
+			'pak_demo',
+			'demo key',
+			'provider_openai_demo',
+			'route:provider_openai_demo:default',
+			'/v1/chat/completions',
+			'gpt-4o-mini',
+			'gpt-4o-mini',
+			'upstream',
+			'rate_limited',
+			429,
+			140,
+			10,
+			0,
+			10,
+			'rate_limited',
+			'provider throttled',
+			timestamptz '2026-04-24T10:25:00Z',
+			timestamptz '2026-04-24T10:25:00.140Z',
+			timestamptz '2026-04-24T10:25:01Z'
+		)
+	`); err != nil {
+		t.Fatalf("insert aliased failure log failed: %v", err)
+	}
+
+	payload, err := console.UsageFailures(ctx, service.UsageQuery{
+		From:          mustParseUsageTime(t, "2026-04-24T10:00:00Z"),
+		To:            mustParseUsageTime(t, "2026-04-24T11:00:00Z"),
+		ErrorCategory: "rate_limit",
+	})
+	if err != nil {
+		t.Fatalf("UsageFailures failed: %v", err)
+	}
+
+	if !containsFailureBucket(payload.Breakdown, "限流", "2 次") {
+		t.Fatalf("expected merged failure filter to keep breakdown consistent, got %#v", payload.Breakdown)
+	}
+}
+
+func TestPostgresConsoleServiceUsageOverviewFiltersByDisplayFailureCategory(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	if _, err := conn.Exec(ctx, `
+		insert into llm_request_logs (
+			id,
+			tenant_id,
+			platform_api_key_id,
+			platform_api_key_name,
+			provider_credential_id,
+			route_id,
+			request_path,
+			request_model,
+			upstream_model,
+			usage_source,
+			usage_status,
+			status_code,
+			latency_ms,
+			prompt_tokens,
+			completion_tokens,
+			total_tokens,
+			error_code,
+			error_message,
+			request_started_at,
+			request_completed_at,
+			created_at
+		) values
+			(
+				'llmreq_demo_timeout_display',
+				'tenant_demo',
+				'pak_demo',
+				'demo key',
+				'provider_openai_demo',
+				'route:provider_openai_demo:default',
+				'/v1/chat/completions',
+				'gpt-4o-mini',
+				'gpt-4o-mini',
+				'upstream',
+				'timeout',
+				504,
+				900,
+				10,
+				0,
+				10,
+				'',
+				'timed out',
+				timestamptz '2026-04-24T10:35:00Z',
+				timestamptz '2026-04-24T10:35:00.900Z',
+				timestamptz '2026-04-24T10:35:01Z'
+			),
+			(
+				'llmreq_demo_upstream_rate_limited_display',
+				'tenant_demo',
+				'pak_demo',
+				'demo key',
+				'provider_openai_demo',
+				'route:provider_openai_demo:default',
+				'/v1/chat/completions',
+				'gpt-4o-mini',
+				'gpt-4o-mini',
+				'upstream',
+				'failed',
+				429,
+				180,
+				12,
+				0,
+				12,
+				'upstream_rate_limited',
+				'provider throttled',
+				timestamptz '2026-04-24T10:36:00Z',
+				timestamptz '2026-04-24T10:36:00.180Z',
+				timestamptz '2026-04-24T10:36:01Z'
+			)
+	`); err != nil {
+		t.Fatalf("insert display-category logs failed: %v", err)
+	}
+
+	timeoutPayload, err := console.UsageOverview(ctx, service.UsageQuery{
+		From:          mustParseUsageTime(t, "2026-04-24T10:30:00Z"),
+		To:            mustParseUsageTime(t, "2026-04-24T10:40:00Z"),
+		ErrorCategory: "上游超时",
+	})
+	if err != nil {
+		t.Fatalf("UsageOverview timeout filter failed: %v", err)
+	}
+	if timeoutPayload.TotalRequests != 1 {
+		t.Fatalf("expected 上游超时 filter to include timeout status rows, got %d", timeoutPayload.TotalRequests)
+	}
+
+	rateLimitedPayload, err := console.UsageOverview(ctx, service.UsageQuery{
+		From:          mustParseUsageTime(t, "2026-04-24T10:30:00Z"),
+		To:            mustParseUsageTime(t, "2026-04-24T10:40:00Z"),
+		ErrorCategory: "上游限流",
+	})
+	if err != nil {
+		t.Fatalf("UsageOverview upstream rate limit filter failed: %v", err)
+	}
+	if rateLimitedPayload.TotalRequests != 1 {
+		t.Fatalf("expected 上游限流 filter to include upstream_rate_limited rows, got %d", rateLimitedPayload.TotalRequests)
+	}
+}
+
+func TestPostgresConsoleServiceUsageOverviewDoesNotLeakUpstreamErrorIntoServiceExceptionFilter(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	if _, err := conn.Exec(ctx, `
+		insert into llm_request_logs (
+			id,
+			tenant_id,
+			platform_api_key_id,
+			platform_api_key_name,
+			provider_credential_id,
+			route_id,
+			request_path,
+			request_model,
+			upstream_model,
+			usage_source,
+			usage_status,
+			status_code,
+			latency_ms,
+			prompt_tokens,
+			completion_tokens,
+			total_tokens,
+			error_code,
+			error_message,
+			request_started_at,
+			request_completed_at,
+			created_at
+		) values (
+			'llmreq_demo_upstream_error_display',
+			'tenant_demo',
+			'pak_demo',
+			'demo key',
+			'provider_openai_demo',
+			'route:provider_openai_demo:default',
+			'/v1/chat/completions',
+			'gpt-4o-mini',
+			'gpt-4o-mini',
+			'upstream',
+			'upstream_error',
+			502,
+			220,
+			10,
+			0,
+			10,
+			'',
+			'generic upstream error',
+			timestamptz '2026-04-24T10:37:00Z',
+			timestamptz '2026-04-24T10:37:00.220Z',
+			timestamptz '2026-04-24T10:37:01Z'
+		)
+	`); err != nil {
+		t.Fatalf("insert upstream_error log failed: %v", err)
+	}
+
+	payload, err := console.UsageOverview(ctx, service.UsageQuery{
+		From:          mustParseUsageTime(t, "2026-04-24T10:30:00Z"),
+		To:            mustParseUsageTime(t, "2026-04-24T10:40:00Z"),
+		ErrorCategory: "上游服务异常",
+	})
+	if err != nil {
+		t.Fatalf("UsageOverview failed: %v", err)
+	}
+	if payload.TotalRequests != 0 {
+		t.Fatalf("expected 上游服务异常 filter not to include generic upstream_error rows, got %d", payload.TotalRequests)
+	}
+}
+
+func TestPostgresConsoleServiceUsageRequests(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, _ := newUsageConsoleService(t, ctx)
+
+	payload, err := console.UsageRequests(ctx, service.UsageQuery{
+		From:   mustParseUsageTime(t, "2026-04-24T09:00:00Z"),
+		To:     mustParseUsageTime(t, "2026-04-24T11:00:00Z"),
+		Status: "rate_limited",
+	})
+	if err != nil {
+		t.Fatalf("UsageRequests failed: %v", err)
+	}
+
+	if len(payload.Items) != 1 {
+		t.Fatalf("expected 1 request item, got %d", len(payload.Items))
+	}
+	item := payload.Items[0]
+	if item.RequestID != "llmreq_demo_002" {
+		t.Fatalf("expected request_id llmreq_demo_002, got %q", item.RequestID)
+	}
+	if item.Tenant != "tenant_demo" {
+		t.Fatalf("expected tenant tenant_demo, got %q", item.Tenant)
+	}
+	if item.Endpoint != "/v1/embeddings" {
+		t.Fatalf("expected endpoint /v1/embeddings, got %q", item.Endpoint)
+	}
+	if item.Model != "text-embedding-3-small" {
+		t.Fatalf("expected model text-embedding-3-small, got %q", item.Model)
+	}
+	if item.Status != "限流" {
+		t.Fatalf("expected status 限流, got %q", item.Status)
+	}
+	if item.TotalTokens != "16" {
+		t.Fatalf("expected total_tokens 16, got %q", item.TotalTokens)
+	}
+	if item.Latency != "95 ms" {
+		t.Fatalf("expected latency 95 ms, got %q", item.Latency)
+	}
+	if item.UsageSource != "估算" {
+		t.Fatalf("expected usage_source 估算, got %q", item.UsageSource)
+	}
+}
+
+func TestPostgresConsoleServiceUsageRequestsUsesRequestStartedAtWindow(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	if _, err := conn.Exec(ctx, `
+		insert into llm_request_logs (
+			id,
+			tenant_id,
+			platform_api_key_id,
+			platform_api_key_name,
+			provider_credential_id,
+			route_id,
+			request_path,
+			request_model,
+			upstream_model,
+			usage_source,
+			usage_status,
+			status_code,
+			latency_ms,
+			prompt_tokens,
+			completion_tokens,
+			total_tokens,
+			error_code,
+			error_message,
+			request_started_at,
+			request_completed_at,
+			created_at
+		) values (
+			'llmreq_demo_delayed_request',
+			'tenant_demo',
+			'pak_demo',
+			'demo key',
+			'provider_openai_demo',
+			'route:provider_openai_demo:default',
+			'/v1/chat/completions',
+			'gpt-4o-mini',
+			'gpt-4o-mini',
+			'upstream',
+			'success',
+			200,
+			90,
+			14,
+			3,
+			17,
+			'',
+			'',
+			timestamptz '2026-04-24T10:18:00Z',
+			timestamptz '2026-04-24T10:18:00.090Z',
+			timestamptz '2026-04-24T12:18:00Z'
+		)
+	`); err != nil {
+		t.Fatalf("insert delayed request log failed: %v", err)
+	}
+
+	payload, err := console.UsageRequests(ctx, service.UsageQuery{
+		From: mustParseUsageTime(t, "2026-04-24T10:15:00Z"),
+		To:   mustParseUsageTime(t, "2026-04-24T10:20:00Z"),
+	})
+	if err != nil {
+		t.Fatalf("UsageRequests failed: %v", err)
+	}
+
+	if len(payload.Items) != 1 {
+		t.Fatalf("expected 1 request item, got %d", len(payload.Items))
+	}
+	if payload.Items[0].RequestID != "llmreq_demo_delayed_request" {
+		t.Fatalf("expected delayed request to be selected by request_started_at, got %q", payload.Items[0].RequestID)
+	}
+}
+
+func newUsageConsoleService(t *testing.T, ctx context.Context) (service.ConsoleService, *pgx.Conn) {
+	t.Helper()
+
+	container, dsn := startUsagePostgresContainer(ctx, t)
+	t.Cleanup(func() {
+		_ = container.Terminate(context.Background())
+	})
+
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("pgx.Connect failed: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = conn.Close(context.Background())
+	})
+
+	pool, err := gatewaydb.OpenPostgres(ctx, dsn)
+	if err != nil {
+		t.Fatalf("OpenPostgres failed: %v", err)
+	}
+	t.Cleanup(pool.Close)
+
+	if err := gatewaydb.ApplyMigrations(ctx, pool); err != nil {
+		t.Fatalf("ApplyMigrations failed: %v", err)
+	}
+	for _, statement := range gatewaydb.RuntimeSeedStatements() {
+		if _, err := conn.Exec(ctx, statement); err != nil {
+			t.Fatalf("conn.Exec seed failed: %v", err)
+		}
+	}
+
+	return service.NewPostgresConsoleService(conn, nil, nil, nil, ""), conn
+}
+
+func mustParseUsageTime(t *testing.T, value string) time.Time {
+	t.Helper()
+
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		t.Fatalf("time.Parse failed: %v", err)
+	}
+	return parsed
+}
+
+func startUsagePostgresContainer(ctx context.Context, t *testing.T) (testcontainers.Container, string) {
+	t.Helper()
+
+	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: testcontainers.ContainerRequest{
+			Image:        "postgres:16-alpine",
+			ExposedPorts: []string{"5432/tcp"},
+			Env: map[string]string{
+				"POSTGRES_DB":       "gateway_test",
+				"POSTGRES_USER":     "postgres",
+				"POSTGRES_PASSWORD": "postgres",
+			},
+			WaitingFor: wait.ForLog("database system is ready to accept connections").
+				WithOccurrence(2).
+				WithStartupTimeout(30 * time.Second),
+		},
+		Started: true,
+	})
+	if err != nil {
+		t.Fatalf("GenericContainer failed: %v", err)
+	}
+
+	host, err := container.Host(ctx)
+	if err != nil {
+		t.Fatalf("container.Host failed: %v", err)
+	}
+
+	port, err := container.MappedPort(ctx, "5432")
+	if err != nil {
+		t.Fatalf("container.MappedPort failed: %v", err)
+	}
+
+	dsn := "postgres://postgres:postgres@" + host + ":" + port.Port() + "/gateway_test?sslmode=disable"
+	return container, dsn
+}
+
+func containsFailureBucket(items []service.UsageFailureBucket, label string, value string) bool {
+	for _, item := range items {
+		if item.Label == label && item.Value == value {
+			return true
+		}
+	}
+	return false
+}
+
+func containsRecentEvent(items []string, fragment string) bool {
+	for _, item := range items {
+		if strings.Contains(item, fragment) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsString(items []string, expected string) bool {
+	for _, item := range items {
+		if item == expected {
+			return true
+		}
+	}
+	return false
+}

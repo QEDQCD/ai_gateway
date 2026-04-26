@@ -33,11 +33,20 @@ create table llm_request_logs (
 create index idx_llm_request_logs_tenant_created_at
   on llm_request_logs (tenant_id, created_at desc);
 
+create index idx_llm_request_logs_tenant_request_started_at
+  on llm_request_logs (tenant_id, request_started_at desc);
+
 create index idx_llm_request_logs_platform_api_key_created_at
   on llm_request_logs (platform_api_key_id, created_at desc);
 
+create index idx_llm_request_logs_platform_api_key_request_started_at
+  on llm_request_logs (platform_api_key_id, request_started_at desc);
+
 create index idx_llm_request_logs_provider_credential_created_at
   on llm_request_logs (provider_credential_id, created_at desc);
+
+create index idx_llm_request_logs_provider_credential_request_started_at
+  on llm_request_logs (provider_credential_id, request_started_at desc);
 
 create table llm_request_events (
   id text primary key,

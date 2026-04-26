@@ -1,94 +1,52 @@
-export function StatCard({ label, value }: { label: string; value: string }) {
-  return (
-    <section className="section-card">
-      <p className="stat-card__label">{label}</p>
-      <p className="stat-card__value">{value}</p>
-    </section>
-  );
-}
-
-function TableShell({
-  title,
-  columns,
-  rows,
-}: {
-  title: string;
-  columns: string[];
-  rows: string[][];
-}) {
-  return (
-    <section className="section-card">
-      <h3>{title}</h3>
-      <table className="data-table">
-        <thead>
-          <tr>
-            {columns.map((column) => (
-              <th key={column}>{column}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row) => (
-            <tr key={row.join("-")}>
-              {row.map((cell) => (
-                <td key={cell}>{cell}</td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </section>
-  );
-}
+import {
+  ErrorSection,
+  LoadingSection,
+  StatCard,
+  TableSection,
+} from "../components/console";
+import { getOverview } from "../lib/console-api";
+import { useRemoteData } from "../lib/use-remote-data";
 
 export function DashboardPage() {
+  const { data, loading, error } = useRemoteData(getOverview);
+
+  if (loading) {
+    return <LoadingSection text="正在加载总览数据..." />;
+  }
+
+  if (error || !data) {
+    return <ErrorSection message={error ?? "总览数据加载失败。"} />;
+  }
+
   return (
     <div className="page-grid">
-      <h2>Overview</h2>
       <div className="stats-grid">
-        <StatCard label="Requests 24h" value="1.28M" />
-        <StatCard label="Success Rate" value="99.42%" />
-        <StatCard label="Quota Usage" value="74%" />
-        <StatCard label="Active API Keys" value="184" />
+        {data.stats.map((item) => (
+          <StatCard key={item.label} label={item.label} value={item.value} />
+        ))}
       </div>
       <div className="two-column-grid">
-        <TableShell
-          title="Route Health"
-          columns={["Requested Model", "Resolved Provider", "Latency", "Status"]}
-          rows={[
-            ["gpt-4o-mini", "OpenAI Primary", "218 ms", "Healthy"],
-            ["text-embedding-3-small", "OpenAI Primary", "64 ms", "Healthy"],
-            ["RAG Query", "RAG Service", "312 ms", "Warning"],
-          ]}
+        <TableSection
+          title="路由健康"
+          columns={["请求模型", "解析供应商", "延迟", "状态"]}
+          rows={data.route_health.map((row) => row.columns)}
         />
-        <TableShell
-          title="Top Models"
-          columns={["Model", "Requests", "Share", "Mode"]}
-          rows={[
-            ["gpt-4o-mini", "612k", "48%", "Chat"],
-            ["text-embedding-3-small", "301k", "24%", "Embedding"],
-            ["RAG Query", "92k", "7%", "Knowledge"],
-          ]}
+        <TableSection
+          title="热门模型"
+          columns={["模型", "请求量", "占比", "模式"]}
+          rows={data.top_models.map((row) => row.columns)}
         />
       </div>
       <div className="two-column-grid">
-        <TableShell
-          title="Recent Alerts"
-          columns={["Time", "Type", "Scope"]}
-          rows={[
-            ["09:42", "Quota warning", "tenant_beta"],
-            ["08:17", "Route fallback", "gpt-4o-mini"],
-            ["07:03", "Latency spike", "rag-service"],
-          ]}
+        <TableSection
+          title="最近告警"
+          columns={["时间", "类型", "范围"]}
+          rows={data.recent_alerts.map((row) => row.columns)}
         />
-        <TableShell
-          title="Audit Snapshot"
-          columns={["Tenant", "Endpoint", "Status"]}
-          rows={[
-            ["tenant_alpha", "/v1/chat/completions", "200"],
-            ["tenant_beta", "/v1/rag/query", "200"],
-            ["tenant_gamma", "/v1/embeddings", "429"],
-          ]}
+        <TableSection
+          title="审计快照"
+          columns={["租户", "端点", "状态"]}
+          rows={data.audit_snapshot.map((row) => row.columns)}
         />
       </div>
     </div>

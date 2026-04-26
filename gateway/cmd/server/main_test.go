@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,6 +17,27 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
+
+func TestNewQuotaGuardPanicsInDatabaseModeWithoutRedisURL(t *testing.T) {
+	t.Parallel()
+
+	assertPanicContains(t, "database mode requires GATEWAY_REDIS_URL", func() {
+		_ = newQuotaGuard(config.Config{
+			DatabaseURL: "postgres://gateway.example/db",
+		})
+	})
+}
+
+func TestNewQuotaGuardPanicsInDatabaseModeWithInvalidRedisURL(t *testing.T) {
+	t.Parallel()
+
+	assertPanicContains(t, "invalid GATEWAY_REDIS_URL", func() {
+		_ = newQuotaGuard(config.Config{
+			DatabaseURL: "postgres://gateway.example/db",
+			RedisURL:    "://not-a-redis-url",
+		})
+	})
+}
 
 func TestNewServerAppAuthenticatesBootstrapRequest(t *testing.T) {
 	t.Parallel()
@@ -130,6 +152,10 @@ func TestNewServerAppDatabaseModeWritesUsageObservability(t *testing.T) {
 	t.Cleanup(func() {
 		_ = container.Terminate(context.Background())
 	})
+	redisContainer, redisURL := startRedisContainer(ctx, t)
+	t.Cleanup(func() {
+		_ = redisContainer.Terminate(context.Background())
+	})
 
 	providerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -139,6 +165,7 @@ func TestNewServerAppDatabaseModeWritesUsageObservability(t *testing.T) {
 
 	app := newServerApp(config.Config{
 		DatabaseURL:             dsn,
+		RedisURL:                redisURL,
 		SeedPlatformAPIKey:      "platform-live-key",
 		SeedProviderBaseURL:     providerServer.URL + "/v1",
 		SeedProviderAPIKey:      "provider-secret-key",
@@ -178,8 +205,8 @@ func TestNewServerAppDatabaseModeWritesUsageObservability(t *testing.T) {
 	`).Scan(&requestLogID, &routeID, &requestCompletedAt); err != nil {
 		t.Fatalf("QueryRow llm_request_logs failed: %v", err)
 	}
-	if routeID != "route:provider_qwen_primary:default" {
-		t.Fatalf("expected route_id %q, got %q", "route:provider_qwen_primary:default", routeID)
+	if routeID != "route:provider_openai_primary:default" {
+		t.Fatalf("expected route_id %q, got %q", "route:provider_openai_primary:default", routeID)
 	}
 
 	var eventType string
@@ -204,8 +231,8 @@ func TestNewServerAppDatabaseModeWritesUsageObservability(t *testing.T) {
 		where bucket_start = date_trunc('hour', $1::timestamptz)
 		  and tenant_id = 'tenant_alpha'
 		  and platform_api_key_id = 'pak_live_console'
-		  and provider_credential_id = 'provider_qwen_primary'
-		  and route_id = 'route:provider_qwen_primary:default'
+		  and provider_credential_id = 'provider_openai_primary'
+		  and route_id = 'route:provider_openai_primary:default'
 		  and request_path = '/v1/chat/completions'
 		  and usage_source = 'upstream'
 		  and usage_status = 'success'
@@ -253,4 +280,48 @@ func startPostgresContainer(ctx context.Context, t *testing.T) (testcontainers.C
 
 	dsn := fmt.Sprintf("postgres://postgres:postgres@%s:%s/gateway_test?sslmode=disable", host, port.Port())
 	return container, dsn
+}
+
+func startRedisContainer(ctx context.Context, t *testing.T) (testcontainers.Container, string) {
+	t.Helper()
+
+	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: testcontainers.ContainerRequest{
+			Image:        "redis:7-alpine",
+			ExposedPorts: []string{"6379/tcp"},
+			WaitingFor: wait.ForLog("Ready to accept connections").
+				WithStartupTimeout(30 * time.Second),
+		},
+		Started: true,
+	})
+	if err != nil {
+		t.Fatalf("GenericContainer redis failed: %v", err)
+	}
+
+	host, err := container.Host(ctx)
+	if err != nil {
+		t.Fatalf("redis container.Host failed: %v", err)
+	}
+	port, err := container.MappedPort(ctx, "6379/tcp")
+	if err != nil {
+		t.Fatalf("redis container.MappedPort failed: %v", err)
+	}
+
+	return container, fmt.Sprintf("redis://%s:%s/0", host, port.Port())
+}
+
+func assertPanicContains(t *testing.T, want string, fn func()) {
+	t.Helper()
+
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			t.Fatalf("expected panic containing %q", want)
+		}
+		if !strings.Contains(fmt.Sprint(recovered), want) {
+			t.Fatalf("expected panic containing %q, got %v", want, recovered)
+		}
+	}()
+
+	fn()
 }

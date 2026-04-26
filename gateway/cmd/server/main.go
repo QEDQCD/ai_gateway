@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -19,6 +20,8 @@ import (
 	"github.com/liwenjian/ai_gateway/gateway/internal/telemetry"
 	"github.com/redis/go-redis/v9"
 )
+
+const usageAggregatorPublishFailureTimeout = 2 * time.Second
 
 func main() {
 	cfg := config.Load()
@@ -78,7 +81,7 @@ func newDatabaseBackedServerApp(cfg config.Config) *fiber.App {
 	usageRecorder := service.NewUsageRecorder(pool)
 	usagePublisher := queue.NewUsagePublisherWithConsumers(
 		newUsagePublisher(cfg),
-		service.NewUsageAggregator(pool),
+		queue.WithPublishFailureTimeout(service.NewUsageAggregator(pool), usageAggregatorPublishFailureTimeout),
 	)
 	chatProxy := service.NewChatProxyService(provider.NewOpenAIClient(http.DefaultClient), usagePublisher, usageRecorder)
 	embeddingProxy := service.NewEmbeddingProxyService(provider.NewOpenAIClient(http.DefaultClient), usagePublisher, usageRecorder)
@@ -153,14 +156,23 @@ func (c staticQuotaClient) Exists(ctx context.Context, key string) (bool, error)
 }
 
 func newQuotaGuard(cfg config.Config) service.QuotaGuard {
-	if strings.TrimSpace(cfg.RedisURL) == "" {
+	redisURL := strings.TrimSpace(cfg.RedisURL)
+	if redisURL == "" {
+		if strings.TrimSpace(cfg.DatabaseURL) != "" {
+			panic("gateway: database mode requires GATEWAY_REDIS_URL")
+		}
 		return service.NewRedisQuotaGuard(newStaticQuotaClient(cfg.BootstrapQuotaExhaustedTenantIDs))
 	}
 
-	client := redis.NewClient(&redis.Options{})
-	if options, err := redis.ParseURL(cfg.RedisURL); err == nil {
-		client = redis.NewClient(options)
+	options, err := redis.ParseURL(redisURL)
+	if err != nil {
+		if strings.TrimSpace(cfg.DatabaseURL) != "" {
+			panic(fmt.Errorf("gateway: invalid GATEWAY_REDIS_URL: %w", err))
+		}
+		return service.NewRedisQuotaGuard(newStaticQuotaClient(cfg.BootstrapQuotaExhaustedTenantIDs))
 	}
+
+	client := redis.NewClient(options)
 	if err := retry(30, 2*time.Second, func() error {
 		return client.Ping(context.Background()).Err()
 	}); err != nil {

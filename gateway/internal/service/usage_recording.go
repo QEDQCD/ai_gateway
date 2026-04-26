@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/liwenjian/ai_gateway/gateway/internal/domain"
 	"github.com/liwenjian/ai_gateway/gateway/internal/queue"
 	"github.com/liwenjian/ai_gateway/gateway/internal/store"
@@ -50,8 +51,15 @@ type UsageRecorder interface {
 type noopUsageRecorder struct{}
 
 type sqlUsageRecorder struct {
-	db store.DBTX
+	db usageRecordStore
 }
+
+type usageRecordStore interface {
+	store.DBTX
+	Begin(ctx context.Context) (pgx.Tx, error)
+}
+
+const usageRecordTimeout = 2 * time.Second
 
 const insertUsageRecordSQL = `
 insert into llm_request_logs (
@@ -114,7 +122,7 @@ func NewNoopUsageRecorder() UsageRecorder {
 	return noopUsageRecorder{}
 }
 
-func NewUsageRecorder(db store.DBTX) UsageRecorder {
+func NewUsageRecorder(db usageRecordStore) UsageRecorder {
 	if db == nil {
 		return noopUsageRecorder{}
 	}
@@ -131,7 +139,27 @@ func (noopUsageRecorder) RecordPublishFailure(context.Context, UsageRecord, erro
 
 func (r sqlUsageRecorder) Record(ctx context.Context, record UsageRecord) error {
 	record.ensureDefaults()
-	_, err := r.db.Exec(ctx, insertUsageRecordSQL,
+	recordCtx, cancel := newUsageRecordContext(ctx)
+	defer cancel()
+
+	eventType, detail := lifecycleEventForRecord(record)
+	tx, err := r.db.Begin(recordCtx)
+	if err != nil {
+		return err
+	}
+	if err := insertUsageRecord(recordCtx, tx, record); err != nil {
+		_ = tx.Rollback(recordCtx)
+		return err
+	}
+	if err := insertUsageLifecycleEvent(recordCtx, tx, record, eventType, detail); err != nil {
+		_ = tx.Rollback(recordCtx)
+		return err
+	}
+	return tx.Commit(recordCtx)
+}
+
+func insertUsageRecord(ctx context.Context, db store.DBTX, record UsageRecord) error {
+	_, err := db.Exec(ctx, insertUsageRecordSQL,
 		record.RequestID,
 		record.TenantID,
 		record.PlatformAPIKeyID,
@@ -153,12 +181,11 @@ func (r sqlUsageRecorder) Record(ctx context.Context, record UsageRecord) error 
 		record.RequestStartedAt,
 		record.RequestCompletedAt,
 	)
-	if err != nil {
-		return err
-	}
+	return err
+}
 
-	eventType, detail := lifecycleEventForRecord(record)
-	_, err = r.db.Exec(ctx, insertUsageLifecycleEventSQL,
+func insertUsageLifecycleEvent(ctx context.Context, db store.DBTX, record UsageRecord, eventType string, detail string) error {
+	_, err := db.Exec(ctx, insertUsageLifecycleEventSQL,
 		uuid.NewString(),
 		record.RequestID,
 		record.TenantID,
@@ -190,6 +217,14 @@ func (r sqlUsageRecorder) RecordPublishFailure(ctx context.Context, record Usage
 		record.RequestCompletedAt,
 	)
 	return err
+}
+
+func newUsageRecordContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	baseCtx := context.Background()
+	if ctx != nil {
+		baseCtx = context.WithoutCancel(ctx)
+	}
+	return context.WithTimeout(baseCtx, usageRecordTimeout)
 }
 
 func NewChatUsageRecord(
