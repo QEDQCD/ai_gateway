@@ -8,3 +8,9 @@ __pycache__/
 coverage/
 *.log
 .env
+docs/superpowers/
+web/.htpasswd
+deploy/compose/.env.local
+deploy/compose/.env
+deploy/redis/users.acl
+.ai_gateway_secrets/

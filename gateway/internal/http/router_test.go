@@ -7,7 +7,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/liwenjian/ai_gateway/gateway/internal/domain"
 	apphttp "github.com/liwenjian/ai_gateway/gateway/internal/http"
@@ -30,6 +32,765 @@ func TestHealthRouteReturnsOK(t *testing.T) {
 	}
 	if string(body) != `{"status":"ok"}` {
 		t.Fatalf("expected body %q, got %q", `{"status":"ok"}`, string(body))
+	}
+}
+
+func TestRootRouteReturnsOK(t *testing.T) {
+	t.Parallel()
+
+	app := apphttp.NewRouter()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("io.ReadAll failed: %v", err)
+	}
+	if string(body) != `{"status":"ok"}` {
+		t.Fatalf("expected body %q, got %q", `{"status":"ok"}`, string(body))
+	}
+}
+
+func TestServiceBasicAuthDoesNotProtectRootOrHealthRoutes(t *testing.T) {
+	t.Parallel()
+
+	app := apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+		ServiceAuthUsername: "test-console-user",
+		ServiceAuthPassword: "test-console-password",
+	})
+
+	rootReq := httptest.NewRequest(http.MethodGet, "/", nil)
+	rootResp, err := app.Test(rootReq)
+	if err != nil {
+		t.Fatalf("app.Test root failed: %v", err)
+	}
+	if rootResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected root status %d, got %d", http.StatusOK, rootResp.StatusCode)
+	}
+
+	healthReq := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	healthResp, err := app.Test(healthReq)
+	if err != nil {
+		t.Fatalf("app.Test health failed: %v", err)
+	}
+	if healthResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected health status %d, got %d", http.StatusOK, healthResp.StatusCode)
+	}
+}
+
+func TestServiceBasicAuthProtectsAdminRoutes(t *testing.T) {
+	t.Parallel()
+
+	app := apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+		ServiceAuthUsername: "test-console-user",
+		ServiceAuthPassword: "test-console-password",
+		ConsoleService:      stubConsoleService{},
+	})
+
+	unauthorizedReq := httptest.NewRequest(http.MethodGet, "/admin/api-keys", nil)
+	unauthorizedResp, err := app.Test(unauthorizedReq)
+	if err != nil {
+		t.Fatalf("app.Test unauthorized failed: %v", err)
+	}
+	if unauthorizedResp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected unauthorized status %d, got %d", http.StatusUnauthorized, unauthorizedResp.StatusCode)
+	}
+
+	authorizedReq := httptest.NewRequest(http.MethodGet, "/admin/api-keys", nil)
+	authorizedReq.SetBasicAuth("test-console-user", "test-console-password")
+	authorizedResp, err := app.Test(authorizedReq)
+	if err != nil {
+		t.Fatalf("app.Test authorized failed: %v", err)
+	}
+	if authorizedResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected authorized status %d, got %d", http.StatusOK, authorizedResp.StatusCode)
+	}
+}
+
+func TestAdminSystemStatusRouteReturnsConsoleData(t *testing.T) {
+	t.Parallel()
+
+	app := apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+		ServiceAuthUsername: "test-console-user",
+		ServiceAuthPassword: "test-console-password",
+		ConsoleService: stubConsoleService{
+			systemStatus: service.ConsoleSystemStatus{
+				ConsoleStage:     "控制台预览版",
+				RunMode:          "数据库模式",
+				GatewayHealth:    "健康",
+				QuotaProtection:  "已启用",
+				ConsoleEntry:     "31873",
+				GatewayAdminAPI:  "32658",
+				InternalServices: []string{"31427"},
+				HiddenModules:    []string{"RAG 控制台", "知识库"},
+			},
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/system/status", nil)
+	req.SetBasicAuth("test-console-user", "test-console-password")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("io.ReadAll failed: %v", err)
+	}
+	expected := `{"console_stage":"控制台预览版","run_mode":"数据库模式","gateway_health":"健康","quota_protection":"已启用","console_entry":"31873","gateway_admin_api":"32658","internal_services":["31427"],"hidden_modules":["RAG 控制台","知识库"]}`
+	if string(body) != expected {
+		t.Fatalf("expected body %q, got %q", expected, string(body))
+	}
+}
+
+func TestAdminAPIKeysRouteReturnsConsoleData(t *testing.T) {
+	t.Parallel()
+
+	app := apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+		ServiceAuthUsername: "test-console-user",
+		ServiceAuthPassword: "test-console-password",
+		ConsoleService: stubConsoleService{
+			apiKeys: service.APIKeysPageData{
+				Items: []service.APIKeyItem{
+					{
+						ID:         "pak_demo",
+						Name:       "prod-gateway",
+						Tenant:     "tenant_alpha",
+						Status:     "active",
+						Scopes:     []string{"chat", "rag"},
+						LastUsedAt: "2026-04-23T09:42:00Z",
+					},
+				},
+				CredentialMode: "平台密钥与上游凭据分离，支持 BYOK 扩展",
+			},
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/api-keys", nil)
+	req.SetBasicAuth("test-console-user", "test-console-password")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("io.ReadAll failed: %v", err)
+	}
+	expected := `{"items":[{"id":"pak_demo","name":"prod-gateway","tenant":"tenant_alpha","status":"active","scopes":["chat","rag"],"last_used_at":"2026-04-23T09:42:00Z"}],"credential_mode":"平台密钥与上游凭据分离，支持 BYOK 扩展"}`
+	if string(body) != expected {
+		t.Fatalf("expected body %q, got %q", expected, string(body))
+	}
+}
+
+func TestAdminCreateAPIKeyRouteReturnsConsoleData(t *testing.T) {
+	t.Parallel()
+
+	app := apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+		ServiceAuthUsername: "test-console-user",
+		ServiceAuthPassword: "test-console-password",
+		ConsoleService: stubConsoleService{
+			apiKeyMutationResult: service.APIKeyMutationResult{
+				Item: service.APIKeyItem{
+					ID:         "pak_new",
+					Name:       "prod-gateway-2",
+					Tenant:     "tenant_alpha",
+					Status:     "启用",
+					Scopes:     []string{"chat", "embeddings"},
+					LastUsedAt: "2026-04-24T12:00:00+08:00",
+				},
+				RawKey: "agw_secret_value",
+			},
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/api-keys", strings.NewReader(`{"tenant_id":"tenant_alpha","name":"prod-gateway-2","scopes":["chat","embeddings"]}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetBasicAuth("test-console-user", "test-console-password")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("io.ReadAll failed: %v", err)
+	}
+	expected := `{"item":{"id":"pak_new","name":"prod-gateway-2","tenant":"tenant_alpha","status":"启用","scopes":["chat","embeddings"],"last_used_at":"2026-04-24T12:00:00+08:00"},"raw_key":"agw_secret_value"}`
+	if string(body) != expected {
+		t.Fatalf("expected body %q, got %q", expected, string(body))
+	}
+}
+
+func TestAdminRotateAPIKeyRouteReturnsConsoleData(t *testing.T) {
+	t.Parallel()
+
+	app := apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+		ServiceAuthUsername: "test-console-user",
+		ServiceAuthPassword: "test-console-password",
+		ConsoleService: stubConsoleService{
+			apiKeyMutationResult: service.APIKeyMutationResult{
+				Item: service.APIKeyItem{
+					ID:         "pak_rotated",
+					Name:       "prod-gateway",
+					Tenant:     "tenant_alpha",
+					Status:     "启用",
+					Scopes:     []string{"chat", "rag", "embeddings"},
+					LastUsedAt: "2026-04-24T12:01:00+08:00",
+				},
+				RawKey: "agw_rotated_secret",
+			},
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/api-keys/pak_live_console/rotate", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetBasicAuth("test-console-user", "test-console-password")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("io.ReadAll failed: %v", err)
+	}
+	expected := `{"item":{"id":"pak_rotated","name":"prod-gateway","tenant":"tenant_alpha","status":"启用","scopes":["chat","rag","embeddings"],"last_used_at":"2026-04-24T12:01:00+08:00"},"raw_key":"agw_rotated_secret"}`
+	if string(body) != expected {
+		t.Fatalf("expected body %q, got %q", expected, string(body))
+	}
+}
+
+func TestAdminDeactivateAPIKeyRouteReturnsConsoleData(t *testing.T) {
+	t.Parallel()
+
+	app := apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+		ServiceAuthUsername: "test-console-user",
+		ServiceAuthPassword: "test-console-password",
+		ConsoleService: stubConsoleService{
+			apiKeyMutationResult: service.APIKeyMutationResult{
+				Item: service.APIKeyItem{
+					ID:         "pak_live_console",
+					Name:       "prod-gateway",
+					Tenant:     "tenant_alpha",
+					Status:     "停用",
+					Scopes:     []string{"chat", "rag", "embeddings"},
+					LastUsedAt: "2026-04-24T12:01:00+08:00",
+				},
+			},
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/api-keys/pak_live_console/deactivate", nil)
+	req.SetBasicAuth("test-console-user", "test-console-password")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("io.ReadAll failed: %v", err)
+	}
+	expected := `{"item":{"id":"pak_live_console","name":"prod-gateway","tenant":"tenant_alpha","status":"停用","scopes":["chat","rag","embeddings"],"last_used_at":"2026-04-24T12:01:00+08:00"}}`
+	if string(body) != expected {
+		t.Fatalf("expected body %q, got %q", expected, string(body))
+	}
+}
+
+func TestAdminDeleteAPIKeyRouteReturnsConsoleData(t *testing.T) {
+	t.Parallel()
+
+	app := apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+		ServiceAuthUsername: "test-console-user",
+		ServiceAuthPassword: "test-console-password",
+		ConsoleService: stubConsoleService{
+			apiKeyMutationResult: service.APIKeyMutationResult{
+				Item: service.APIKeyItem{
+					ID:         "pak_unused",
+					Name:       "unused-key",
+					Tenant:     "tenant_alpha",
+					Status:     "已删除",
+					Scopes:     []string{"chat"},
+					LastUsedAt: "2026-04-24T12:01:00+08:00",
+				},
+			},
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodDelete, "/admin/api-keys/pak_unused", nil)
+	req.SetBasicAuth("test-console-user", "test-console-password")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("io.ReadAll failed: %v", err)
+	}
+	expected := `{"item":{"id":"pak_unused","name":"unused-key","tenant":"tenant_alpha","status":"已删除","scopes":["chat"],"last_used_at":"2026-04-24T12:01:00+08:00"}}`
+	if string(body) != expected {
+		t.Fatalf("expected body %q, got %q", expected, string(body))
+	}
+}
+
+func TestAdminUsageOverviewRouteReturnsConsoleData(t *testing.T) {
+	t.Parallel()
+
+	app := apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+		ServiceAuthUsername: "test-console-user",
+		ServiceAuthPassword: "test-console-password",
+		ConsoleService: stubConsoleService{
+			usageOverview: service.UsageOverviewData{
+				TotalRequests:  12,
+				SuccessRate:    "91.67%",
+				TotalTokens:    "1,280",
+				AverageLatency: "182 ms",
+				EstimatedShare: "8.33%",
+			},
+		},
+	})
+
+	unauthorizedReq := httptest.NewRequest(http.MethodGet, "/admin/usage/overview", nil)
+	unauthorizedResp, err := app.Test(unauthorizedReq)
+	if err != nil {
+		t.Fatalf("app.Test unauthorized failed: %v", err)
+	}
+	if unauthorizedResp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected unauthorized status %d, got %d", http.StatusUnauthorized, unauthorizedResp.StatusCode)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/usage/overview", nil)
+	req.SetBasicAuth("test-console-user", "test-console-password")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("io.ReadAll failed: %v", err)
+	}
+	expected := `{"total_requests":12,"success_rate":"91.67%","total_tokens":"1,280","average_latency":"182 ms","estimated_share":"8.33%"}`
+	if string(body) != expected {
+		t.Fatalf("expected body %q, got %q", expected, string(body))
+	}
+}
+
+func TestAdminUsageTrendsRouteReturnsConsoleData(t *testing.T) {
+	t.Parallel()
+
+	app := apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+		ServiceAuthUsername: "test-console-user",
+		ServiceAuthPassword: "test-console-password",
+		ConsoleService: stubConsoleService{
+			usageTrends: service.UsageTrendData{
+				Requests: []service.UsageTrendPoint{{Label: "04-24 18:00", Value: "12"}},
+				Tokens:   []service.UsageTrendPoint{{Label: "04-24 18:00", Value: "1,280"}},
+				Success:  []service.UsageTrendPoint{{Label: "04-24 18:00", Value: "91.67%"}},
+			},
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/usage/trends", nil)
+	req.SetBasicAuth("test-console-user", "test-console-password")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("io.ReadAll failed: %v", err)
+	}
+	expected := `{"requests":[{"label":"04-24 18:00","value":"12"}],"tokens":[{"label":"04-24 18:00","value":"1,280"}],"success":[{"label":"04-24 18:00","value":"91.67%"}]}`
+	if string(body) != expected {
+		t.Fatalf("expected body %q, got %q", expected, string(body))
+	}
+}
+
+func TestAdminUsageLatencyWallRouteReturnsConsoleData(t *testing.T) {
+	t.Parallel()
+
+	app := apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+		ServiceAuthUsername: "test-console-user",
+		ServiceAuthPassword: "test-console-password",
+		ConsoleService: stubConsoleService{
+			usageLatencyWall: service.UsageLatencyWallData{
+				WindowLabel: "最近 24 小时",
+				Buckets:     []string{"04-24 18:00"},
+				Lanes: []service.UsageLatencyLane{
+					{
+						Model:          "qwen-flash",
+						Provider:       "DashScope 主路由",
+						SuccessRate:    "98.00%",
+						AverageLatency: "182 ms",
+						Cells: []service.UsageLatencyCell{
+							{
+								BucketLabel: "04-24 18:00",
+								Latency:     "148 ms",
+								Status:      "健康",
+								Requests:    "12 次",
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/usage/latency-wall?window=24h", nil)
+	req.SetBasicAuth("test-console-user", "test-console-password")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("io.ReadAll failed: %v", err)
+	}
+	expected := `{"window_label":"最近 24 小时","buckets":["04-24 18:00"],"lanes":[{"model":"qwen-flash","provider":"DashScope 主路由","success_rate":"98.00%","average_latency":"182 ms","cells":[{"bucket_label":"04-24 18:00","latency":"148 ms","status":"健康","requests":"12 次"}]}]}`
+	if string(body) != expected {
+		t.Fatalf("expected body %q, got %q", expected, string(body))
+	}
+}
+
+func TestAdminUsageFailuresRouteReturnsConsoleData(t *testing.T) {
+	t.Parallel()
+
+	app := apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+		ServiceAuthUsername: "test-console-user",
+		ServiceAuthPassword: "test-console-password",
+		ConsoleService: stubConsoleService{
+			usageFailures: service.UsageFailureData{
+				Breakdown:    []service.UsageFailureBucket{{Label: "限流", Value: "2 次"}},
+				RecentEvents: []string{"04-24 18:00 · 限流 · 请求失败（429）"},
+			},
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/usage/failures", nil)
+	req.SetBasicAuth("test-console-user", "test-console-password")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("io.ReadAll failed: %v", err)
+	}
+	expected := `{"breakdown":[{"label":"限流","value":"2 次"}],"recent_events":["04-24 18:00 · 限流 · 请求失败（429）"]}`
+	if string(body) != expected {
+		t.Fatalf("expected body %q, got %q", expected, string(body))
+	}
+}
+
+func TestAdminUsageRequestsRouteReturnsConsoleData(t *testing.T) {
+	t.Parallel()
+
+	app := apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+		ServiceAuthUsername: "test-console-user",
+		ServiceAuthPassword: "test-console-password",
+		ConsoleService: stubConsoleService{
+			usageRequests: service.UsageRequestsPageData{
+				Items: []service.UsageRequestItem{
+					{
+						RequestID:   "llmreq_demo_002",
+						Tenant:      "tenant_demo",
+						Endpoint:    "/v1/embeddings",
+						Model:       "text-embedding-3-small",
+						Status:      "限流",
+						TotalTokens: "16",
+						Latency:     "95 ms",
+						UsageSource: "估算",
+					},
+				},
+				Total:  1,
+				Limit:  20,
+				Offset: 0,
+			},
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/usage/requests", nil)
+	req.SetBasicAuth("test-console-user", "test-console-password")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("io.ReadAll failed: %v", err)
+	}
+	expected := `{"items":[{"request_id":"llmreq_demo_002","tenant":"tenant_demo","endpoint":"/v1/embeddings","model":"text-embedding-3-small","status":"限流","total_tokens":"16","latency":"95 ms","usage_source":"估算"}],"total":1,"limit":20,"offset":0}`
+	if string(body) != expected {
+		t.Fatalf("expected body %q, got %q", expected, string(body))
+	}
+}
+
+func TestAdminUsageOverviewRouteParsesAndForwardsUsageQuery(t *testing.T) {
+	t.Parallel()
+
+	var captured service.UsageQuery
+	app := apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+		ServiceAuthUsername: "test-console-user",
+		ServiceAuthPassword: "test-console-password",
+		ConsoleService: stubConsoleService{
+			usageOverview: service.UsageOverviewData{
+				TotalRequests: 1,
+			},
+			usageQueryRef: &captured,
+		},
+	})
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/admin/usage/overview?from=2026-04-24T10:00:00Z&to=2026-04-24T11:00:00Z&tenant_id=tenant_demo&error_category=rate_limit&limit=10&offset=5",
+		nil,
+	)
+	req.SetBasicAuth("test-console-user", "test-console-password")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	if captured.TenantID != "tenant_demo" {
+		t.Fatalf("expected tenant_id tenant_demo, got %q", captured.TenantID)
+	}
+	if captured.ErrorCategory != "rate_limit" {
+		t.Fatalf("expected error_category rate_limit, got %q", captured.ErrorCategory)
+	}
+	if captured.Limit != 10 {
+		t.Fatalf("expected limit 10, got %d", captured.Limit)
+	}
+	if captured.Offset != 5 {
+		t.Fatalf("expected offset 5, got %d", captured.Offset)
+	}
+	if captured.From.Format(time.RFC3339) != "2026-04-24T10:00:00Z" {
+		t.Fatalf("expected from 2026-04-24T10:00:00Z, got %s", captured.From.Format(time.RFC3339))
+	}
+	if captured.To.Format(time.RFC3339) != "2026-04-24T11:00:00Z" {
+		t.Fatalf("expected to 2026-04-24T11:00:00Z, got %s", captured.To.Format(time.RFC3339))
+	}
+}
+
+func TestAdminUsageOverviewRouteRejectsInvalidTimeRange(t *testing.T) {
+	t.Parallel()
+
+	app := apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+		ServiceAuthUsername: "test-console-user",
+		ServiceAuthPassword: "test-console-password",
+		ConsoleService:      stubConsoleService{},
+	})
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/admin/usage/overview?from=2026-04-24T11:00:00Z&to=2026-04-24T10:00:00Z",
+		nil,
+	)
+	req.SetBasicAuth("test-console-user", "test-console-password")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestAdminUsageTrendsRouteParsesAndForwardsUsageQuery(t *testing.T) {
+	t.Parallel()
+
+	var captured service.UsageQuery
+	app := apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+		ServiceAuthUsername: "test-console-user",
+		ServiceAuthPassword: "test-console-password",
+		ConsoleService: stubConsoleService{
+			usageTrends:   service.UsageTrendData{},
+			usageQueryRef: &captured,
+		},
+	})
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/admin/usage/trends?provider=dashscope&model=qwen-flash&status=failed&usage_source=estimated&limit=12&offset=24",
+		nil,
+	)
+	req.SetBasicAuth("test-console-user", "test-console-password")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	if captured.Provider != "dashscope" {
+		t.Fatalf("expected provider dashscope, got %q", captured.Provider)
+	}
+	if captured.Model != "qwen-flash" {
+		t.Fatalf("expected model qwen-flash, got %q", captured.Model)
+	}
+	if captured.Status != "failed" {
+		t.Fatalf("expected status failed, got %q", captured.Status)
+	}
+	if captured.UsageSource != "estimated" {
+		t.Fatalf("expected usage_source estimated, got %q", captured.UsageSource)
+	}
+	if captured.Limit != 12 {
+		t.Fatalf("expected limit 12, got %d", captured.Limit)
+	}
+	if captured.Offset != 24 {
+		t.Fatalf("expected offset 24, got %d", captured.Offset)
+	}
+}
+
+func TestAdminUsageFailuresRouteParsesAndForwardsUsageQuery(t *testing.T) {
+	t.Parallel()
+
+	var captured service.UsageQuery
+	app := apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+		ServiceAuthUsername: "test-console-user",
+		ServiceAuthPassword: "test-console-password",
+		ConsoleService: stubConsoleService{
+			usageFailures: service.UsageFailureData{},
+			usageQueryRef: &captured,
+		},
+	})
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/admin/usage/failures?route_id=route_demo&request_path=/v1/chat/completions&error_category=上游超时",
+		nil,
+	)
+	req.SetBasicAuth("test-console-user", "test-console-password")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	if captured.RouteID != "route_demo" {
+		t.Fatalf("expected route_id route_demo, got %q", captured.RouteID)
+	}
+	if captured.RequestPath != "/v1/chat/completions" {
+		t.Fatalf("expected request_path /v1/chat/completions, got %q", captured.RequestPath)
+	}
+	if captured.ErrorCategory != "上游超时" {
+		t.Fatalf("expected error_category 上游超时, got %q", captured.ErrorCategory)
+	}
+}
+
+func TestAdminUsageRequestsRouteParsesAndForwardsUsageQuery(t *testing.T) {
+	t.Parallel()
+
+	var captured service.UsageQuery
+	app := apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+		ServiceAuthUsername: "test-console-user",
+		ServiceAuthPassword: "test-console-password",
+		ConsoleService: stubConsoleService{
+			usageRequests: service.UsageRequestsPageData{},
+			usageQueryRef: &captured,
+		},
+	})
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/admin/usage/requests?tenant_id=tenant_demo&platform_api_key_id=pak_demo&from=2026-04-24T10:00:00Z&to=2026-04-24T11:00:00Z&limit=30&offset=60",
+		nil,
+	)
+	req.SetBasicAuth("test-console-user", "test-console-password")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	if captured.TenantID != "tenant_demo" {
+		t.Fatalf("expected tenant_id tenant_demo, got %q", captured.TenantID)
+	}
+	if captured.PlatformAPIKeyID != "pak_demo" {
+		t.Fatalf("expected platform_api_key_id pak_demo, got %q", captured.PlatformAPIKeyID)
+	}
+	if captured.Limit != 30 {
+		t.Fatalf("expected limit 30, got %d", captured.Limit)
+	}
+	if captured.Offset != 60 {
+		t.Fatalf("expected offset 60, got %d", captured.Offset)
+	}
+	if captured.From.Format(time.RFC3339) != "2026-04-24T10:00:00Z" {
+		t.Fatalf("expected from 2026-04-24T10:00:00Z, got %s", captured.From.Format(time.RFC3339))
+	}
+	if captured.To.Format(time.RFC3339) != "2026-04-24T11:00:00Z" {
+		t.Fatalf("expected to 2026-04-24T11:00:00Z, got %s", captured.To.Format(time.RFC3339))
 	}
 }
 
@@ -160,4 +921,99 @@ func (s *capturingAuthService) Resolve(ctx context.Context, rawKey string, reque
 	s.rawKey = rawKey
 	s.requestedModel = requestedModel
 	return s.requestContext, nil
+}
+
+type stubConsoleService struct {
+	systemStatus         service.ConsoleSystemStatus
+	apiKeys              service.APIKeysPageData
+	apiKeyMutationResult service.APIKeyMutationResult
+	usageOverview        service.UsageOverviewData
+	usageTrends          service.UsageTrendData
+	usageLatencyWall     service.UsageLatencyWallData
+	usageFailures        service.UsageFailureData
+	usageRequests        service.UsageRequestsPageData
+	usageQueryRef        *service.UsageQuery
+}
+
+func (s stubConsoleService) Overview(context.Context) (service.OverviewPageData, error) {
+	return service.OverviewPageData{}, nil
+}
+
+func (s stubConsoleService) SystemStatus(context.Context) (service.ConsoleSystemStatus, error) {
+	return s.systemStatus, nil
+}
+
+func (s stubConsoleService) APIKeys(context.Context) (service.APIKeysPageData, error) {
+	return s.apiKeys, nil
+}
+
+func (s stubConsoleService) CreateAPIKey(context.Context, service.CreateAPIKeyRequest) (service.APIKeyMutationResult, error) {
+	return s.apiKeyMutationResult, nil
+}
+
+func (s stubConsoleService) RotateAPIKey(context.Context, string, service.RotateAPIKeyRequest) (service.APIKeyMutationResult, error) {
+	return s.apiKeyMutationResult, nil
+}
+
+func (s stubConsoleService) DeactivateAPIKey(context.Context, string) (service.APIKeyMutationResult, error) {
+	return s.apiKeyMutationResult, nil
+}
+
+func (s stubConsoleService) DeleteAPIKey(context.Context, string) (service.APIKeyMutationResult, error) {
+	return s.apiKeyMutationResult, nil
+}
+
+func (s stubConsoleService) Routes(context.Context) (service.RoutesPageData, error) {
+	return service.RoutesPageData{}, nil
+}
+
+func (s stubConsoleService) Playground(context.Context) (service.PlaygroundPageData, error) {
+	return service.PlaygroundPageData{}, nil
+}
+
+func (s stubConsoleService) RunPlayground(context.Context, service.PlaygroundRunRequest) (service.PlaygroundRunResponse, error) {
+	return service.PlaygroundRunResponse{}, nil
+}
+
+func (s stubConsoleService) KnowledgeBases(context.Context) (service.KnowledgeBasesPageData, error) {
+	return service.KnowledgeBasesPageData{}, nil
+}
+
+func (s stubConsoleService) Audit(context.Context) (service.AuditPageData, error) {
+	return service.AuditPageData{}, nil
+}
+
+func (s stubConsoleService) UsageOverview(_ context.Context, query service.UsageQuery) (service.UsageOverviewData, error) {
+	if s.usageQueryRef != nil {
+		*s.usageQueryRef = query
+	}
+	return s.usageOverview, nil
+}
+
+func (s stubConsoleService) UsageTrends(_ context.Context, query service.UsageQuery) (service.UsageTrendData, error) {
+	if s.usageQueryRef != nil {
+		*s.usageQueryRef = query
+	}
+	return s.usageTrends, nil
+}
+
+func (s stubConsoleService) UsageLatencyWall(_ context.Context, query service.UsageQuery) (service.UsageLatencyWallData, error) {
+	if s.usageQueryRef != nil {
+		*s.usageQueryRef = query
+	}
+	return s.usageLatencyWall, nil
+}
+
+func (s stubConsoleService) UsageFailures(_ context.Context, query service.UsageQuery) (service.UsageFailureData, error) {
+	if s.usageQueryRef != nil {
+		*s.usageQueryRef = query
+	}
+	return s.usageFailures, nil
+}
+
+func (s stubConsoleService) UsageRequests(_ context.Context, query service.UsageQuery) (service.UsageRequestsPageData, error) {
+	if s.usageQueryRef != nil {
+		*s.usageQueryRef = query
+	}
+	return s.usageRequests, nil
 }

@@ -1,34 +1,111 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: "${POSTGRES_DB:-ai_gateway}"
+      POSTGRES_USER: "${POSTGRES_USER:-example-db-user}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-change-me-db-password}"
+    ports:
+      - "32143:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
+    ports:
+      - "31879:6379"
+    volumes:
+      - ../../deploy/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+      - ${REDIS_ACL_FILE:-/root/liwenjian/.ai_gateway_secrets/redis.users.acl}:/usr/local/etc/redis/users.acl:ro
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: "${RABBITMQ_DEFAULT_USER:-example-mq-user}"
+      RABBITMQ_DEFAULT_PASS: "${RABBITMQ_DEFAULT_PASS:-change-me-mq-password}"
+      RABBITMQ_DEFAULT_VHOST: "${RABBITMQ_DEFAULT_VHOST:-ai_gateway}"
+    ports:
+      - "32361:5672"
+      - "32704:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+
+  model-service:
+    build:
+      context: ../..
+      dockerfile: model-service/Dockerfile
+    restart: unless-stopped
+
   rag-service:
     build:
       context: ../..
       dockerfile: rag-service/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - postgres
+    environment:
+      RAG_DATABASE_URL: "postgres://${POSTGRES_USER:-example-db-user}:${POSTGRES_PASSWORD:-change-me-db-password}@postgres:5432/${POSTGRES_DB:-ai_gateway}"
+      RAG_SERVICE_BASIC_AUTH_USERNAME: "${RAG_SERVICE_BASIC_AUTH_USERNAME:-example-rag-user}"
+      RAG_SERVICE_BASIC_AUTH_PASSWORD: "${RAG_SERVICE_BASIC_AUTH_PASSWORD:-change-me-rag-password}"
+      RAG_LLM_BASE_URL: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+      RAG_LLM_API_KEY_FILE: "/run/secrets/dashscope_api_key"
+      RAG_LLM_CHAT_MODEL: "qwen-flash"
+      RAG_LLM_EMBEDDING_MODEL: "text-embedding-v4"
     ports:
-      - "8000:8000"
+      - "31427:8000"
+    volumes:
+      - ${AI_GATEWAY_SECRET_DIR:-/root/liwenjian/.ai_gateway_secrets}/dashscope_api_key:/run/secrets/dashscope_api_key:ro
 
   gateway:
     build:
       context: ../..
       dockerfile: gateway/Dockerfile
+    restart: unless-stopped
     depends_on:
+      - postgres
+      - redis
+      - rabbitmq
       - rag-service
+      - model-service
     environment:
       GATEWAY_LISTEN_ADDR: ":8080"
+      GATEWAY_DATABASE_URL: "postgres://${POSTGRES_USER:-example-db-user}:${POSTGRES_PASSWORD:-change-me-db-password}@postgres:5432/${POSTGRES_DB:-ai_gateway}?sslmode=disable"
+      GATEWAY_REDIS_URL: "redis://${REDIS_USERNAME:-example-cache-user}:${REDIS_PASSWORD:-change-me-cache-password}@redis:6379/0"
+      GATEWAY_RABBITMQ_URL: "amqp://${RABBITMQ_DEFAULT_USER:-example-mq-user}:${RABBITMQ_DEFAULT_PASS:-change-me-mq-password}@rabbitmq:5672/${RABBITMQ_DEFAULT_VHOST:-ai_gateway}"
       GATEWAY_RAG_SERVICE_BASE_URL: "http://rag-service:8000"
-      GATEWAY_BOOTSTRAP_PLATFORM_API_KEY: "platform-live-key"
-      GATEWAY_BOOTSTRAP_PROVIDER: "openai"
-      GATEWAY_BOOTSTRAP_PROVIDER_DISPLAY_NAME: "OpenAI Primary"
-      GATEWAY_BOOTSTRAP_PROVIDER_BASE_URL: "https://api.openai.com/v1"
-      GATEWAY_BOOTSTRAP_PROVIDER_API_KEY: "dummy-provider-key"
-      GATEWAY_BOOTSTRAP_SUPPORTED_MODELS: "gpt-4o-mini,text-embedding-3-small"
+      GATEWAY_RAG_SERVICE_USERNAME: "${RAG_SERVICE_BASIC_AUTH_USERNAME:-example-rag-user}"
+      GATEWAY_RAG_SERVICE_PASSWORD: "${RAG_SERVICE_BASIC_AUTH_PASSWORD:-change-me-rag-password}"
+      GATEWAY_SERVICE_AUTH_USERNAME: "${GATEWAY_SERVICE_AUTH_USERNAME:-example-console-user}"
+      GATEWAY_SERVICE_AUTH_PASSWORD: "${GATEWAY_SERVICE_AUTH_PASSWORD:-change-me-console-password}"
+      GATEWAY_SEED_PLATFORM_API_KEY_FILE: "/run/secrets/gateway_seed_platform_api_key"
+      GATEWAY_SEED_PROVIDER: "dashscope"
+      GATEWAY_SEED_PROVIDER_DISPLAY_NAME: "DashScope Primary"
+      GATEWAY_SEED_PROVIDER_BASE_URL: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+      GATEWAY_SEED_PROVIDER_API_KEY_FILE: "/run/secrets/dashscope_api_key"
+      GATEWAY_PROVIDER_SECRET_KEY_FILE: "/run/secrets/provider_master_key"
     ports:
-      - "8080:8080"
+      - "32658:8080"
+    volumes:
+      - ${AI_GATEWAY_SECRET_DIR:-/root/liwenjian/.ai_gateway_secrets}/gateway_seed_platform_api_key:/run/secrets/gateway_seed_platform_api_key:ro
+      - ${AI_GATEWAY_SECRET_DIR:-/root/liwenjian/.ai_gateway_secrets}/dashscope_api_key:/run/secrets/dashscope_api_key:ro
+      - ${AI_GATEWAY_SECRET_DIR:-/root/liwenjian/.ai_gateway_secrets}/provider_master_key:/run/secrets/provider_master_key:ro
 
   web:
     build:
       context: ../..
       dockerfile: web/Dockerfile
+    restart: unless-stopped
     depends_on:
       - gateway
+    volumes:
+      - ${WEB_HTPASSWD_FILE:-/root/liwenjian/.ai_gateway_secrets/web_console.htpasswd}:/run/secrets/web_console.htpasswd:ro
     ports:
-      - "3000:8080"
+      - "31873:8080"
+
+volumes:
+  postgres_data:
+  rabbitmq_data:
