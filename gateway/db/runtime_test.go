@@ -190,6 +190,134 @@ func TestSeedDemoDataAlignsProviderCredentialAndRouteSemantics(t *testing.T) {
 	}
 }
 
+func TestSeedDemoDataReseedingProviderUpdatesRouteIDs(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	container, dsn := startPostgresContainer(ctx, t)
+	t.Cleanup(func() {
+		_ = container.Terminate(context.Background())
+	})
+
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("pgx.Connect failed: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = conn.Close(context.Background())
+	})
+
+	for _, migration := range readMigrations(t) {
+		if _, err := conn.Exec(ctx, migration); err != nil {
+			t.Fatalf("conn.Exec migration failed: %v", err)
+		}
+	}
+
+	codec, err := secret.NewCodec("0123456789abcdef0123456789abcdef")
+	if err != nil {
+		t.Fatalf("secret.NewCodec failed: %v", err)
+	}
+
+	firstCfg := SeedConfig{
+		PlatformAPIKey:      "platform-live-key",
+		ProviderBaseURL:     "https://api.openai.example/v1",
+		ProviderAPIKey:      "seed-provider-key",
+		Provider:            "openai",
+		ProviderDisplayName: "OpenAI Primary",
+		SecretCodec:         codec,
+	}
+	if err := SeedDemoData(ctx, conn, firstCfg); err != nil {
+		t.Fatalf("first SeedDemoData failed: %v", err)
+	}
+
+	secondCfg := SeedConfig{
+		PlatformAPIKey:      "platform-live-key",
+		ProviderBaseURL:     "https://api.open'ai.example/v1",
+		ProviderAPIKey:      "seed-provider-key-2",
+		Provider:            "open'ai",
+		ProviderDisplayName: "OpenAI O'Hare",
+		SecretCodec:         codec,
+	}
+	if err := SeedDemoData(ctx, conn, secondCfg); err != nil {
+		t.Fatalf("second SeedDemoData failed: %v", err)
+	}
+
+	wantCredentialID := seedProviderCredentialID(secondCfg.Provider)
+	wantChatRouteID := service.RouteIDForCredential(wantCredentialID, []string{"gpt-4o-mini", "text-embedding-3-small"}, "gpt-4o-mini")
+	wantEmbeddingRouteID := service.RouteIDForCredential(wantCredentialID, []string{"gpt-4o-mini", "text-embedding-3-small"}, "text-embedding-3-small")
+
+	var provider string
+	var displayName string
+	if err := conn.QueryRow(ctx, `
+		select provider, display_name
+		from provider_credentials
+		where id = $1
+	`, wantCredentialID).Scan(&provider, &displayName); err != nil {
+		t.Fatalf("QueryRow provider_credentials failed: %v", err)
+	}
+	if provider != secondCfg.Provider {
+		t.Fatalf("expected provider %q, got %q", secondCfg.Provider, provider)
+	}
+	if displayName != secondCfg.ProviderDisplayName {
+		t.Fatalf("expected display_name %q, got %q", secondCfg.ProviderDisplayName, displayName)
+	}
+
+	rows, err := conn.Query(ctx, `
+		select id, requested_model, resolved_provider, provider_credential_id
+		from route_catalog
+		where requested_model in ('gpt-4o-mini', 'text-embedding-3-small')
+		order by requested_model
+	`)
+	if err != nil {
+		t.Fatalf("Query route_catalog failed: %v", err)
+	}
+	defer rows.Close()
+
+	gotRoutes := map[string]struct {
+		id                   string
+		resolvedProvider     string
+		providerCredentialID string
+	}{}
+	for rows.Next() {
+		var id string
+		var requestedModel string
+		var resolvedProvider string
+		var providerCredentialID string
+		if err := rows.Scan(&id, &requestedModel, &resolvedProvider, &providerCredentialID); err != nil {
+			t.Fatalf("rows.Scan failed: %v", err)
+		}
+		gotRoutes[requestedModel] = struct {
+			id                   string
+			resolvedProvider     string
+			providerCredentialID string
+		}{
+			id:                   id,
+			resolvedProvider:     resolvedProvider,
+			providerCredentialID: providerCredentialID,
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows.Err failed: %v", err)
+	}
+
+	if gotRoutes["gpt-4o-mini"].id != wantChatRouteID {
+		t.Fatalf("expected chat route_id %q, got %q", wantChatRouteID, gotRoutes["gpt-4o-mini"].id)
+	}
+	if gotRoutes["text-embedding-3-small"].id != wantEmbeddingRouteID {
+		t.Fatalf("expected embedding route_id %q, got %q", wantEmbeddingRouteID, gotRoutes["text-embedding-3-small"].id)
+	}
+	for _, requestedModel := range []string{"gpt-4o-mini", "text-embedding-3-small"} {
+		if gotRoutes[requestedModel].providerCredentialID != wantCredentialID {
+			t.Fatalf("expected %s provider_credential_id %q, got %q", requestedModel, wantCredentialID, gotRoutes[requestedModel].providerCredentialID)
+		}
+		if gotRoutes[requestedModel].resolvedProvider != secondCfg.ProviderDisplayName {
+			t.Fatalf("expected %s resolved_provider %q, got %q", requestedModel, secondCfg.ProviderDisplayName, gotRoutes[requestedModel].resolvedProvider)
+		}
+	}
+}
+
 func TestRuntimeMigrationsCreateUsageObservabilityTablesWithDemoData(t *testing.T) {
 	t.Parallel()
 

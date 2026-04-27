@@ -135,6 +135,7 @@ func SeedDemoData(ctx context.Context, db seedDB, cfg SeedConfig) error {
 	chatRouteID := service.RouteIDForCredential(providerCredentialID, supportedModels, chatModel)
 	embeddingRouteID := service.RouteIDForCredential(providerCredentialID, supportedModels, embeddingModel)
 	ragRouteID := service.RouteIDForCredential("provider_rag_service", []string{"rag-query"}, "rag-query")
+	providerName := escapeLiteral(cfg.Provider)
 	providerDisplayName := escapeLiteral(cfg.ProviderDisplayName)
 	providerSecret, err := encryptSeedSecret(cfg.SecretCodec, cfg.ProviderAPIKey)
 	if err != nil {
@@ -173,7 +174,7 @@ func SeedDemoData(ctx context.Context, db seedDB, cfg SeedConfig) error {
 			encrypted_secret = excluded.encrypted_secret,
 			status = excluded.status,
 			supported_models = excluded.supported_models,
-			base_url = excluded.base_url;`, providerCredentialID, cfg.Provider, providerDisplayName, escapeLiteral(providerSecret), joinArrayLiteral(supportedModels), escapeLiteral(cfg.ProviderBaseURL), escapeLiteral(ragSecret)),
+			base_url = excluded.base_url;`, providerCredentialID, providerName, providerDisplayName, escapeLiteral(providerSecret), joinArrayLiteral(supportedModels), escapeLiteral(cfg.ProviderBaseURL), escapeLiteral(ragSecret)),
 		`insert into knowledge_bases (id, tenant_id, name, status, document_count, chunk_count, updated_at) values
 			('kb_product_docs', 'tenant_alpha', '产品文档库', 'ready', 84, 8400, now() - interval '12 minutes'),
 			('kb_support_archive', 'tenant_beta', '支持工单库', 'indexing', 62, 4000, now() - interval '28 minutes')
@@ -201,6 +202,7 @@ func SeedDemoData(ctx context.Context, db seedDB, cfg SeedConfig) error {
 			('%s', '%s', '%s', '%s', '/v1/embeddings', 64, 'healthy', '向量', now() - interval '3 minutes'),
 			('%s', 'rag-query', '知识库检索服务', 'provider_rag_service', '/v1/rag/query', 312, 'warning', '知识库', now() - interval '5 minutes')
 		on conflict (requested_model) do update set
+			id = excluded.id,
 			resolved_provider = excluded.resolved_provider,
 			provider_credential_id = excluded.provider_credential_id,
 			endpoint = excluded.endpoint,
