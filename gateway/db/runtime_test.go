@@ -191,7 +191,7 @@ func TestSeedDemoDataAlignsProviderCredentialAndRouteSemantics(t *testing.T) {
 	}
 }
 
-func TestSeedDemoDataReseedingProviderUpdatesRouteIDs(t *testing.T) {
+func TestSeedDemoDataReseedingProviderPreservesRouteIDs(t *testing.T) {
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -233,6 +233,23 @@ func TestSeedDemoDataReseedingProviderUpdatesRouteIDs(t *testing.T) {
 		t.Fatalf("first SeedDemoData failed: %v", err)
 	}
 
+	var initialChatRouteID string
+	var initialEmbeddingRouteID string
+	if err := conn.QueryRow(ctx, `
+		select id
+		from route_catalog
+		where requested_model = 'gpt-4o-mini'
+	`).Scan(&initialChatRouteID); err != nil {
+		t.Fatalf("QueryRow initial chat route failed: %v", err)
+	}
+	if err := conn.QueryRow(ctx, `
+		select id
+		from route_catalog
+		where requested_model = 'text-embedding-3-small'
+	`).Scan(&initialEmbeddingRouteID); err != nil {
+		t.Fatalf("QueryRow initial embedding route failed: %v", err)
+	}
+
 	secondCfg := SeedConfig{
 		PlatformAPIKey:      "platform-live-key",
 		ProviderBaseURL:     "https://api.open'ai.example/v1",
@@ -246,8 +263,6 @@ func TestSeedDemoDataReseedingProviderUpdatesRouteIDs(t *testing.T) {
 	}
 
 	wantCredentialID := seedProviderCredentialID(secondCfg.Provider)
-	wantChatRouteID := service.RouteIDForCredential(wantCredentialID, []string{"gpt-4o-mini", "text-embedding-3-small"}, "gpt-4o-mini")
-	wantEmbeddingRouteID := service.RouteIDForCredential(wantCredentialID, []string{"gpt-4o-mini", "text-embedding-3-small"}, "text-embedding-3-small")
 
 	var provider string
 	var displayName string
@@ -303,11 +318,11 @@ func TestSeedDemoDataReseedingProviderUpdatesRouteIDs(t *testing.T) {
 		t.Fatalf("rows.Err failed: %v", err)
 	}
 
-	if gotRoutes["gpt-4o-mini"].id != wantChatRouteID {
-		t.Fatalf("expected chat route_id %q, got %q", wantChatRouteID, gotRoutes["gpt-4o-mini"].id)
+	if gotRoutes["gpt-4o-mini"].id != initialChatRouteID {
+		t.Fatalf("expected chat route_id to remain %q, got %q", initialChatRouteID, gotRoutes["gpt-4o-mini"].id)
 	}
-	if gotRoutes["text-embedding-3-small"].id != wantEmbeddingRouteID {
-		t.Fatalf("expected embedding route_id %q, got %q", wantEmbeddingRouteID, gotRoutes["text-embedding-3-small"].id)
+	if gotRoutes["text-embedding-3-small"].id != initialEmbeddingRouteID {
+		t.Fatalf("expected embedding route_id to remain %q, got %q", initialEmbeddingRouteID, gotRoutes["text-embedding-3-small"].id)
 	}
 	for _, requestedModel := range []string{"gpt-4o-mini", "text-embedding-3-small"} {
 		if gotRoutes[requestedModel].providerCredentialID != wantCredentialID {
@@ -686,6 +701,12 @@ func TestApplyMigrationsEnforceAuditEventActors(t *testing.T) {
 	`); err != nil {
 		t.Fatalf("insert audit actor failed: %v", err)
 	}
+	if _, err := conn.Exec(ctx, `
+		insert into users (id, email, name, role, status)
+		values ('user_actor_member', 'actor-member@example.com', 'Actor Member', 'member', 'active')
+	`); err != nil {
+		t.Fatalf("insert member audit actor failed: %v", err)
+	}
 
 	if _, err := conn.Exec(ctx, `
 		insert into audit_events (
@@ -725,6 +746,16 @@ func TestApplyMigrationsEnforceAuditEventActors(t *testing.T) {
 		)
 	`); err == nil {
 		t.Fatal("expected system audit event with actor_user_id to fail")
+	}
+
+	if _, err := conn.Exec(ctx, `
+		insert into audit_events (
+			id, actor_type, actor_user_id, event_type, target_type, detail
+		) values (
+			'audit_member_masquerading_admin', 'admin', 'user_actor_member', 'application_approved', 'account_application', 'member should not masquerade as admin'
+		)
+	`); err == nil {
+		t.Fatal("expected audit event actor_type to match users.role")
 	}
 }
 

@@ -65,3 +65,38 @@ create table audit_events (
     )
   )
 );
+
+create function audit_events_actor_role_matches_user()
+returns trigger
+language plpgsql
+as $$
+declare
+  actor_role text;
+begin
+  if new.actor_type = 'system' then
+    return new;
+  end if;
+
+  select role into actor_role
+  from users
+  where id = new.actor_user_id;
+
+  if not found then
+    return new;
+  end if;
+
+  if actor_role <> new.actor_type then
+    raise exception 'audit_events.actor_type must match users.role for actor_user_id %', new.actor_user_id
+      using errcode = '23514';
+  end if;
+
+  return new;
+end;
+$$;
+
+create constraint trigger audit_events_actor_role_matches_user_check
+after insert or update of actor_type, actor_user_id
+on audit_events
+deferrable initially immediate
+for each row
+execute function audit_events_actor_role_matches_user();

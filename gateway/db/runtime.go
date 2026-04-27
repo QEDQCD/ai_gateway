@@ -219,7 +219,6 @@ func SeedDemoData(ctx context.Context, db seedDB, cfg SeedConfig) error {
 			('%s', '%s', '%s', '%s', '/v1/embeddings', 64, 'healthy', '向量', now() - interval '3 minutes'),
 			('%s', 'rag-query', '知识库检索服务', 'provider_rag_service', '/v1/rag/query', 312, 'warning', '知识库', now() - interval '5 minutes')
 		on conflict (requested_model) do update set
-			id = excluded.id,
 			resolved_provider = excluded.resolved_provider,
 			provider_credential_id = excluded.provider_credential_id,
 			endpoint = excluded.endpoint,
