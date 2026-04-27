@@ -8,32 +8,35 @@ import (
 )
 
 type RouterDependencies struct {
-	ServiceAuthUsername string
-	ServiceAuthPassword string
-	AuthService         service.AuthService
-	ChatProxy           service.ChatProxyService
-	EmbeddingProxy      service.EmbeddingProxyService
-	RAGProxy            service.RAGProxyService
-	ConsoleService      service.ConsoleService
+	ServiceAuthUsername  string
+	ServiceAuthPassword  string
+	AuthService          service.AuthService
+	ChatProxy            service.ChatProxyService
+	EmbeddingProxy       service.EmbeddingProxyService
+	RAGProxy             service.RAGProxyService
+	ConsoleService       service.ConsoleService
+	MemberConsoleService service.MemberConsoleService
 }
 
 func NewRouter() *fiber.App {
 	return NewRouterWithDependencies(RouterDependencies{
-		AuthService:    service.NewUnauthorizedAuthService(),
-		ChatProxy:      service.NewUnavailableChatProxyService(),
-		EmbeddingProxy: service.NewUnavailableEmbeddingProxyService(),
-		RAGProxy:       service.NewUnavailableRAGProxyService(),
-		ConsoleService: service.NewUnavailableConsoleService(),
+		AuthService:          service.NewUnauthorizedAuthService(),
+		ChatProxy:            service.NewUnavailableChatProxyService(),
+		EmbeddingProxy:       service.NewUnavailableEmbeddingProxyService(),
+		RAGProxy:             service.NewUnavailableRAGProxyService(),
+		ConsoleService:       service.NewUnavailableConsoleService(),
+		MemberConsoleService: service.NewUnavailableMemberConsoleService(),
 	})
 }
 
 func NewRouterWithAuth(authService service.AuthService) *fiber.App {
 	return NewRouterWithDependencies(RouterDependencies{
-		AuthService:    authService,
-		ChatProxy:      service.NewUnavailableChatProxyService(),
-		EmbeddingProxy: service.NewUnavailableEmbeddingProxyService(),
-		RAGProxy:       service.NewUnavailableRAGProxyService(),
-		ConsoleService: service.NewUnavailableConsoleService(),
+		AuthService:          authService,
+		ChatProxy:            service.NewUnavailableChatProxyService(),
+		EmbeddingProxy:       service.NewUnavailableEmbeddingProxyService(),
+		RAGProxy:             service.NewUnavailableRAGProxyService(),
+		ConsoleService:       service.NewUnavailableConsoleService(),
+		MemberConsoleService: service.NewUnavailableMemberConsoleService(),
 	})
 }
 
@@ -44,11 +47,12 @@ func NewRouterWithServices(
 	ragProxy service.RAGProxyService,
 ) *fiber.App {
 	return NewRouterWithDependencies(RouterDependencies{
-		AuthService:    authService,
-		ChatProxy:      chatProxy,
-		EmbeddingProxy: embeddingProxy,
-		RAGProxy:       ragProxy,
-		ConsoleService: service.NewUnavailableConsoleService(),
+		AuthService:          authService,
+		ChatProxy:            chatProxy,
+		EmbeddingProxy:       embeddingProxy,
+		RAGProxy:             ragProxy,
+		ConsoleService:       service.NewUnavailableConsoleService(),
+		MemberConsoleService: service.NewUnavailableMemberConsoleService(),
 	})
 }
 
@@ -71,6 +75,9 @@ func NewRouterWithDependencies(deps RouterDependencies) *fiber.App {
 	if deps.ConsoleService == nil {
 		deps.ConsoleService = service.NewUnavailableConsoleService()
 	}
+	if deps.MemberConsoleService == nil {
+		deps.MemberConsoleService = service.NewUnavailableMemberConsoleService()
+	}
 
 	admin := app.Group("/admin", middleware.RequireServiceBasicAuth(deps.ServiceAuthUsername, deps.ServiceAuthPassword))
 	admin.Get("/overview", handlers.ConsoleOverview(deps.ConsoleService))
@@ -92,6 +99,22 @@ func NewRouterWithDependencies(deps RouterDependencies) *fiber.App {
 	admin.Get("/usage/latency-wall", handlers.ConsoleUsageLatencyWall(deps.ConsoleService))
 	admin.Get("/usage/failures", handlers.ConsoleUsageFailures(deps.ConsoleService))
 	admin.Get("/usage/requests", handlers.ConsoleUsageRequests(deps.ConsoleService))
+
+	member := app.Group(
+		"/me",
+		middleware.RequireServiceBasicAuth(deps.ServiceAuthUsername, deps.ServiceAuthPassword),
+		middleware.ResolveConsolePrincipal(deps.AuthService),
+		middleware.RequireConsoleRole("member"),
+	)
+	member.Get("/overview", handlers.MemberOverview(deps.MemberConsoleService))
+	member.Get("/api-keys", handlers.MemberAPIKeys(deps.MemberConsoleService))
+	member.Post("/api-keys", handlers.MemberCreateAPIKey(deps.MemberConsoleService))
+	member.Post("/api-keys/:id/rotate", handlers.MemberRotateAPIKey(deps.MemberConsoleService))
+	member.Post("/api-keys/:id/deactivate", handlers.MemberDeactivateAPIKey(deps.MemberConsoleService))
+	member.Get("/usage/overview", handlers.MemberUsageOverview(deps.MemberConsoleService))
+	member.Get("/usage/requests", handlers.MemberUsageRequests(deps.MemberConsoleService))
+	member.Get("/failures", handlers.MemberFailures(deps.MemberConsoleService))
+	member.Get("/audit-events", handlers.MemberAuditEvents(deps.MemberConsoleService))
 
 	v1 := app.Group("/v1", middleware.RequirePlatformAPIKey(deps.AuthService), middleware.RequireResolvedRequestContext())
 	v1.Get("/auth-check", func(c *fiber.Ctx) error {

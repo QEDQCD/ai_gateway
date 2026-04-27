@@ -87,15 +87,17 @@ func newDatabaseBackedServerApp(cfg config.Config) *fiber.App {
 	embeddingProxy := service.NewEmbeddingProxyService(provider.NewOpenAIClient(http.DefaultClient), usagePublisher, usageRecorder)
 	ragProxy := service.NewRAGProxyService(cfg.RAGServiceBaseURL, cfg.RAGServiceUsername, cfg.RAGServicePassword, http.DefaultClient)
 	consoleService := service.NewPostgresConsoleService(pool, authService, chatProxy, ragProxy, cfg.SeedPlatformAPIKey)
+	memberConsoleService := service.NewPostgresMemberConsoleService(pool, service.ConsolePrincipal{})
 
 	return apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
-		ServiceAuthUsername: cfg.ServiceAuthUsername,
-		ServiceAuthPassword: cfg.ServiceAuthPassword,
-		AuthService:         authService,
-		ChatProxy:           chatProxy,
-		EmbeddingProxy:      embeddingProxy,
-		RAGProxy:            ragProxy,
-		ConsoleService:      consoleService,
+		ServiceAuthUsername:  cfg.ServiceAuthUsername,
+		ServiceAuthPassword:  cfg.ServiceAuthPassword,
+		AuthService:          authService,
+		ChatProxy:            chatProxy,
+		EmbeddingProxy:       embeddingProxy,
+		RAGProxy:             ragProxy,
+		ConsoleService:       consoleService,
+		MemberConsoleService: memberConsoleService,
 	})
 }
 

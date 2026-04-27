@@ -531,6 +531,104 @@ func TestAdminUsageOverviewRouteReturnsConsoleData(t *testing.T) {
 	}
 }
 
+func TestMemberOverviewRouteResolvesPrincipalAndReturnsMemberData(t *testing.T) {
+	t.Parallel()
+
+	captured := service.ConsolePrincipal{}
+	app := apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+		ServiceAuthUsername: "test-console-user",
+		ServiceAuthPassword: "test-console-password",
+		AuthService: stubConsoleAuthService{
+			principal: service.ConsolePrincipal{
+				UserID:   "user_member_a",
+				Email:    "member-a@example.com",
+				Role:     "member",
+				TenantID: "tenant_demo",
+			},
+		},
+		MemberConsoleService: stubMemberConsoleService{
+			overview: service.MemberOverviewPageData{
+				TenantID:      "tenant_demo",
+				TenantName:    "Demo Tenant",
+				ActiveAPIKeys: 1,
+			},
+			principalRef: &captured,
+		},
+	})
+
+	missingSubjectReq := httptest.NewRequest(http.MethodGet, "/me/overview", nil)
+	missingSubjectReq.SetBasicAuth("test-console-user", "test-console-password")
+	missingSubjectResp, err := app.Test(missingSubjectReq)
+	if err != nil {
+		t.Fatalf("app.Test missing subject failed: %v", err)
+	}
+	if missingSubjectResp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected missing subject status %d, got %d", http.StatusUnauthorized, missingSubjectResp.StatusCode)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/me/overview", nil)
+	req.SetBasicAuth("test-console-user", "test-console-password")
+	req.Header.Set("X-Console-Subject", "member-a@example.com")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("io.ReadAll failed: %v", err)
+	}
+	expected := `{"tenant_id":"tenant_demo","tenant_name":"Demo Tenant","active_api_keys":1}`
+	if string(body) != expected {
+		t.Fatalf("expected body %q, got %q", expected, string(body))
+	}
+	if captured.UserID != "user_member_a" {
+		t.Fatalf("expected captured principal user_id %q, got %q", "user_member_a", captured.UserID)
+	}
+	if captured.TenantID != "tenant_demo" {
+		t.Fatalf("expected captured principal tenant_id %q, got %q", "tenant_demo", captured.TenantID)
+	}
+}
+
+func TestMemberOverviewRouteRejectsAdminPrincipal(t *testing.T) {
+	t.Parallel()
+
+	app := apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+		ServiceAuthUsername: "test-console-user",
+		ServiceAuthPassword: "test-console-password",
+		AuthService: stubConsoleAuthService{
+			principal: service.ConsolePrincipal{
+				UserID: "user_admin_demo",
+				Email:  "admin@example.com",
+				Role:   "admin",
+			},
+		},
+		MemberConsoleService: stubMemberConsoleService{
+			overview: service.MemberOverviewPageData{
+				TenantID:      "tenant_demo",
+				TenantName:    "Demo Tenant",
+				ActiveAPIKeys: 1,
+			},
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/me/overview", nil)
+	req.SetBasicAuth("test-console-user", "test-console-password")
+	req.Header.Set("X-Console-Subject", "admin@example.com")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", resp.StatusCode)
+	}
+}
+
 func TestAdminUsageTrendsRouteReturnsConsoleData(t *testing.T) {
 	t.Parallel()
 
@@ -1040,20 +1138,102 @@ func (s *capturingAuthService) Resolve(ctx context.Context, rawKey string, reque
 	return s.requestContext, nil
 }
 
+type stubConsoleAuthService struct {
+	principal service.ConsolePrincipal
+	err       error
+}
+
+func (s stubConsoleAuthService) Resolve(context.Context, string, string) (domain.RequestContext, error) {
+	return domain.RequestContext{}, nil
+}
+
+func (s stubConsoleAuthService) ResolvePlatformAPIKey(context.Context, string) (domain.RequestContext, error) {
+	return domain.RequestContext{}, nil
+}
+
+func (s stubConsoleAuthService) ResolveConsolePrincipal(context.Context, string) (service.ConsolePrincipal, error) {
+	return s.principal, s.err
+}
+
 type stubConsoleService struct {
-	systemStatus         service.ConsoleSystemStatus
-	apiKeys              service.APIKeysPageData
-	apiKeyMutationResult service.APIKeyMutationResult
-	applications         service.ApplicationsPageData
-	applicationMutation  service.ApplicationMutationResult
+	systemStatus             service.ConsoleSystemStatus
+	apiKeys                  service.APIKeysPageData
+	apiKeyMutationResult     service.APIKeyMutationResult
+	applications             service.ApplicationsPageData
+	applicationMutation      service.ApplicationMutationResult
 	approveApplicationIDRef  *string
 	approveApplicationReqRef *service.ApproveApplicationRequest
-	usageOverview        service.UsageOverviewData
-	usageTrends          service.UsageTrendData
-	usageLatencyWall     service.UsageLatencyWallData
-	usageFailures        service.UsageFailureData
-	usageRequests        service.UsageRequestsPageData
-	usageQueryRef        *service.UsageQuery
+	usageOverview            service.UsageOverviewData
+	usageTrends              service.UsageTrendData
+	usageLatencyWall         service.UsageLatencyWallData
+	usageFailures            service.UsageFailureData
+	usageRequests            service.UsageRequestsPageData
+	usageQueryRef            *service.UsageQuery
+}
+
+type stubMemberConsoleService struct {
+	overview      service.MemberOverviewPageData
+	apiKeys       service.MemberAPIKeysPageData
+	apiKeyResult  service.APIKeyMutationResult
+	usageOverview service.UsageOverviewData
+	usageRequests service.UsageRequestsPageData
+	failures      service.MemberFailurePageData
+	auditEvents   service.MemberAuditPageData
+	principalRef  *service.ConsolePrincipal
+}
+
+func (s stubMemberConsoleService) capturePrincipal(ctx context.Context) {
+	if s.principalRef == nil {
+		return
+	}
+	if principal, ok := service.ConsolePrincipalFromContext(ctx); ok {
+		*s.principalRef = principal
+	}
+}
+
+func (s stubMemberConsoleService) Overview(ctx context.Context) (service.MemberOverviewPageData, error) {
+	s.capturePrincipal(ctx)
+	return s.overview, nil
+}
+
+func (s stubMemberConsoleService) APIKeys(ctx context.Context) (service.MemberAPIKeysPageData, error) {
+	s.capturePrincipal(ctx)
+	return s.apiKeys, nil
+}
+
+func (s stubMemberConsoleService) CreateAPIKey(ctx context.Context, _ service.CreateAPIKeyRequest) (service.APIKeyMutationResult, error) {
+	s.capturePrincipal(ctx)
+	return s.apiKeyResult, nil
+}
+
+func (s stubMemberConsoleService) RotateAPIKey(ctx context.Context, _ string, _ service.RotateAPIKeyRequest) (service.APIKeyMutationResult, error) {
+	s.capturePrincipal(ctx)
+	return s.apiKeyResult, nil
+}
+
+func (s stubMemberConsoleService) DeactivateAPIKey(ctx context.Context, _ string) (service.APIKeyMutationResult, error) {
+	s.capturePrincipal(ctx)
+	return s.apiKeyResult, nil
+}
+
+func (s stubMemberConsoleService) UsageOverview(ctx context.Context, _ service.UsageQuery) (service.UsageOverviewData, error) {
+	s.capturePrincipal(ctx)
+	return s.usageOverview, nil
+}
+
+func (s stubMemberConsoleService) UsageRequests(ctx context.Context, _ service.UsageQuery) (service.UsageRequestsPageData, error) {
+	s.capturePrincipal(ctx)
+	return s.usageRequests, nil
+}
+
+func (s stubMemberConsoleService) Failures(ctx context.Context, _ service.UsageQuery) (service.MemberFailurePageData, error) {
+	s.capturePrincipal(ctx)
+	return s.failures, nil
+}
+
+func (s stubMemberConsoleService) AuditEvents(ctx context.Context) (service.MemberAuditPageData, error) {
+	s.capturePrincipal(ctx)
+	return s.auditEvents, nil
 }
 
 func (s stubConsoleService) Overview(context.Context) (service.OverviewPageData, error) {

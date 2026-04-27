@@ -247,6 +247,53 @@ func TestNewServerAppDatabaseModeWritesUsageObservability(t *testing.T) {
 	}
 }
 
+func TestNewServerAppDatabaseModeWiresMemberOverview(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	container, dsn := startPostgresContainer(ctx, t)
+	t.Cleanup(func() {
+		_ = container.Terminate(context.Background())
+	})
+	redisContainer, redisURL := startRedisContainer(ctx, t)
+	t.Cleanup(func() {
+		_ = redisContainer.Terminate(context.Background())
+	})
+
+	app := newServerApp(config.Config{
+		DatabaseURL:             dsn,
+		RedisURL:                redisURL,
+		SeedPlatformAPIKey:      "platform-live-key",
+		SeedProviderBaseURL:     "https://api.openai.example/v1",
+		SeedProviderAPIKey:      "provider-secret-key",
+		SeedProvider:            "openai",
+		SeedProviderDisplayName: "OpenAI Primary",
+		ProviderSecretKey:       "0123456789abcdef0123456789abcdef",
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/me/overview", nil)
+	req.Header.Set("X-Console-Subject", "member-alpha-a@example.com")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("io.ReadAll failed: %v", err)
+	}
+	expected := `{"tenant_id":"tenant_alpha","tenant_name":"Alpha 租户","active_api_keys":1}`
+	if string(body) != expected {
+		t.Fatalf("expected body %q, got %q", expected, string(body))
+	}
+}
+
 func startPostgresContainer(ctx context.Context, t *testing.T) (testcontainers.Container, string) {
 	t.Helper()
 
