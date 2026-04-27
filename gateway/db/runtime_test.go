@@ -488,6 +488,36 @@ func TestApplyMigrationsCreatesTenantGovernanceTables(t *testing.T) {
 	}
 }
 
+func TestSeedDemoDataPopulatesTenantGovernanceDemoData(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	conn := openTestPostgres(t, ctx)
+	applyMigrations(t, ctx, conn)
+
+	codec, err := secret.NewCodec("0123456789abcdef0123456789abcdef")
+	if err != nil {
+		t.Fatalf("secret.NewCodec failed: %v", err)
+	}
+
+	cfg := SeedConfig{
+		PlatformAPIKey:      "platform-live-key",
+		ProviderBaseURL:     "https://api.openai.example/v1",
+		ProviderAPIKey:      "seed-provider-key",
+		Provider:            "openai",
+		ProviderDisplayName: "OpenAI Primary",
+		SecretCodec:         codec,
+	}
+	if err := SeedDemoData(ctx, conn, cfg); err != nil {
+		t.Fatalf("SeedDemoData failed: %v", err)
+	}
+
+	assertGovernanceSeedCounts(t, ctx, conn)
+	assertApprovedApplicationAuditEvent(t, ctx, conn, "tenant_alpha", "app_alpha_approved", "user_admin_alpha", "seed approve")
+}
+
 func TestRuntimeSeedStatementsPopulateApprovalAndMembershipData(t *testing.T) {
 	t.Parallel()
 
@@ -500,6 +530,7 @@ func TestRuntimeSeedStatementsPopulateApprovalAndMembershipData(t *testing.T) {
 	assertTableCount(t, ctx, conn, "users", 3)
 	assertTableCount(t, ctx, conn, "tenant_memberships", 2)
 	assertTableCount(t, ctx, conn, "audit_events", 3)
+	assertApprovedApplicationAuditEvent(t, ctx, conn, "tenant_demo", "app_demo_approved", "user_admin_demo", "seed approve")
 }
 
 func TestRuntimeSeedRouteIDsAlignWithObservabilityRows(t *testing.T) {
@@ -710,6 +741,64 @@ func assertTableCount(t *testing.T, ctx context.Context, conn *pgx.Conn, tableNa
 	}
 	if got != want {
 		t.Fatalf("expected %s count %d, got %d", tableName, want, got)
+	}
+}
+
+func assertGovernanceSeedCounts(t *testing.T, ctx context.Context, conn *pgx.Conn) {
+	t.Helper()
+
+	assertTableCount(t, ctx, conn, "account_applications", 2)
+	assertTableCount(t, ctx, conn, "users", 3)
+	assertTableCount(t, ctx, conn, "tenant_memberships", 2)
+	assertTableCount(t, ctx, conn, "audit_events", 3)
+}
+
+func assertApprovedApplicationAuditEvent(t *testing.T, ctx context.Context, conn *pgx.Conn, wantTenantID string, wantApplicationID string, wantReviewerID string, wantDetail string) {
+	t.Helper()
+
+	var tenantID string
+	var targetID string
+	var actorUserID string
+	var detail string
+	var status string
+	var reviewerID string
+	var reviewComment string
+	if err := conn.QueryRow(ctx, `
+		select
+			coalesce(e.tenant_id, ''),
+			e.target_id,
+			e.actor_user_id,
+			e.detail,
+			coalesce(a.status, ''),
+			coalesce(a.reviewer_id, ''),
+			coalesce(a.review_comment, '')
+		from audit_events e
+		left join account_applications a on a.id = e.target_id
+		where e.event_type = 'application_approved'
+	`).Scan(&tenantID, &targetID, &actorUserID, &detail, &status, &reviewerID, &reviewComment); err != nil {
+		t.Fatalf("QueryRow approved audit event failed: %v", err)
+	}
+
+	if tenantID != wantTenantID {
+		t.Fatalf("expected approved audit event tenant_id %q, got %q", wantTenantID, tenantID)
+	}
+	if targetID != wantApplicationID {
+		t.Fatalf("expected approved audit event target_id %q, got %q", wantApplicationID, targetID)
+	}
+	if actorUserID != wantReviewerID {
+		t.Fatalf("expected approved audit event actor_user_id %q, got %q", wantReviewerID, actorUserID)
+	}
+	if detail != wantDetail {
+		t.Fatalf("expected approved audit event detail %q, got %q", wantDetail, detail)
+	}
+	if status != "approved" {
+		t.Fatalf("expected approved application status %q, got %q", "approved", status)
+	}
+	if reviewerID != wantReviewerID {
+		t.Fatalf("expected approved application reviewer_id %q, got %q", wantReviewerID, reviewerID)
+	}
+	if reviewComment != wantDetail {
+		t.Fatalf("expected approved application review_comment %q, got %q", wantDetail, reviewComment)
 	}
 }
 

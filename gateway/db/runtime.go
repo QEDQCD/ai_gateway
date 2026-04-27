@@ -29,6 +29,26 @@ type SeedConfig struct {
 	SecretCodec         *secret.Codec
 }
 
+type governanceSeedConfig struct {
+	TenantID                 string
+	AdminUserID              string
+	AdminEmail               string
+	AdminName                string
+	MemberAUserID            string
+	MemberAEmail             string
+	MemberAName              string
+	MemberBUserID            string
+	MemberBEmail             string
+	MemberBName              string
+	PlatformAPIKeyID         string
+	ApprovedApplicationID    string
+	ApprovedApplicationEmail string
+	ApprovedApplicationName  string
+	RejectedApplicationID    string
+	RejectedApplicationEmail string
+	RejectedApplicationName  string
+}
+
 type seedDB interface {
 	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
 	QueryRow(context.Context, string, ...any) pgx.Row
@@ -216,6 +236,25 @@ func SeedDemoData(ctx context.Context, db seedDB, cfg SeedConfig) error {
 			('knowledge_flow_title', '查询先进入网关，再路由到 RAG 服务拼装检索上下文。')
 		on conflict (key) do update set value = excluded.value, updated_at = now();`,
 	}
+	statements = append(statements, governanceSeedStatements(governanceSeedConfig{
+		TenantID:                 "tenant_alpha",
+		AdminUserID:              "user_admin_alpha",
+		AdminEmail:               "admin-alpha@example.com",
+		AdminName:                "平台管理员 Alpha",
+		MemberAUserID:            "user_member_alpha_a",
+		MemberAEmail:             "member-alpha-a@example.com",
+		MemberAName:              "租户用户 Alpha A",
+		MemberBUserID:            "user_member_alpha_b",
+		MemberBEmail:             "member-alpha-b@example.com",
+		MemberBName:              "租户用户 Alpha B",
+		PlatformAPIKeyID:         "pak_live_console",
+		ApprovedApplicationID:    "app_alpha_approved",
+		ApprovedApplicationEmail: "approved-alpha@example.com",
+		ApprovedApplicationName:  "已审批用户 Alpha",
+		RejectedApplicationID:    "app_alpha_rejected",
+		RejectedApplicationEmail: "rejected-alpha@example.com",
+		RejectedApplicationName:  "被拒绝用户 Alpha",
+	})...)
 
 	for _, statement := range statements {
 		if _, err := db.Exec(ctx, statement); err != nil {
@@ -302,7 +341,7 @@ func RuntimeSeedStatements() []string {
 	chatRouteID := service.RouteIDForCredential("provider_openai_demo", supportedModels, "gpt-4o-mini")
 	embeddingRouteID := service.RouteIDForCredential("provider_openai_demo", supportedModels, "text-embedding-3-small")
 
-	return []string{
+	statements := []string{
 		`
 		insert into tenants (id, name, status, created_at)
 		values ('tenant_demo', 'Demo Tenant', 'active', timestamptz '2026-04-24T09:45:00Z')
@@ -311,45 +350,6 @@ func RuntimeSeedStatements() []string {
 		`
 		insert into platform_api_keys (id, tenant_id, name, key_hash, status, created_at)
 		values ('pak_demo', 'tenant_demo', 'demo key', 'sha256:demo', 'active', timestamptz '2026-04-24T09:46:00Z')
-		on conflict (id) do nothing;
-		`,
-		`
-		insert into users (id, email, name, role, status)
-		values
-			('user_admin_demo', 'admin@example.com', '平台管理员', 'admin', 'active'),
-			('user_member_a', 'member-a@example.com', '租户用户A', 'member', 'active'),
-			('user_member_b', 'member-b@example.com', '租户用户B', 'member', 'active')
-		on conflict (id) do nothing;
-		`,
-		`
-		insert into tenant_memberships (id, tenant_id, user_id, role, status)
-		values
-			('tm_demo_001', 'tenant_demo', 'user_member_a', 'member', 'active'),
-			('tm_demo_002', 'tenant_demo', 'user_member_b', 'member', 'active')
-		on conflict (tenant_id, user_id) do nothing;
-		`,
-		`
-		insert into account_applications (id, email, name, company_name, use_case, status)
-		values
-			('app_demo_pending', 'pending@example.com', '待审批用户', 'Demo Co', '内部知识问答', 'pending'),
-			('app_demo_rejected', 'rejected@example.com', '被拒绝用户', 'Demo Co', '压测脚本', 'rejected')
-		on conflict (id) do nothing;
-		`,
-		`
-		insert into audit_events (
-			id,
-			actor_type,
-			actor_user_id,
-			tenant_id,
-			event_type,
-			target_type,
-			target_id,
-			detail
-		)
-		values
-			('audit_evt_001', 'admin', 'user_admin_demo', 'tenant_demo', 'application_approved', 'account_application', 'app_demo_seeded', 'seed approve'),
-			('audit_evt_002', 'member', 'user_member_a', 'tenant_demo', 'api_key_created', 'platform_api_key', 'pak_demo', 'seed key create'),
-			('audit_evt_003', 'system', '', 'tenant_demo', 'quota_warning', 'tenant', 'tenant_demo', 'seed quota warning')
 		on conflict (id) do nothing;
 		`,
 		`
@@ -568,5 +568,116 @@ func RuntimeSeedStatements() []string {
 			)
 		on conflict do nothing;
 		`,
+	}
+	statements = append(statements, governanceSeedStatements(governanceSeedConfig{
+		TenantID:                 "tenant_demo",
+		AdminUserID:              "user_admin_demo",
+		AdminEmail:               "admin@example.com",
+		AdminName:                "平台管理员",
+		MemberAUserID:            "user_member_a",
+		MemberAEmail:             "member-a@example.com",
+		MemberAName:              "租户用户A",
+		MemberBUserID:            "user_member_b",
+		MemberBEmail:             "member-b@example.com",
+		MemberBName:              "租户用户B",
+		PlatformAPIKeyID:         "pak_demo",
+		ApprovedApplicationID:    "app_demo_approved",
+		ApprovedApplicationEmail: "approved@example.com",
+		ApprovedApplicationName:  "已审批用户",
+		RejectedApplicationID:    "app_demo_rejected",
+		RejectedApplicationEmail: "rejected@example.com",
+		RejectedApplicationName:  "被拒绝用户",
+	})...)
+	return statements
+}
+
+func governanceSeedStatements(cfg governanceSeedConfig) []string {
+	return []string{
+		fmt.Sprintf(`
+		insert into users (id, email, name, role, status)
+		values
+			('%s', '%s', '%s', 'admin', 'active'),
+			('%s', '%s', '%s', 'member', 'active'),
+			('%s', '%s', '%s', 'member', 'active')
+		on conflict (id) do update set
+			email = excluded.email,
+			name = excluded.name,
+			role = excluded.role,
+			status = excluded.status;
+		`,
+			cfg.AdminUserID, escapeLiteral(cfg.AdminEmail), escapeLiteral(cfg.AdminName),
+			cfg.MemberAUserID, escapeLiteral(cfg.MemberAEmail), escapeLiteral(cfg.MemberAName),
+			cfg.MemberBUserID, escapeLiteral(cfg.MemberBEmail), escapeLiteral(cfg.MemberBName),
+		),
+		fmt.Sprintf(`
+		insert into tenant_memberships (id, tenant_id, user_id, role, status)
+		values
+			('tm_%s_001', '%s', '%s', 'member', 'active'),
+			('tm_%s_002', '%s', '%s', 'member', 'active')
+		on conflict (id) do update set
+			tenant_id = excluded.tenant_id,
+			user_id = excluded.user_id,
+			role = excluded.role,
+			status = excluded.status;
+		`,
+			escapeLiteral(cfg.TenantID), escapeLiteral(cfg.TenantID), cfg.MemberAUserID,
+			escapeLiteral(cfg.TenantID), escapeLiteral(cfg.TenantID), cfg.MemberBUserID,
+		),
+		fmt.Sprintf(`
+		insert into account_applications (
+			id,
+			email,
+			name,
+			company_name,
+			use_case,
+			status,
+			reviewer_id,
+			review_comment,
+			reviewed_at
+		)
+		values
+			('%s', '%s', '%s', 'Demo Co', '内部知识问答', 'approved', '%s', 'seed approve', timestamptz '2026-04-24T09:44:00Z'),
+			('%s', '%s', '%s', 'Demo Co', '压测脚本', 'rejected', '%s', 'seed reject', timestamptz '2026-04-24T09:43:00Z')
+		on conflict (id) do update set
+			email = excluded.email,
+			name = excluded.name,
+			company_name = excluded.company_name,
+			use_case = excluded.use_case,
+			status = excluded.status,
+			reviewer_id = excluded.reviewer_id,
+			review_comment = excluded.review_comment,
+			reviewed_at = excluded.reviewed_at;
+		`,
+			cfg.ApprovedApplicationID, escapeLiteral(cfg.ApprovedApplicationEmail), escapeLiteral(cfg.ApprovedApplicationName), cfg.AdminUserID,
+			cfg.RejectedApplicationID, escapeLiteral(cfg.RejectedApplicationEmail), escapeLiteral(cfg.RejectedApplicationName), cfg.AdminUserID,
+		),
+		fmt.Sprintf(`
+		insert into audit_events (
+			id,
+			actor_type,
+			actor_user_id,
+			tenant_id,
+			event_type,
+			target_type,
+			target_id,
+			detail
+		)
+		values
+			('audit_evt_%s_001', 'admin', '%s', '%s', 'application_approved', 'account_application', '%s', 'seed approve'),
+			('audit_evt_%s_002', 'member', '%s', '%s', 'api_key_created', 'platform_api_key', '%s', 'seed key create'),
+			('audit_evt_%s_003', 'system', '', '%s', 'quota_warning', 'tenant', '%s', 'seed quota warning')
+		on conflict (id) do update set
+			actor_type = excluded.actor_type,
+			actor_user_id = excluded.actor_user_id,
+			tenant_id = excluded.tenant_id,
+			event_type = excluded.event_type,
+			target_type = excluded.target_type,
+			target_id = excluded.target_id,
+			detail = excluded.detail;
+		`,
+			escapeLiteral(cfg.TenantID), cfg.AdminUserID, escapeLiteral(cfg.TenantID), cfg.ApprovedApplicationID,
+			escapeLiteral(cfg.TenantID), cfg.MemberAUserID, escapeLiteral(cfg.TenantID), cfg.PlatformAPIKeyID,
+			escapeLiteral(cfg.TenantID), escapeLiteral(cfg.TenantID), escapeLiteral(cfg.TenantID),
+		),
 	}
 }
