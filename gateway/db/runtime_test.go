@@ -488,6 +488,120 @@ func TestApplyMigrationsCreatesTenantGovernanceTables(t *testing.T) {
 	}
 }
 
+func TestApplyMigrationsEnforceApplicationReviewIntegrity(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	conn := openTestPostgres(t, ctx)
+	applyMigrations(t, ctx, conn)
+
+	if _, err := conn.Exec(ctx, `
+		insert into users (id, email, name, role, status)
+		values ('user_reviewer', 'reviewer@example.com', 'Reviewer', 'admin', 'active')
+	`); err != nil {
+		t.Fatalf("insert reviewer failed: %v", err)
+	}
+
+	if _, err := conn.Exec(ctx, `
+		insert into account_applications (
+			id, email, name, company_name, use_case, status
+		) values (
+			'app_pending_ok', 'pending@example.com', 'Pending User', 'Demo Co', 'pending flow', 'pending'
+		)
+	`); err != nil {
+		t.Fatalf("expected pending application without review metadata to succeed: %v", err)
+	}
+
+	if _, err := conn.Exec(ctx, `
+		insert into account_applications (
+			id, email, name, company_name, use_case, status, reviewer_id, review_comment, reviewed_at
+		) values (
+			'app_pending_reviewed', 'pending-reviewed@example.com', 'Pending Reviewed', 'Demo Co', 'bad pending state', 'pending', 'user_reviewer', 'should fail', timestamptz '2026-04-24T09:40:00Z'
+		)
+	`); err == nil {
+		t.Fatal("expected pending application with review metadata to fail")
+	}
+
+	if _, err := conn.Exec(ctx, `
+		insert into account_applications (
+			id, email, name, company_name, use_case, status, review_comment, reviewed_at
+		) values (
+			'app_approved_missing_reviewer', 'approved-missing-reviewer@example.com', 'Approved Missing Reviewer', 'Demo Co', 'bad approved state', 'approved', 'missing reviewer', timestamptz '2026-04-24T09:41:00Z'
+		)
+	`); err == nil {
+		t.Fatal("expected approved application without reviewer_id to fail")
+	}
+
+	if _, err := conn.Exec(ctx, `
+		insert into account_applications (
+			id, email, name, company_name, use_case, status, reviewer_id, review_comment
+		) values (
+			'app_rejected_missing_reviewed_at', 'rejected-missing-reviewed-at@example.com', 'Rejected Missing ReviewedAt', 'Demo Co', 'bad rejected state', 'rejected', 'user_reviewer', 'missing reviewed_at'
+		)
+	`); err == nil {
+		t.Fatal("expected rejected application without reviewed_at to fail")
+	}
+}
+
+func TestApplyMigrationsEnforceAuditEventActors(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	conn := openTestPostgres(t, ctx)
+	applyMigrations(t, ctx, conn)
+
+	if _, err := conn.Exec(ctx, `
+		insert into users (id, email, name, role, status)
+		values ('user_actor_admin', 'actor-admin@example.com', 'Actor Admin', 'admin', 'active')
+	`); err != nil {
+		t.Fatalf("insert audit actor failed: %v", err)
+	}
+
+	if _, err := conn.Exec(ctx, `
+		insert into audit_events (
+			id, actor_type, actor_user_id, event_type, target_type, detail
+		) values (
+			'audit_system_ok', 'system', null, 'quota_warning', 'tenant', 'system event'
+		)
+	`); err != nil {
+		t.Fatalf("expected system audit event without actor_user_id to succeed: %v", err)
+	}
+
+	if _, err := conn.Exec(ctx, `
+		insert into audit_events (
+			id, actor_type, actor_user_id, event_type, target_type, detail
+		) values (
+			'audit_admin_missing_actor', 'admin', null, 'application_approved', 'account_application', 'missing actor'
+		)
+	`); err == nil {
+		t.Fatal("expected admin audit event without actor_user_id to fail")
+	}
+
+	if _, err := conn.Exec(ctx, `
+		insert into audit_events (
+			id, actor_type, actor_user_id, event_type, target_type, detail
+		) values (
+			'audit_member_unknown_actor', 'member', 'user_missing', 'api_key_created', 'platform_api_key', 'unknown actor'
+		)
+	`); err == nil {
+		t.Fatal("expected member audit event with unknown actor_user_id to fail")
+	}
+
+	if _, err := conn.Exec(ctx, `
+		insert into audit_events (
+			id, actor_type, actor_user_id, event_type, target_type, detail
+		) values (
+			'audit_system_with_actor', 'system', 'user_actor_admin', 'quota_warning', 'tenant', 'system should not carry actor'
+		)
+	`); err == nil {
+		t.Fatal("expected system audit event with actor_user_id to fail")
+	}
+}
+
 func TestSeedDemoDataPopulatesTenantGovernanceDemoData(t *testing.T) {
 	t.Parallel()
 
@@ -756,40 +870,38 @@ func assertGovernanceSeedCounts(t *testing.T, ctx context.Context, conn *pgx.Con
 func assertApprovedApplicationAuditEvent(t *testing.T, ctx context.Context, conn *pgx.Conn, wantTenantID string, wantApplicationID string, wantReviewerID string, wantDetail string) {
 	t.Helper()
 
-	var tenantID string
-	var targetID string
-	var actorUserID string
-	var detail string
+	var matchingEvents int
+	if err := conn.QueryRow(ctx, `
+		select count(*)
+		from audit_events
+		where actor_type = 'admin'
+			and event_type = 'application_approved'
+			and target_type = 'account_application'
+			and target_id = $1
+			and coalesce(tenant_id, '') = $2
+			and actor_user_id = $3
+			and detail = $4
+	`, wantApplicationID, wantTenantID, wantReviewerID, wantDetail).Scan(&matchingEvents); err != nil {
+		t.Fatalf("QueryRow approved audit event count failed: %v", err)
+	}
+	if matchingEvents != 1 {
+		t.Fatalf("expected exactly 1 matching approved audit event, got %d", matchingEvents)
+	}
+
 	var status string
 	var reviewerID string
 	var reviewComment string
+	var reviewedAt time.Time
 	if err := conn.QueryRow(ctx, `
 		select
-			coalesce(e.tenant_id, ''),
-			e.target_id,
-			e.actor_user_id,
-			e.detail,
-			coalesce(a.status, ''),
-			coalesce(a.reviewer_id, ''),
-			coalesce(a.review_comment, '')
-		from audit_events e
-		left join account_applications a on a.id = e.target_id
-		where e.event_type = 'application_approved'
-	`).Scan(&tenantID, &targetID, &actorUserID, &detail, &status, &reviewerID, &reviewComment); err != nil {
-		t.Fatalf("QueryRow approved audit event failed: %v", err)
-	}
-
-	if tenantID != wantTenantID {
-		t.Fatalf("expected approved audit event tenant_id %q, got %q", wantTenantID, tenantID)
-	}
-	if targetID != wantApplicationID {
-		t.Fatalf("expected approved audit event target_id %q, got %q", wantApplicationID, targetID)
-	}
-	if actorUserID != wantReviewerID {
-		t.Fatalf("expected approved audit event actor_user_id %q, got %q", wantReviewerID, actorUserID)
-	}
-	if detail != wantDetail {
-		t.Fatalf("expected approved audit event detail %q, got %q", wantDetail, detail)
+			status,
+			reviewer_id,
+			review_comment,
+			reviewed_at
+		from account_applications
+		where id = $1
+	`, wantApplicationID).Scan(&status, &reviewerID, &reviewComment, &reviewedAt); err != nil {
+		t.Fatalf("QueryRow approved application failed: %v", err)
 	}
 	if status != "approved" {
 		t.Fatalf("expected approved application status %q, got %q", "approved", status)
@@ -799,6 +911,9 @@ func assertApprovedApplicationAuditEvent(t *testing.T, ctx context.Context, conn
 	}
 	if reviewComment != wantDetail {
 		t.Fatalf("expected approved application review_comment %q, got %q", wantDetail, reviewComment)
+	}
+	if reviewedAt.IsZero() {
+		t.Fatal("expected approved application reviewed_at to be set")
 	}
 }
 

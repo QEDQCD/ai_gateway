@@ -665,7 +665,7 @@ func governanceSeedStatements(cfg governanceSeedConfig) []string {
 		values
 			('audit_evt_%s_001', 'admin', '%s', '%s', 'application_approved', 'account_application', '%s', 'seed approve'),
 			('audit_evt_%s_002', 'member', '%s', '%s', 'api_key_created', 'platform_api_key', '%s', 'seed key create'),
-			('audit_evt_%s_003', 'system', '', '%s', 'quota_warning', 'tenant', '%s', 'seed quota warning')
+			('audit_evt_%s_003', 'system', null, '%s', 'quota_warning', 'tenant', '%s', 'seed quota warning')
 		on conflict (id) do update set
 			actor_type = excluded.actor_type,
 			actor_user_id = excluded.actor_user_id,
