@@ -314,6 +314,45 @@ func RuntimeSeedStatements() []string {
 		on conflict (id) do nothing;
 		`,
 		`
+		insert into users (id, email, name, role, status)
+		values
+			('user_admin_demo', 'admin@example.com', '平台管理员', 'admin', 'active'),
+			('user_member_a', 'member-a@example.com', '租户用户A', 'member', 'active'),
+			('user_member_b', 'member-b@example.com', '租户用户B', 'member', 'active')
+		on conflict (id) do nothing;
+		`,
+		`
+		insert into tenant_memberships (id, tenant_id, user_id, role, status)
+		values
+			('tm_demo_001', 'tenant_demo', 'user_member_a', 'member', 'active'),
+			('tm_demo_002', 'tenant_demo', 'user_member_b', 'member', 'active')
+		on conflict (tenant_id, user_id) do nothing;
+		`,
+		`
+		insert into account_applications (id, email, name, company_name, use_case, status)
+		values
+			('app_demo_pending', 'pending@example.com', '待审批用户', 'Demo Co', '内部知识问答', 'pending'),
+			('app_demo_rejected', 'rejected@example.com', '被拒绝用户', 'Demo Co', '压测脚本', 'rejected')
+		on conflict (id) do nothing;
+		`,
+		`
+		insert into audit_events (
+			id,
+			actor_type,
+			actor_user_id,
+			tenant_id,
+			event_type,
+			target_type,
+			target_id,
+			detail
+		)
+		values
+			('audit_evt_001', 'admin', 'user_admin_demo', 'tenant_demo', 'application_approved', 'account_application', 'app_demo_seeded', 'seed approve'),
+			('audit_evt_002', 'member', 'user_member_a', 'tenant_demo', 'api_key_created', 'platform_api_key', 'pak_demo', 'seed key create'),
+			('audit_evt_003', 'system', '', 'tenant_demo', 'quota_warning', 'tenant', 'tenant_demo', 'seed quota warning')
+		on conflict (id) do nothing;
+		`,
+		`
 		insert into provider_credentials (
 			id,
 			provider,

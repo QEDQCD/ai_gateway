@@ -469,6 +469,39 @@ func TestRuntimeMigrationsRejectCrossTenantUsageRows(t *testing.T) {
 	}
 }
 
+func TestApplyMigrationsCreatesTenantGovernanceTables(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	conn := openTestPostgres(t, ctx)
+	applyMigrations(t, ctx, conn)
+
+	for _, tableName := range []string{
+		"account_applications",
+		"users",
+		"tenant_memberships",
+		"audit_events",
+	} {
+		assertTableExists(t, ctx, conn, tableName)
+	}
+}
+
+func TestRuntimeSeedStatementsPopulateApprovalAndMembershipData(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	conn := openSeededRuntimeDB(t, ctx)
+
+	assertTableCount(t, ctx, conn, "account_applications", 2)
+	assertTableCount(t, ctx, conn, "users", 3)
+	assertTableCount(t, ctx, conn, "tenant_memberships", 2)
+	assertTableCount(t, ctx, conn, "audit_events", 3)
+}
+
 func TestRuntimeSeedRouteIDsAlignWithObservabilityRows(t *testing.T) {
 	t.Parallel()
 
@@ -610,6 +643,62 @@ func validUsageLogInsertSQL(id string, status string, source string, tenantID st
 			timestamptz '2026-04-24T10:00:01Z'
 		)
 	`, id, tenantID, platformAPIKeyID, source, status)
+}
+
+func openTestPostgres(t *testing.T, ctx context.Context) *pgx.Conn {
+	t.Helper()
+
+	container, dsn := startPostgresContainer(ctx, t)
+	t.Cleanup(func() {
+		_ = container.Terminate(context.Background())
+	})
+
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("pgx.Connect failed: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = conn.Close(context.Background())
+	})
+
+	return conn
+}
+
+func applyMigrations(t *testing.T, ctx context.Context, conn *pgx.Conn) {
+	t.Helper()
+
+	for _, migration := range readMigrations(t) {
+		if _, err := conn.Exec(ctx, migration); err != nil {
+			t.Fatalf("conn.Exec migration failed: %v", err)
+		}
+	}
+}
+
+func openSeededRuntimeDB(t *testing.T, ctx context.Context) *pgx.Conn {
+	t.Helper()
+
+	conn := openTestPostgres(t, ctx)
+	applyMigrations(t, ctx, conn)
+
+	for _, statement := range RuntimeSeedStatements() {
+		if _, err := conn.Exec(ctx, statement); err != nil {
+			t.Fatalf("conn.Exec seed failed: %v", err)
+		}
+	}
+
+	return conn
+}
+
+func assertTableExists(t *testing.T, ctx context.Context, conn *pgx.Conn, tableName string) {
+	t.Helper()
+
+	var found string
+	if err := conn.QueryRow(ctx, `select coalesce(to_regclass($1)::text, '')`, tableName).Scan(&found); err != nil {
+		t.Fatalf("QueryRow table existence failed: %v", err)
+	}
+	if found != tableName {
+		t.Fatalf("expected table %q to exist, got %q", tableName, found)
+	}
 }
 
 func assertTableCount(t *testing.T, ctx context.Context, conn *pgx.Conn, tableName string, want int) {
