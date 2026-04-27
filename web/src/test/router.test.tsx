@@ -4,6 +4,20 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { AppLayout } from "../app/layout";
 import { createTestRouter } from "../app/router";
+import type { ConsoleSession } from "../lib/session";
+
+const defaultConsoleSession: ConsoleSession = {
+  role: "admin",
+  user_id: "user_admin_demo",
+};
+
+const useConsoleSessionMock = vi.fn<() => ConsoleSession>(() => defaultConsoleSession);
+
+vi.mock("../lib/session", () => ({
+  getDefaultSession: () => defaultConsoleSession,
+  getConsoleSession: () => useConsoleSessionMock(),
+  useConsoleSession: () => useConsoleSessionMock(),
+}));
 
 type MockResponseMap = Record<string, unknown>;
 type MockRequestAssertions = Partial<Record<string, (init?: RequestInit) => void>>;
@@ -19,6 +33,13 @@ function defaultSystemStatus() {
     internal_services: ["31427"],
     hidden_modules: ["RAG 控制台", "知识库"],
   };
+}
+
+function mockSession(session: Partial<ConsoleSession> = {}) {
+  useConsoleSessionMock.mockReturnValue({
+    ...defaultConsoleSession,
+    ...session,
+  });
 }
 
 function renderRoute(path: string = "/") {
@@ -55,6 +76,7 @@ function mockFetch(responses: MockResponseMap, requestAssertions: MockRequestAss
 
 beforeEach(() => {
   vi.restoreAllMocks();
+  mockSession();
 });
 
 afterEach(() => {
@@ -62,6 +84,70 @@ afterEach(() => {
 });
 
 describe("控制台路由", () => {
+  test("admin session 渲染 admin navigation", async () => {
+    mockSession({ role: "admin" });
+    mockFetch({
+      "/api/admin/system/status": defaultSystemStatus(),
+    });
+
+    render(
+      <RouterProvider
+        router={createTestRouter(["/applications"])}
+        future={{ v7_startTransition: true }}
+      />,
+    );
+
+    expect(await screen.findByRole("link", { name: "账号申请" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "租户管理" })).toBeInTheDocument();
+  });
+
+  test("member session 渲染 member navigation", async () => {
+    mockSession({ role: "member", tenant_id: "tenant_demo", user_id: "user_member_a" });
+    mockFetch({
+      "/api/admin/system/status": defaultSystemStatus(),
+    });
+
+    render(
+      <RouterProvider router={createTestRouter(["/me"])} future={{ v7_startTransition: true }} />,
+    );
+
+    expect(await screen.findByRole("link", { name: "我的总览" })).toBeInTheDocument();
+    expect(screen.queryByText("账号申请")).not.toBeInTheDocument();
+  });
+
+  test("member session 不会请求任何 /api/admin/* 接口", async () => {
+    mockSession({ role: "member", tenant_id: "tenant_demo", user_id: "user_member_a" });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+
+      throw new Error(`Unexpected fetch url: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <RouterProvider router={createTestRouter(["/me"])} future={{ v7_startTransition: true }} />,
+    );
+
+    expect(await screen.findByRole("heading", { level: 1, name: "我的总览" })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([]);
+    });
+  });
+
+  test("member session 访问根路径时会跳转到 /me", async () => {
+    mockSession({ role: "member", tenant_id: "tenant_demo", user_id: "user_member_a" });
+    mockFetch({
+      "/api/admin/system/status": defaultSystemStatus(),
+    });
+
+    render(
+      <RouterProvider router={createTestRouter(["/"])} future={{ v7_startTransition: true }} />,
+    );
+
+    expect(await screen.findByRole("heading", { level: 1, name: "我的总览" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "我的总览" })).toHaveAttribute("aria-current", "page");
+  });
+
   test("AppLayout 在空导航时使用安全兜底元信息", async () => {
     const fetchMock = mockFetch({
       "/api/admin/system/status": defaultSystemStatus(),

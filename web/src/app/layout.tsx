@@ -1,6 +1,8 @@
 import { NavLink, Outlet, useMatches } from "react-router-dom";
 
 import { getSystemStatus } from "../lib/console-api";
+import type { ConsoleSession } from "../lib/session";
+import { useConsoleSession } from "../lib/session";
 import { useRemoteData } from "../lib/use-remote-data";
 
 export type ConsoleRouteMeta = {
@@ -36,9 +38,20 @@ function getBadgeClassName(isHealthy: boolean) {
   return isHealthy ? "status-badge status-badge--healthy" : "status-badge status-badge--neutral";
 }
 
-export function AppLayout({ navigation }: { navigation: readonly ConsoleNavigationItem[] }) {
+export function AppLayout({
+  navigation,
+  session,
+}: {
+  navigation: readonly ConsoleNavigationItem[];
+  session?: ConsoleSession;
+}) {
   const matches = useMatches();
-  const { data: systemStatus, error: systemStatusError } = useRemoteData(getSystemStatus);
+  const resolvedSession = session ?? useConsoleSession();
+  const isAdminConsole = resolvedSession.role === "admin";
+  const { data: systemStatus, error: systemStatusError } = useRemoteData(
+    () => (isAdminConsole ? getSystemStatus() : Promise.resolve(null)),
+    [isAdminConsole],
+  );
   const firstNavigationMeta = navigation[0] ? toRouteMeta(navigation[0]) : fallbackRouteMeta;
   const current =
     matches.reduce<ConsoleRouteMeta | undefined>(
@@ -53,7 +66,9 @@ export function AppLayout({ navigation }: { navigation: readonly ConsoleNavigati
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <div className="sidebar__brand">AI 网关控制台</div>
+        <div className="sidebar__brand">
+          {resolvedSession.role === "admin" ? "AI 接入平台" : "租户控制台"}
+        </div>
         <nav className="sidebar__nav">
           {navigation.map((item) => (
             <NavLink
@@ -75,10 +90,12 @@ export function AppLayout({ navigation }: { navigation: readonly ConsoleNavigati
             <h1>{current.title}</h1>
             <p>{current.description}</p>
           </div>
-          <div className="topbar__badges">
-            <span className={getBadgeClassName(isGatewayHealthy)}>{gatewayHealth}</span>
-            <span className="status-badge status-badge--neutral">配额保护 {quotaProtection}</span>
-          </div>
+          {isAdminConsole ? (
+            <div className="topbar__badges">
+              <span className={getBadgeClassName(isGatewayHealthy)}>{gatewayHealth}</span>
+              <span className="status-badge status-badge--neutral">配额保护 {quotaProtection}</span>
+            </div>
+          ) : null}
         </header>
         <main className="page-content">
           <Outlet />
