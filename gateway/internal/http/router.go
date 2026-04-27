@@ -75,6 +75,8 @@ func NewRouterWithDependencies(deps RouterDependencies) *fiber.App {
 	admin := app.Group("/admin", middleware.RequireServiceBasicAuth(deps.ServiceAuthUsername, deps.ServiceAuthPassword))
 	admin.Get("/overview", handlers.ConsoleOverview(deps.ConsoleService))
 	admin.Get("/system/status", handlers.ConsoleSystemStatus(deps.ConsoleService))
+	admin.Get("/applications", handlers.ConsoleApplications(deps.ConsoleService))
+	admin.Post("/applications/:id/approve", handlers.ConsoleApproveApplication(deps.ConsoleService))
 	admin.Get("/api-keys", handlers.ConsoleAPIKeys(deps.ConsoleService))
 	admin.Post("/api-keys", handlers.ConsoleCreateAPIKey(deps.ConsoleService))
 	admin.Post("/api-keys/:id/rotate", handlers.ConsoleRotateAPIKey(deps.ConsoleService))

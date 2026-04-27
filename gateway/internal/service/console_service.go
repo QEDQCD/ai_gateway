@@ -66,6 +66,30 @@ type APIKeyMutationResult struct {
 	RawKey string     `json:"raw_key,omitempty"`
 }
 
+type ApplicationItem struct {
+	ID          string `json:"id"`
+	Email       string `json:"email"`
+	Name        string `json:"name"`
+	CompanyName string `json:"company_name"`
+	UseCase     string `json:"use_case"`
+	Status      string `json:"status"`
+	CreatedAt   string `json:"created_at"`
+}
+
+type ApplicationsPageData struct {
+	Items []ApplicationItem `json:"items"`
+}
+
+type ApproveApplicationRequest struct {
+	ActorID  string `json:"actor_id"`
+	Comment  string `json:"comment"`
+	TenantID string `json:"tenant_id"`
+}
+
+type ApplicationMutationResult struct {
+	Item ApplicationItem `json:"item"`
+}
+
 type RouteMetric struct {
 	Label string `json:"label"`
 	Value string `json:"value"`
@@ -247,6 +271,8 @@ type UsageRequestsPageData struct {
 type ConsoleService interface {
 	Overview(ctx context.Context) (OverviewPageData, error)
 	SystemStatus(ctx context.Context) (ConsoleSystemStatus, error)
+	Applications(ctx context.Context) (ApplicationsPageData, error)
+	ApproveApplication(ctx context.Context, id string, req ApproveApplicationRequest) (ApplicationMutationResult, error)
 	APIKeys(ctx context.Context) (APIKeysPageData, error)
 	CreateAPIKey(ctx context.Context, req CreateAPIKeyRequest) (APIKeyMutationResult, error)
 	RotateAPIKey(ctx context.Context, id string, req RotateAPIKeyRequest) (APIKeyMutationResult, error)
@@ -276,6 +302,14 @@ func (unavailableConsoleService) Overview(context.Context) (OverviewPageData, er
 
 func (unavailableConsoleService) SystemStatus(context.Context) (ConsoleSystemStatus, error) {
 	return ConsoleSystemStatus{}, ErrConsoleServiceUnavailable
+}
+
+func (unavailableConsoleService) Applications(context.Context) (ApplicationsPageData, error) {
+	return ApplicationsPageData{}, ErrConsoleServiceUnavailable
+}
+
+func (unavailableConsoleService) ApproveApplication(context.Context, string, ApproveApplicationRequest) (ApplicationMutationResult, error) {
+	return ApplicationMutationResult{}, ErrConsoleServiceUnavailable
 }
 
 func (unavailableConsoleService) APIKeys(context.Context) (APIKeysPageData, error) {

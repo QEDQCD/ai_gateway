@@ -155,6 +155,59 @@ func TestAdminSystemStatusRouteReturnsConsoleData(t *testing.T) {
 	}
 }
 
+func TestAdminApplicationsRouteReturnsConsoleData(t *testing.T) {
+	t.Parallel()
+
+	app := apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+		ServiceAuthUsername: "test-console-user",
+		ServiceAuthPassword: "test-console-password",
+		ConsoleService: stubConsoleService{
+			applications: service.ApplicationsPageData{
+				Items: []service.ApplicationItem{
+					{
+						ID:          "app_demo_pending",
+						Email:       "pending@example.com",
+						Name:        "待审批用户",
+						CompanyName: "Pending Co",
+						UseCase:     "租户接入",
+						Status:      "pending",
+						CreatedAt:   "2026-04-30T18:30:00+08:00",
+					},
+					{
+						ID:          "app_demo_rejected",
+						Email:       "rejected@example.com",
+						Name:        "已拒绝用户",
+						CompanyName: "Rejected Co",
+						UseCase:     "压测脚本",
+						Status:      "rejected",
+						CreatedAt:   "2026-04-24T17:43:00+08:00",
+					},
+				},
+			},
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/applications", nil)
+	req.SetBasicAuth("test-console-user", "test-console-password")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("io.ReadAll failed: %v", err)
+	}
+	expected := `{"items":[{"id":"app_demo_pending","email":"pending@example.com","name":"待审批用户","company_name":"Pending Co","use_case":"租户接入","status":"pending","created_at":"2026-04-30T18:30:00+08:00"},{"id":"app_demo_rejected","email":"rejected@example.com","name":"已拒绝用户","company_name":"Rejected Co","use_case":"压测脚本","status":"rejected","created_at":"2026-04-24T17:43:00+08:00"}]}`
+	if string(body) != expected {
+		t.Fatalf("expected body %q, got %q", expected, string(body))
+	}
+}
+
 func TestAdminAPIKeysRouteReturnsConsoleData(t *testing.T) {
 	t.Parallel()
 
@@ -364,6 +417,70 @@ func TestAdminDeleteAPIKeyRouteReturnsConsoleData(t *testing.T) {
 	expected := `{"item":{"id":"pak_unused","name":"unused-key","tenant":"tenant_alpha","status":"已删除","scopes":["chat"],"last_used_at":"2026-04-24T12:01:00+08:00"}}`
 	if string(body) != expected {
 		t.Fatalf("expected body %q, got %q", expected, string(body))
+	}
+}
+
+func TestAdminApproveApplicationCreatesUserMembershipAndAudit(t *testing.T) {
+	t.Parallel()
+
+	var capturedID string
+	var capturedReq service.ApproveApplicationRequest
+
+	app := apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+		ServiceAuthUsername: "test-console-user",
+		ServiceAuthPassword: "test-console-password",
+		ConsoleService: stubConsoleService{
+			approveApplicationIDRef:  &capturedID,
+			approveApplicationReqRef: &capturedReq,
+			applicationMutation: service.ApplicationMutationResult{
+				Item: service.ApplicationItem{
+					ID:          "app_router_pending",
+					Email:       "router-pending@example.com",
+					Name:        "路由待审批用户",
+					CompanyName: "Router Co",
+					UseCase:     "租户接入",
+					Status:      "approved",
+					CreatedAt:   "2026-04-25T09:02:03+08:00",
+				},
+			},
+		},
+	})
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/admin/applications/app_router_pending/approve",
+		strings.NewReader(`{"actor_id":"user_admin_demo","comment":"approved via route","tenant_id":"tenant_demo"}`),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	req.SetBasicAuth("test-console-user", "test-console-password")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("io.ReadAll failed: %v", err)
+	}
+	expected := `{"item":{"id":"app_router_pending","email":"router-pending@example.com","name":"路由待审批用户","company_name":"Router Co","use_case":"租户接入","status":"approved","created_at":"2026-04-25T09:02:03+08:00"}}`
+	if string(body) != expected {
+		t.Fatalf("expected body %q, got %q", expected, string(body))
+	}
+	if capturedID != "app_router_pending" {
+		t.Fatalf("expected captured id %q, got %q", "app_router_pending", capturedID)
+	}
+	if capturedReq.ActorID != "user_admin_demo" {
+		t.Fatalf("expected actor_id %q, got %q", "user_admin_demo", capturedReq.ActorID)
+	}
+	if capturedReq.Comment != "approved via route" {
+		t.Fatalf("expected comment %q, got %q", "approved via route", capturedReq.Comment)
+	}
+	if capturedReq.TenantID != "tenant_demo" {
+		t.Fatalf("expected tenant_id %q, got %q", "tenant_demo", capturedReq.TenantID)
 	}
 }
 
@@ -927,6 +1044,10 @@ type stubConsoleService struct {
 	systemStatus         service.ConsoleSystemStatus
 	apiKeys              service.APIKeysPageData
 	apiKeyMutationResult service.APIKeyMutationResult
+	applications         service.ApplicationsPageData
+	applicationMutation  service.ApplicationMutationResult
+	approveApplicationIDRef  *string
+	approveApplicationReqRef *service.ApproveApplicationRequest
 	usageOverview        service.UsageOverviewData
 	usageTrends          service.UsageTrendData
 	usageLatencyWall     service.UsageLatencyWallData
@@ -947,8 +1068,22 @@ func (s stubConsoleService) APIKeys(context.Context) (service.APIKeysPageData, e
 	return s.apiKeys, nil
 }
 
+func (s stubConsoleService) Applications(context.Context) (service.ApplicationsPageData, error) {
+	return s.applications, nil
+}
+
 func (s stubConsoleService) CreateAPIKey(context.Context, service.CreateAPIKeyRequest) (service.APIKeyMutationResult, error) {
 	return s.apiKeyMutationResult, nil
+}
+
+func (s stubConsoleService) ApproveApplication(_ context.Context, id string, req service.ApproveApplicationRequest) (service.ApplicationMutationResult, error) {
+	if s.approveApplicationIDRef != nil {
+		*s.approveApplicationIDRef = id
+	}
+	if s.approveApplicationReqRef != nil {
+		*s.approveApplicationReqRef = req
+	}
+	return s.applicationMutation, nil
 }
 
 func (s stubConsoleService) RotateAPIKey(context.Context, string, service.RotateAPIKeyRequest) (service.APIKeyMutationResult, error) {

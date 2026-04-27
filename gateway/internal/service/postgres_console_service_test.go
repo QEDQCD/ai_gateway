@@ -198,6 +198,338 @@ func TestPostgresConsoleServiceDeleteReferencedAPIKeyReturnsConflict(t *testing.
 	}
 }
 
+func TestPostgresConsoleServiceApplicationsReturnsPendingRows(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	if _, err := conn.Exec(ctx, `delete from account_applications`); err != nil {
+		t.Fatalf("delete seeded applications failed: %v", err)
+	}
+
+	if _, err := conn.Exec(ctx, `
+		insert into account_applications (
+			id,
+			email,
+			name,
+			company_name,
+			use_case,
+			status,
+			reviewer_id,
+			review_comment,
+			reviewed_at,
+			created_at
+		) values
+			(
+				'app_demo_pending',
+				'pending@example.com',
+				'待审批用户',
+				'Pending Co',
+				'租户接入',
+				'pending',
+				null,
+				'',
+				null,
+				timestamptz '2026-04-30T10:30:00Z'
+			),
+			(
+				'app_demo_rejected',
+				'rejected@example.com',
+				'已拒绝用户',
+				'Rejected Co',
+				'压测脚本',
+				'rejected',
+				'user_admin_demo',
+				'seed reject',
+				timestamptz '2026-04-29T08:20:00Z',
+				timestamptz '2026-04-29T08:15:00Z'
+			),
+			(
+				'app_demo_approved',
+				'approved@example.com',
+				'已审批用户',
+				'Approved Co',
+				'内部知识问答',
+				'approved',
+				'user_admin_demo',
+				'seed approve',
+				timestamptz '2026-04-28T02:05:00Z',
+				timestamptz '2026-04-28T02:00:00Z'
+			)
+	`); err != nil {
+		t.Fatalf("insert applications failed: %v", err)
+	}
+
+	payload, err := console.Applications(ctx)
+	if err != nil {
+		t.Fatalf("Applications failed: %v", err)
+	}
+
+	if len(payload.Items) != 3 {
+		t.Fatalf("expected 3 application rows, got %d", len(payload.Items))
+	}
+
+	if payload.Items[0].ID != "app_demo_pending" {
+		t.Fatalf("expected newest application id %q, got %q", "app_demo_pending", payload.Items[0].ID)
+	}
+	if payload.Items[1].ID != "app_demo_rejected" {
+		t.Fatalf("expected second application id %q, got %q", "app_demo_rejected", payload.Items[1].ID)
+	}
+	if payload.Items[2].ID != "app_demo_approved" {
+		t.Fatalf("expected third application id %q, got %q", "app_demo_approved", payload.Items[2].ID)
+	}
+
+	first := payload.Items[0]
+	if first.Email != "pending@example.com" {
+		t.Fatalf("expected email %q, got %q", "pending@example.com", first.Email)
+	}
+	if first.Name != "待审批用户" {
+		t.Fatalf("expected name %q, got %q", "待审批用户", first.Name)
+	}
+	if first.CompanyName != "Pending Co" {
+		t.Fatalf("expected company_name %q, got %q", "Pending Co", first.CompanyName)
+	}
+	if first.UseCase != "租户接入" {
+		t.Fatalf("expected use_case %q, got %q", "租户接入", first.UseCase)
+	}
+	if first.Status != "pending" {
+		t.Fatalf("expected status %q, got %q", "pending", first.Status)
+	}
+	if first.CreatedAt != "2026-04-30T18:30:00+08:00" {
+		t.Fatalf("expected created_at %q, got %q", "2026-04-30T18:30:00+08:00", first.CreatedAt)
+	}
+	if payload.Items[1].CreatedAt != "2026-04-29T16:15:00+08:00" {
+		t.Fatalf("expected second created_at %q, got %q", "2026-04-29T16:15:00+08:00", payload.Items[1].CreatedAt)
+	}
+	if payload.Items[2].CreatedAt != "2026-04-28T10:00:00+08:00" {
+		t.Fatalf("expected third created_at %q, got %q", "2026-04-28T10:00:00+08:00", payload.Items[2].CreatedAt)
+	}
+}
+
+func TestPostgresConsoleServiceApproveApplicationRequiresTenantID(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	if _, err := conn.Exec(ctx, `
+		insert into account_applications (
+			id,
+			email,
+			name,
+			company_name,
+			use_case,
+			status
+		) values (
+			'app_pending_missing_tenant',
+			'missing-tenant@example.com',
+			'缺少租户用户',
+			'Missing Tenant Co',
+			'租户接入',
+			'pending'
+		)
+	`); err != nil {
+		t.Fatalf("insert pending application failed: %v", err)
+	}
+
+	_, err := console.ApproveApplication(ctx, "app_pending_missing_tenant", service.ApproveApplicationRequest{
+		ActorID: "user_admin_demo",
+		Comment: "approved without tenant",
+	})
+	if err == nil {
+		t.Fatal("expected ApproveApplication to require tenant_id")
+	}
+
+	var statusErr service.StatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("expected StatusError, got %T", err)
+	}
+	if statusErr.Code != 400 {
+		t.Fatalf("expected bad request status, got %d", statusErr.Code)
+	}
+	if statusErr.Message != "tenant_id is required" {
+		t.Fatalf("expected message %q, got %q", "tenant_id is required", statusErr.Message)
+	}
+
+	var applicationStatus string
+	if err := conn.QueryRow(ctx, `
+		select status
+		from account_applications
+		where id = 'app_pending_missing_tenant'
+	`).Scan(&applicationStatus); err != nil {
+		t.Fatalf("select application status failed: %v", err)
+	}
+	if applicationStatus != "pending" {
+		t.Fatalf("expected application to remain pending, got %q", applicationStatus)
+	}
+}
+
+func TestPostgresConsoleServiceApproveApplicationCreatesUserMembershipAndAudit(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	if _, err := conn.Exec(ctx, `
+		insert into users (id, email, name, role, status)
+		values (
+			'user_pending_existing',
+			'service-pending@example.com',
+			'旧名字',
+			'member',
+			'disabled'
+		);
+
+		insert into tenant_memberships (id, tenant_id, user_id, role, status)
+		values (
+			'tm_pending_existing',
+			'tenant_demo',
+			'user_pending_existing',
+			'member',
+			'disabled'
+		);
+
+		insert into account_applications (
+			id,
+			email,
+			name,
+			company_name,
+			use_case,
+			status,
+			created_at
+		) values (
+			'app_service_pending',
+			'service-pending@example.com',
+			'服务层待审批用户',
+			'Service Co',
+			'租户接入',
+			'pending',
+			timestamptz '2026-04-25T01:02:03Z'
+		);
+	`); err != nil {
+		t.Fatalf("seed approve application scenario failed: %v", err)
+	}
+
+	result, err := console.ApproveApplication(ctx, "app_service_pending", service.ApproveApplicationRequest{
+		ActorID:  "user_admin_demo",
+		Comment:  "approved via service",
+		TenantID: "tenant_demo",
+	})
+	if err != nil {
+		t.Fatalf("ApproveApplication failed: %v", err)
+	}
+
+	if result.Item.ID != "app_service_pending" {
+		t.Fatalf("expected item id %q, got %q", "app_service_pending", result.Item.ID)
+	}
+	if result.Item.Email != "service-pending@example.com" {
+		t.Fatalf("expected item email %q, got %q", "service-pending@example.com", result.Item.Email)
+	}
+	if result.Item.Name != "服务层待审批用户" {
+		t.Fatalf("expected item name %q, got %q", "服务层待审批用户", result.Item.Name)
+	}
+	if result.Item.CompanyName != "Service Co" {
+		t.Fatalf("expected item company_name %q, got %q", "Service Co", result.Item.CompanyName)
+	}
+	if result.Item.UseCase != "租户接入" {
+		t.Fatalf("expected item use_case %q, got %q", "租户接入", result.Item.UseCase)
+	}
+	if result.Item.Status != "approved" {
+		t.Fatalf("expected item status %q, got %q", "approved", result.Item.Status)
+	}
+	if result.Item.CreatedAt != "2026-04-25T09:02:03+08:00" {
+		t.Fatalf("expected item created_at %q, got %q", "2026-04-25T09:02:03+08:00", result.Item.CreatedAt)
+	}
+
+	var applicationStatus string
+	var reviewerID string
+	var reviewComment string
+	var reviewedAt time.Time
+	if err := conn.QueryRow(ctx, `
+		select status, reviewer_id, review_comment, reviewed_at
+		from account_applications
+		where id = 'app_service_pending'
+	`).Scan(&applicationStatus, &reviewerID, &reviewComment, &reviewedAt); err != nil {
+		t.Fatalf("select approved application failed: %v", err)
+	}
+	if applicationStatus != "approved" {
+		t.Fatalf("expected application status %q, got %q", "approved", applicationStatus)
+	}
+	if reviewerID != "user_admin_demo" {
+		t.Fatalf("expected reviewer_id %q, got %q", "user_admin_demo", reviewerID)
+	}
+	if reviewComment != "approved via service" {
+		t.Fatalf("expected review_comment %q, got %q", "approved via service", reviewComment)
+	}
+	if reviewedAt.IsZero() {
+		t.Fatal("expected reviewed_at to be set")
+	}
+
+	var userID string
+	var userName string
+	var userRole string
+	var userStatus string
+	if err := conn.QueryRow(ctx, `
+		select id, name, role, status
+		from users
+		where email = 'service-pending@example.com'
+	`).Scan(&userID, &userName, &userRole, &userStatus); err != nil {
+		t.Fatalf("select approved user failed: %v", err)
+	}
+	if userID != "user_pending_existing" {
+		t.Fatalf("expected existing user id %q, got %q", "user_pending_existing", userID)
+	}
+	if userName != "服务层待审批用户" {
+		t.Fatalf("expected updated user name %q, got %q", "服务层待审批用户", userName)
+	}
+	if userRole != "member" {
+		t.Fatalf("expected user role %q, got %q", "member", userRole)
+	}
+	if userStatus != "active" {
+		t.Fatalf("expected user status %q, got %q", "active", userStatus)
+	}
+
+	var membershipCount int
+	if err := conn.QueryRow(ctx, `
+		select count(*)
+		from tenant_memberships
+		where tenant_id = 'tenant_demo'
+			and user_id = 'user_pending_existing'
+			and role = 'member'
+			and status = 'active'
+	`).Scan(&membershipCount); err != nil {
+		t.Fatalf("select tenant membership failed: %v", err)
+	}
+	if membershipCount != 1 {
+		t.Fatalf("expected 1 active membership, got %d", membershipCount)
+	}
+
+	var auditCount int
+	if err := conn.QueryRow(ctx, `
+		select count(*)
+		from audit_events
+		where actor_type = 'admin'
+			and actor_user_id = 'user_admin_demo'
+			and tenant_id = 'tenant_demo'
+			and event_type = 'application_approved'
+			and target_type = 'account_application'
+			and target_id = 'app_service_pending'
+			and detail = 'approved via service'
+	`).Scan(&auditCount); err != nil {
+		t.Fatalf("select audit event count failed: %v", err)
+	}
+	if auditCount != 1 {
+		t.Fatalf("expected 1 approval audit event, got %d", auditCount)
+	}
+}
+
 func TestPostgresConsoleServiceAuditUsesUsageLogsAndEvents(t *testing.T) {
 	t.Parallel()
 

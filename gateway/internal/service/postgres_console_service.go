@@ -178,6 +178,124 @@ func (s postgresConsoleService) SystemStatus(ctx context.Context) (ConsoleSystem
 	}, nil
 }
 
+func (s postgresConsoleService) Applications(ctx context.Context) (ApplicationsPageData, error) {
+	rows, err := s.db.Query(ctx, `
+		select id, email, name, company_name, use_case, status, created_at
+		from account_applications
+		order by created_at desc, id asc;
+	`)
+	if err != nil {
+		return ApplicationsPageData{}, err
+	}
+	defer rows.Close()
+
+	items := make([]ApplicationItem, 0)
+	for rows.Next() {
+		item, err := scanApplicationItem(rows)
+		if err != nil {
+			return ApplicationsPageData{}, err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return ApplicationsPageData{}, err
+	}
+
+	return ApplicationsPageData{Items: items}, nil
+}
+
+func (s postgresConsoleService) ApproveApplication(ctx context.Context, id string, req ApproveApplicationRequest) (ApplicationMutationResult, error) {
+	applicationID := strings.TrimSpace(id)
+	actorID := strings.TrimSpace(req.ActorID)
+	comment := strings.TrimSpace(req.Comment)
+	tenantID := strings.TrimSpace(req.TenantID)
+	if applicationID == "" {
+		return ApplicationMutationResult{}, StatusError{
+			Code:    http.StatusBadRequest,
+			Message: "application id is required",
+		}
+	}
+	if actorID == "" {
+		return ApplicationMutationResult{}, StatusError{
+			Code:    http.StatusBadRequest,
+			Message: "actor_id is required",
+		}
+	}
+	if tenantID == "" {
+		return ApplicationMutationResult{}, StatusError{
+			Code:    http.StatusBadRequest,
+			Message: "tenant_id is required",
+		}
+	}
+
+	row := s.db.QueryRow(ctx, `
+		with updated_application as (
+			update account_applications
+			set
+				status = 'approved',
+				reviewer_id = $2,
+				review_comment = $3,
+				reviewed_at = now()
+			where id = $1
+			  and status = 'pending'
+			returning id, email, name, company_name, use_case, status, created_at
+		),
+		upserted_user as (
+			insert into users (id, email, name, role, status)
+			select $4, email, name, 'member', 'active'
+			from updated_application
+			on conflict (email) do update
+			set
+				name = excluded.name,
+				status = 'active'
+			returning id
+		),
+		upserted_membership as (
+			insert into tenant_memberships (id, tenant_id, user_id, role, status)
+			select $6, $5, id, 'member', 'active'
+			from upserted_user
+			on conflict (tenant_id, user_id) do update
+			set
+				role = 'member',
+				status = 'active'
+		),
+		inserted_audit as (
+			insert into audit_events (
+				id,
+				actor_type,
+				actor_user_id,
+				tenant_id,
+				event_type,
+				target_type,
+				target_id,
+				detail
+			)
+			select
+				$7,
+				'admin',
+				$2,
+				$5,
+				'application_approved',
+				'account_application',
+				id,
+				$3
+			from updated_application
+		)
+		select id, email, name, company_name, use_case, status, created_at
+		from updated_application;
+	`, applicationID, actorID, comment, newUserID(), tenantID, newTenantMembershipID(), newAuditEventID())
+
+	item, err := scanApplicationItem(row)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ApplicationMutationResult{}, s.mapApproveApplicationPendingError(ctx, applicationID)
+		}
+		return ApplicationMutationResult{}, mapApproveApplicationWriteError(err)
+	}
+
+	return ApplicationMutationResult{Item: item}, nil
+}
+
 func (s postgresConsoleService) APIKeys(ctx context.Context) (APIKeysPageData, error) {
 	rows, err := s.db.Query(ctx, `
 		select p.id, p.name, t.id, p.status, p.scopes, coalesce(p.last_used_at, p.created_at)
@@ -1400,6 +1518,74 @@ func (s postgresConsoleService) insertPlatformAPIKey(ctx context.Context, input 
 	return item, nil
 }
 
+type applicationScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanApplicationItem(scanner applicationScanner) (ApplicationItem, error) {
+	var item ApplicationItem
+	var createdAt time.Time
+	if err := scanner.Scan(
+		&item.ID,
+		&item.Email,
+		&item.Name,
+		&item.CompanyName,
+		&item.UseCase,
+		&item.Status,
+		&createdAt,
+	); err != nil {
+		return ApplicationItem{}, err
+	}
+
+	item.CreatedAt = createdAt.In(shanghaiLocation()).Format(time.RFC3339)
+	return item, nil
+}
+
+func (s postgresConsoleService) mapApproveApplicationPendingError(ctx context.Context, id string) error {
+	var status string
+	if err := s.db.QueryRow(ctx, `
+		select status
+		from account_applications
+		where id = $1;
+	`, id).Scan(&status); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return StatusError{
+				Code:    http.StatusNotFound,
+				Message: "application not found",
+				Err:     err,
+			}
+		}
+		return err
+	}
+
+	return StatusError{
+		Code:    http.StatusConflict,
+		Message: "application is not pending",
+	}
+}
+
+func mapApproveApplicationWriteError(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		switch pgErr.Code {
+		case "23503":
+			return StatusError{
+				Code:    http.StatusBadRequest,
+				Message: "actor_id or tenant_id not found",
+				Err:     err,
+			}
+		case "23514":
+			return StatusError{
+				Code:    http.StatusBadRequest,
+				Message: "actor_id must reference an admin user",
+				Err:     err,
+			}
+		}
+	}
+
+	return err
+}
+
 func mapAPIKeyMutationError(err error, notFoundMessage string) error {
 	if errors.Is(err, pgx.ErrNoRows) {
 		return StatusError{
@@ -1432,6 +1618,18 @@ func mapAPIKeyMutationError(err error, notFoundMessage string) error {
 
 func newPlatformAPIKeyID() string {
 	return "pak_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+}
+
+func newUserID() string {
+	return "user_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+}
+
+func newTenantMembershipID() string {
+	return "tm_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+}
+
+func newAuditEventID() string {
+	return "audit_evt_" + strings.ReplaceAll(uuid.NewString(), "-", "")
 }
 
 func newPlatformAPIKeySecret() string {
