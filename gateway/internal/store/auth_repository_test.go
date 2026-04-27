@@ -2,13 +2,23 @@ package store
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
+	"sort"
 	"testing"
+	"time"
 
 	"github.com/example/ai_gateway/gateway/internal/domain"
 	"github.com/example/ai_gateway/gateway/internal/secret"
+	"github.com/jackc/pgx/v5"
+	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-func TestFindPlatformAPIKeyByHashReturnsCreatorUserAndTenantScope(t *testing.T) {
+func TestBootstrapAuthRepositoryFindPlatformAPIKeyByHashReturnsConfiguredScope(t *testing.T) {
 	t.Parallel()
 
 	repo := newSeededAuthRepository(t)
@@ -17,11 +27,106 @@ func TestFindPlatformAPIKeyByHashReturnsCreatorUserAndTenantScope(t *testing.T) 
 		t.Fatalf("FindPlatformAPIKeyByHash failed: %v", err)
 	}
 
-	if record.UserID == "" {
-		t.Fatal("expected user id on auth record")
+	if record.UserID != "user_demo" {
+		t.Fatalf("expected user_demo, got %q", record.UserID)
 	}
 	if record.TenantID != "tenant_demo" {
 		t.Fatalf("expected tenant_demo, got %q", record.TenantID)
+	}
+}
+
+func TestSQLAuthRepositoryFindPlatformAPIKeyByHashDoesNotInferUserIDFromMemberships(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	container, dsn := startAuthRepositoryPostgresContainer(ctx, t)
+	t.Cleanup(func() {
+		_ = container.Terminate(context.Background())
+	})
+
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("pgx.Connect failed: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = conn.Close(context.Background())
+	})
+
+	for _, migration := range readAuthRepositoryMigrations(t) {
+		if _, err := conn.Exec(ctx, migration); err != nil {
+			t.Fatalf("conn.Exec migration failed: %v", err)
+		}
+	}
+
+	if _, err := conn.Exec(ctx, `
+		insert into tenants (id, name, status) values ('tenant_demo', 'Demo Tenant', 'active');
+		insert into users (id, email, name, role, status) values ('user_demo', 'member@example.com', 'Demo Member', 'member', 'active');
+		insert into tenant_memberships (id, tenant_id, user_id, role, status)
+		values ('tm_demo', 'tenant_demo', 'user_demo', 'member', 'active');
+		insert into platform_api_keys (id, tenant_id, name, key_hash, status)
+		values ('pak_demo', 'tenant_demo', 'demo', 'sha256:demo', 'active');
+	`); err != nil {
+		t.Fatalf("seed auth records failed: %v", err)
+	}
+
+	repo := NewAuthRepository(New(conn))
+	record, err := repo.FindPlatformAPIKeyByHash(ctx, "sha256:demo")
+	if err != nil {
+		t.Fatalf("FindPlatformAPIKeyByHash failed: %v", err)
+	}
+
+	if record.UserID != "" {
+		t.Fatalf("expected SQL auth repository to leave user id empty without creator_user_id support, got %q", record.UserID)
+	}
+	if record.TenantID != "tenant_demo" {
+		t.Fatalf("expected tenant_demo, got %q", record.TenantID)
+	}
+}
+
+func TestSQLAuthRepositoryResolveConsolePrincipalRejectsMultipleActiveMemberships(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	container, dsn := startAuthRepositoryPostgresContainer(ctx, t)
+	t.Cleanup(func() {
+		_ = container.Terminate(context.Background())
+	})
+
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("pgx.Connect failed: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = conn.Close(context.Background())
+	})
+
+	for _, migration := range readAuthRepositoryMigrations(t) {
+		if _, err := conn.Exec(ctx, migration); err != nil {
+			t.Fatalf("conn.Exec migration failed: %v", err)
+		}
+	}
+
+	if _, err := conn.Exec(ctx, `
+		insert into tenants (id, name, status)
+		values ('tenant_a', 'Tenant A', 'active'), ('tenant_b', 'Tenant B', 'active');
+		insert into users (id, email, name, role, status)
+		values ('user_member', 'member@example.com', 'Demo Member', 'member', 'active');
+		insert into tenant_memberships (id, tenant_id, user_id, role, status)
+		values
+			('tm_a', 'tenant_a', 'user_member', 'member', 'active'),
+			('tm_b', 'tenant_b', 'user_member', 'member', 'active');
+	`); err != nil {
+		t.Fatalf("seed console principal failed: %v", err)
+	}
+
+	repo := NewAuthRepository(New(conn))
+	_, err = repo.ResolveConsolePrincipal(ctx, "member@example.com")
+	if !errors.Is(err, ErrAuthScopeAmbiguous) {
+		t.Fatalf("expected error %v, got %v", ErrAuthScopeAmbiguous, err)
 	}
 }
 
@@ -156,4 +261,74 @@ func newSeededAuthRepository(t *testing.T) *BootstrapAuthRepository {
 		TenantID:             "tenant_demo",
 		TenantName:           "Demo Tenant",
 	})
+}
+
+func startAuthRepositoryPostgresContainer(ctx context.Context, t *testing.T) (testcontainers.Container, string) {
+	t.Helper()
+
+	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: testcontainers.ContainerRequest{
+			Image:        "postgres:16-alpine",
+			ExposedPorts: []string{"5432/tcp"},
+			Env: map[string]string{
+				"POSTGRES_DB":       "gateway_test",
+				"POSTGRES_USER":     "postgres",
+				"POSTGRES_PASSWORD": "postgres",
+			},
+			WaitingFor: wait.ForLog("database system is ready to accept connections").
+				WithOccurrence(2).
+				WithStartupTimeout(30 * time.Second),
+		},
+		Started: true,
+	})
+	if err != nil {
+		t.Fatalf("GenericContainer failed: %v", err)
+	}
+
+	host, err := container.Host(ctx)
+	if err != nil {
+		t.Fatalf("container.Host failed: %v", err)
+	}
+	port, err := container.MappedPort(ctx, "5432/tcp")
+	if err != nil {
+		t.Fatalf("container.MappedPort failed: %v", err)
+	}
+
+	dsn := fmt.Sprintf("postgres://postgres:postgres@%s:%s/gateway_test?sslmode=disable", host, port.Port())
+	return container, dsn
+}
+
+func readAuthRepositoryMigrations(t *testing.T) []string {
+	t.Helper()
+
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+
+	migrationsDir := filepath.Join(filepath.Dir(filename), "..", "..", "db", "migrations")
+	entries, err := os.ReadDir(migrationsDir)
+	if err != nil {
+		t.Fatalf("os.ReadDir failed: %v", err)
+	}
+
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		names = append(names, entry.Name())
+	}
+	sort.Strings(names)
+
+	migrations := make([]string, 0, len(names))
+	for _, name := range names {
+		sqlBytes, err := os.ReadFile(filepath.Join(migrationsDir, name))
+		if err != nil {
+			t.Fatalf("os.ReadFile failed: %v", err)
+		}
+		migrations = append(migrations, string(sqlBytes))
+	}
+
+	return migrations
 }

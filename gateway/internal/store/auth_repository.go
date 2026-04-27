@@ -13,6 +13,7 @@ import (
 )
 
 var ErrAuthRecordNotFound = errors.New("auth record not found")
+var ErrAuthScopeAmbiguous = errors.New("auth scope ambiguous")
 
 type PlatformAPIKeyRecord struct {
 	ID       string
@@ -135,38 +136,6 @@ func NewBootstrapAuthRepository(cfg BootstrapAuthConfig) *BootstrapAuthRepositor
 }
 
 func (r *SQLAuthRepository) FindPlatformAPIKeyByHash(ctx context.Context, keyHash string) (PlatformAPIKeyRecord, error) {
-	if queries, ok := r.queries.(*Queries); ok {
-		const lookupPlatformAPIKeyWithScope = `
-select pak.id, pak.tenant_id, pak.name, pak.status,
-  coalesce((
-    select tm.user_id
-    from tenant_memberships tm
-    where tm.tenant_id = pak.tenant_id
-      and tm.status = 'active'
-    order by tm.created_at asc, tm.id asc
-    limit 1
-  ), '') as user_id
-from platform_api_keys pak
-where pak.key_hash = $1
-`
-
-		var record PlatformAPIKeyRecord
-		err := queries.db.QueryRow(ctx, lookupPlatformAPIKeyWithScope, keyHash).Scan(
-			&record.ID,
-			&record.TenantID,
-			&record.Name,
-			&record.Status,
-			&record.UserID,
-		)
-		if err == nil {
-			return record, nil
-		}
-		if errors.Is(err, pgx.ErrNoRows) {
-			return PlatformAPIKeyRecord{}, ErrAuthRecordNotFound
-		}
-		return PlatformAPIKeyRecord{}, err
-	}
-
 	row, err := r.queries.GetPlatformAPIKeyByHash(ctx, keyHash)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -256,42 +225,45 @@ func (r *SQLAuthRepository) ResolveConsolePrincipal(ctx context.Context, subject
 
 	const lookupConsolePrincipal = `
 select u.id, u.email, u.role,
-  coalesce((
-    select tm.tenant_id
-    from tenant_memberships tm
-    where tm.user_id = u.id
-      and tm.status = 'active'
-    order by tm.created_at asc, tm.id asc
-    limit 1
-  ), '') as tenant_id
+  case
+    when u.role = 'member' and coalesce(scope.membership_count, 0) = 1 then coalesce(scope.tenant_id, '')
+    else ''
+  end as tenant_id,
+  coalesce(scope.membership_count, 0) as membership_count
 from users u
+left join lateral (
+  select min(tm.tenant_id) as tenant_id, count(*) as membership_count
+  from tenant_memberships tm
+  where tm.user_id = u.id
+    and tm.status = 'active'
+) scope on true
 where lower(u.email) = $1
   and u.status = 'active'
   and (
     u.role = 'admin'
-    or exists (
-      select 1
-      from tenant_memberships tm
-      where tm.user_id = u.id
-        and tm.status = 'active'
-    )
+    or coalesce(scope.membership_count, 0) > 0
   )
 limit 1
 `
 
 	subject = normalizeConsoleSubject(subject)
 	var record ConsolePrincipalRecord
+	var membershipCount int64
 	err := queries.db.QueryRow(ctx, lookupConsolePrincipal, subject).Scan(
 		&record.UserID,
 		&record.Email,
 		&record.Role,
 		&record.TenantID,
+		&membershipCount,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ConsolePrincipalRecord{}, ErrAuthRecordNotFound
 		}
 		return ConsolePrincipalRecord{}, err
+	}
+	if record.Role == domain.ConsoleRoleMember && membershipCount > 1 {
+		return ConsolePrincipalRecord{}, ErrAuthScopeAmbiguous
 	}
 	return record, nil
 }

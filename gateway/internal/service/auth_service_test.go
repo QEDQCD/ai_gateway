@@ -28,6 +28,18 @@ func TestResolveConsolePrincipalAllowsAdminAndMemberScopes(t *testing.T) {
 	}
 }
 
+func TestResolveConsolePrincipalRejectsAmbiguousMemberTenantScope(t *testing.T) {
+	t.Parallel()
+
+	repo := &fakeAuthRepository{consolePrincipalErr: store.ErrAuthScopeAmbiguous}
+	authService := service.NewAuthService(repo, &fakeQuotaGuard{}, service.NewRouteService(repo))
+
+	_, err := authService.ResolveConsolePrincipal(context.Background(), "member@example.com")
+	if !errors.Is(err, service.ErrUnauthorized) {
+		t.Fatalf("expected error %v, got %v", service.ErrUnauthorized, err)
+	}
+}
+
 func TestResolveRequestContextUsesPlatformKeyAndProviderCredential(t *testing.T) {
 	t.Parallel()
 
@@ -461,11 +473,15 @@ type fakeAuthRepository struct {
 	platformKey                 store.PlatformAPIKeyRecord
 	tenant                      store.TenantRecord
 	providerCredentials         []store.ProviderCredentialRecord
+	consolePrincipal            store.ConsolePrincipalRecord
+	consolePrincipalErr         error
 	gotKeyHash                  string
 	platformKeyCtx              context.Context
 	tenantCtx                   context.Context
 	listProviderCredentialCalls int
 	providerCredentialsCtx      context.Context
+	consolePrincipalCtx         context.Context
+	consolePrincipalSubject     string
 }
 
 func (f *fakeAuthRepository) FindPlatformAPIKeyByHash(ctx context.Context, keyHash string) (store.PlatformAPIKeyRecord, error) {
@@ -483,6 +499,15 @@ func (f *fakeAuthRepository) ListActiveProviderCredentials(ctx context.Context) 
 	f.listProviderCredentialCalls++
 	f.providerCredentialsCtx = ctx
 	return f.providerCredentials, nil
+}
+
+func (f *fakeAuthRepository) ResolveConsolePrincipal(ctx context.Context, subject string) (store.ConsolePrincipalRecord, error) {
+	f.consolePrincipalCtx = ctx
+	f.consolePrincipalSubject = subject
+	if f.consolePrincipalErr != nil {
+		return store.ConsolePrincipalRecord{}, f.consolePrincipalErr
+	}
+	return f.consolePrincipal, nil
 }
 
 type fakeQuotaGuard struct {

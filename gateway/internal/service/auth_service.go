@@ -159,6 +159,9 @@ func (s authService) ResolveConsolePrincipal(ctx context.Context, subject string
 		if errors.Is(err, store.ErrAuthRecordNotFound) {
 			return ConsolePrincipal{}, fmt.Errorf("%w: console principal not found", ErrUnauthorized)
 		}
+		if errors.Is(err, store.ErrAuthScopeAmbiguous) {
+			return ConsolePrincipal{}, fmt.Errorf("%w: console principal scope is ambiguous", ErrUnauthorized)
+		}
 		return ConsolePrincipal{}, err
 	}
 
