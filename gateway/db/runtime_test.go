@@ -15,6 +15,7 @@ import (
 	"github.com/example/ai_gateway/gateway/internal/service"
 	"github.com/example/ai_gateway/gateway/internal/store"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
@@ -603,8 +604,7 @@ func TestApplyMigrationsCreatesTenantGovernanceTables(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	conn := openTestPostgres(t, ctx)
-	applyMigrations(t, ctx, conn)
+	conn := openMigratedTestPostgres(t, ctx)
 
 	for _, tableName := range []string{
 		"account_applications",
@@ -622,8 +622,7 @@ func TestApplyMigrationsEnforceApplicationReviewIntegrity(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	conn := openTestPostgres(t, ctx)
-	applyMigrations(t, ctx, conn)
+	conn := openMigratedTestPostgres(t, ctx)
 
 	if _, err := conn.Exec(ctx, `
 		insert into users (id, email, name, role, status)
@@ -679,8 +678,7 @@ func TestApplyMigrationsEnforceAuditEventActors(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	conn := openTestPostgres(t, ctx)
-	applyMigrations(t, ctx, conn)
+	conn := openMigratedTestPostgres(t, ctx)
 
 	if _, err := conn.Exec(ctx, `
 		insert into users (id, email, name, role, status)
@@ -730,14 +728,88 @@ func TestApplyMigrationsEnforceAuditEventActors(t *testing.T) {
 	}
 }
 
+func TestApplyMigrationsWaitsForAdvisoryLock(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	container, dsn := startPostgresContainer(ctx, t)
+	t.Cleanup(func() {
+		_ = container.Terminate(context.Background())
+	})
+
+	locker, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("pgx.Connect locker failed: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = locker.Close(context.Background())
+	})
+
+	const testMigrationAdvisoryLockKey int64 = 5504261723447799379
+
+	if _, err := locker.Exec(ctx, `select pg_advisory_lock($1)`, testMigrationAdvisoryLockKey); err != nil {
+		t.Fatalf("acquire advisory lock failed: %v", err)
+	}
+	lockHeld := true
+	t.Cleanup(func() {
+		if !lockHeld {
+			return
+		}
+		_, _ = locker.Exec(context.Background(), `select pg_advisory_unlock($1)`, testMigrationAdvisoryLockKey)
+	})
+
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("pgxpool.New failed: %v", err)
+	}
+	t.Cleanup(pool.Close)
+
+	blockedCtx, blockedCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer blockedCancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- ApplyMigrations(blockedCtx, pool)
+	}()
+
+	timer := time.NewTimer(150 * time.Millisecond)
+	defer timer.Stop()
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("expected ApplyMigrations to stay blocked behind advisory lock, got %v", err)
+	case <-timer.C:
+	}
+
+	var found string
+	if err := locker.QueryRow(ctx, `select coalesce(to_regclass('schema_migrations')::text, '')`).Scan(&found); err != nil {
+		t.Fatalf("QueryRow schema_migrations existence failed: %v", err)
+	}
+	if found != "" {
+		t.Fatalf("expected schema_migrations to remain absent while advisory lock is held, got %q", found)
+	}
+
+	if _, err := locker.Exec(ctx, `select pg_advisory_unlock($1)`, testMigrationAdvisoryLockKey); err != nil {
+		t.Fatalf("release advisory lock failed: %v", err)
+	}
+	lockHeld = false
+
+	if err := <-errCh; err != nil {
+		t.Fatalf("ApplyMigrations after lock release failed: %v", err)
+	}
+
+	assertTableExists(t, ctx, locker, "users")
+}
+
 func TestSeedDemoDataPopulatesTenantGovernanceDemoData(t *testing.T) {
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	conn := openTestPostgres(t, ctx)
-	applyMigrations(t, ctx, conn)
+	conn := openMigratedTestPostgres(t, ctx)
 
 	codec, err := secret.NewCodec("0123456789abcdef0123456789abcdef")
 	if err != nil {
@@ -937,21 +1009,39 @@ func openTestPostgres(t *testing.T, ctx context.Context) *pgx.Conn {
 	return conn
 }
 
-func applyMigrations(t *testing.T, ctx context.Context, conn *pgx.Conn) {
+func openMigratedTestPostgres(t *testing.T, ctx context.Context) *pgx.Conn {
 	t.Helper()
 
-	for _, migration := range readMigrations(t) {
-		if _, err := conn.Exec(ctx, migration); err != nil {
-			t.Fatalf("conn.Exec migration failed: %v", err)
-		}
+	container, dsn := startPostgresContainer(ctx, t)
+	t.Cleanup(func() {
+		_ = container.Terminate(context.Background())
+	})
+
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("pgxpool.New failed: %v", err)
 	}
+	t.Cleanup(pool.Close)
+
+	if err := ApplyMigrations(ctx, pool); err != nil {
+		t.Fatalf("ApplyMigrations failed: %v", err)
+	}
+
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("pgx.Connect failed: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = conn.Close(context.Background())
+	})
+
+	return conn
 }
 
 func openSeededRuntimeDB(t *testing.T, ctx context.Context) *pgx.Conn {
 	t.Helper()
 
-	conn := openTestPostgres(t, ctx)
-	applyMigrations(t, ctx, conn)
+	conn := openMigratedTestPostgres(t, ctx)
 
 	for _, statement := range RuntimeSeedStatements() {
 		if _, err := conn.Exec(ctx, statement); err != nil {

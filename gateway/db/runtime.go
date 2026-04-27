@@ -20,6 +20,8 @@ import (
 //go:embed migrations/*.sql
 var migrationFS embed.FS
 
+const migrationAdvisoryLockKey int64 = 5504261723447799379
+
 type SeedConfig struct {
 	PlatformAPIKey      string
 	ProviderBaseURL     string
@@ -62,8 +64,23 @@ func OpenPostgres(ctx context.Context, databaseURL string) (*pgxpool.Pool, error
 	return pgxpool.NewWithConfig(ctx, config)
 }
 
-func ApplyMigrations(ctx context.Context, pool *pgxpool.Pool) error {
-	if _, err := pool.Exec(ctx, `
+func ApplyMigrations(ctx context.Context, pool *pgxpool.Pool) (err error) {
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Release()
+
+	if _, err := conn.Exec(ctx, `select pg_advisory_lock($1)`, migrationAdvisoryLockKey); err != nil {
+		return fmt.Errorf("acquire migration advisory lock: %w", err)
+	}
+	defer func() {
+		if _, unlockErr := conn.Exec(context.Background(), `select pg_advisory_unlock($1)`, migrationAdvisoryLockKey); unlockErr != nil && err == nil {
+			err = fmt.Errorf("release migration advisory lock: %w", unlockErr)
+		}
+	}()
+
+	if _, err := conn.Exec(ctx, `
 		create table if not exists schema_migrations (
 			name text primary key,
 			applied_at timestamptz not null default now()
@@ -88,7 +105,7 @@ func ApplyMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 
 	for _, name := range names {
 		var exists bool
-		if err := pool.QueryRow(ctx, `select exists(select 1 from schema_migrations where name = $1);`, name).Scan(&exists); err != nil {
+		if err := conn.QueryRow(ctx, `select exists(select 1 from schema_migrations where name = $1);`, name).Scan(&exists); err != nil {
 			return err
 		}
 		if exists {
@@ -100,7 +117,7 @@ func ApplyMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 			return err
 		}
 
-		tx, err := pool.Begin(ctx)
+		tx, err := conn.Begin(ctx)
 		if err != nil {
 			return err
 		}
