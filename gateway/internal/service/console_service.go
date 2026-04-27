@@ -96,11 +96,11 @@ type RouteMetric struct {
 }
 
 type RouteItem struct {
-	RequestedModel   string `json:"requested_model"`
-	ResolvedProvider string `json:"resolved_provider"`
-	Credential       string `json:"credential"`
-	Latency          string `json:"latency"`
-	Status           string `json:"status"`
+	RequestedModel string `json:"requested_model"`
+	RouteLabel     string `json:"route_label"`
+	Credential     string `json:"credential"`
+	Latency        string `json:"latency"`
+	Status         string `json:"status"`
 }
 
 type RoutesPageData struct {
@@ -120,31 +120,12 @@ type PlaygroundRunRequest struct {
 }
 
 type PlaygroundRunResponse struct {
-	ResolvedProvider string `json:"resolved_provider"`
-	Endpoint         string `json:"endpoint"`
-	Latency          string `json:"latency"`
-	Status           string `json:"status"`
-	Response         string `json:"response"`
-	PlatformKey      string `json:"platform_key"`
-}
-
-type KnowledgeBaseMetric struct {
-	Label string `json:"label"`
-	Value string `json:"value"`
-}
-
-type KnowledgeBaseItem struct {
-	Name      string `json:"name"`
-	Documents string `json:"documents"`
-	Status    string `json:"status"`
-	UpdatedAt string `json:"updated_at"`
-}
-
-type KnowledgeBasesPageData struct {
-	Stats        []KnowledgeBaseMetric `json:"stats"`
-	Items        []KnowledgeBaseItem   `json:"items"`
-	FlowSummary  []string              `json:"flow_summary"`
-	QueueSummary []string              `json:"queue_summary"`
+	RouteLabel  string `json:"route_label"`
+	Endpoint    string `json:"endpoint"`
+	Latency     string `json:"latency"`
+	Status      string `json:"status"`
+	Response    string `json:"response"`
+	PlatformKey string `json:"platform_key"`
 }
 
 type AuditSummary struct {
@@ -171,7 +152,7 @@ type AuditItem struct {
 	RequestModel  string `json:"request_model"`
 	UpstreamModel string `json:"upstream_model"`
 	Status        string `json:"status"`
-	Provider      string `json:"provider"`
+	RouteLabel    string `json:"route_label"`
 	Latency       string `json:"latency"`
 	UsageSource   string `json:"usage_source"`
 }
@@ -228,7 +209,7 @@ type UsageLatencyCell struct {
 
 type UsageLatencyLane struct {
 	Model          string             `json:"model"`
-	Provider       string             `json:"provider"`
+	RouteLabel     string             `json:"route_label"`
 	SuccessRate    string             `json:"success_rate"`
 	AverageLatency string             `json:"average_latency"`
 	Cells          []UsageLatencyCell `json:"cells"`
@@ -281,7 +262,6 @@ type ConsoleService interface {
 	Routes(ctx context.Context) (RoutesPageData, error)
 	Playground(ctx context.Context) (PlaygroundPageData, error)
 	RunPlayground(ctx context.Context, req PlaygroundRunRequest) (PlaygroundRunResponse, error)
-	KnowledgeBases(ctx context.Context) (KnowledgeBasesPageData, error)
 	Audit(ctx context.Context) (AuditPageData, error)
 	UsageOverview(ctx context.Context, query UsageQuery) (UsageOverviewData, error)
 	UsageTrends(ctx context.Context, query UsageQuery) (UsageTrendData, error)
@@ -342,10 +322,6 @@ func (unavailableConsoleService) Playground(context.Context) (PlaygroundPageData
 
 func (unavailableConsoleService) RunPlayground(context.Context, PlaygroundRunRequest) (PlaygroundRunResponse, error) {
 	return PlaygroundRunResponse{}, ErrConsoleServiceUnavailable
-}
-
-func (unavailableConsoleService) KnowledgeBases(context.Context) (KnowledgeBasesPageData, error) {
-	return KnowledgeBasesPageData{}, ErrConsoleServiceUnavailable
 }
 
 func (unavailableConsoleService) Audit(context.Context) (AuditPageData, error) {

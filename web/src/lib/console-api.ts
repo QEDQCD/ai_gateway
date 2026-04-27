@@ -79,7 +79,7 @@ export type RouteMetric = {
 
 export type RouteItem = {
   requested_model: string;
-  resolved_provider: string;
+  route_label: string;
   credential: string;
   latency: string;
   status: string;
@@ -92,7 +92,7 @@ export type RoutesPageData = {
 };
 
 export type PlaygroundRunResponse = {
-  resolved_provider: string;
+  route_label: string;
   endpoint: string;
   latency: string;
   status: string;
@@ -108,25 +108,6 @@ export type PlaygroundPageData = {
 export type PlaygroundRunRequest = {
   model: string;
   prompt: string;
-};
-
-export type KnowledgeBaseMetric = {
-  label: string;
-  value: string;
-};
-
-export type KnowledgeBaseItem = {
-  name: string;
-  documents: string;
-  status: string;
-  updated_at: string;
-};
-
-export type KnowledgeBasesPageData = {
-  stats: KnowledgeBaseMetric[];
-  items: KnowledgeBaseItem[];
-  flow_summary: string[];
-  queue_summary: string[];
 };
 
 export type AuditSummary = {
@@ -153,7 +134,7 @@ export type AuditItem = {
   request_model: string;
   upstream_model: string;
   status: string;
-  provider: string;
+  route_label: string;
   latency: string;
   usage_source: string;
 };
@@ -193,7 +174,7 @@ export type UsageLatencyCell = {
 
 export type UsageLatencyLane = {
   model: string;
-  provider: string;
+  route_label: string;
   success_rate: string;
   average_latency: string;
   cells: UsageLatencyCell[];
@@ -255,6 +236,51 @@ export type MemberAuditItem = {
 export type MemberAuditPageData = {
   items: MemberAuditItem[];
 };
+
+type JsonRecord = Record<string, unknown>;
+
+function asRecord(value: unknown): JsonRecord {
+  return value && typeof value === "object" ? (value as JsonRecord) : {};
+}
+
+function readString(record: JsonRecord, key: string) {
+  const value = record[key];
+  return typeof value === "string" ? value : "";
+}
+
+function readStringArray(record: JsonRecord, key: string) {
+  const value = record[key];
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function readRouteLabel(record: JsonRecord) {
+  return readString(record, "route_label");
+}
+
+function toRouteItem(value: unknown): RouteItem {
+  const record = asRecord(value);
+
+  return {
+    requested_model: readString(record, "requested_model"),
+    route_label: readRouteLabel(record),
+    credential: readString(record, "credential"),
+    latency: readString(record, "latency"),
+    status: readString(record, "status"),
+  };
+}
+
+function toPlaygroundRun(value: unknown): PlaygroundRunResponse {
+  const record = asRecord(value);
+
+  return {
+    route_label: readRouteLabel(record),
+    endpoint: readString(record, "endpoint"),
+    latency: readString(record, "latency"),
+    status: readString(record, "status"),
+    response: readString(record, "response"),
+    platform_key: readString(record, "platform_key"),
+  };
+}
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = init ? await fetch(path, init) : await fetch(path);
@@ -374,27 +400,50 @@ export function deactivateMemberAPIKey(id: string) {
 }
 
 export function getRoutes() {
-  return requestJson<RoutesPageData>("/api/admin/routes");
+  return requestJson<JsonRecord>("/api/admin/routes").then((data) => ({
+    stats: Array.isArray(data.stats) ? (data.stats as RouteMetric[]) : [],
+    items: Array.isArray(data.items) ? data.items.map(toRouteItem) : [],
+    policy_summary: readStringArray(data, "policy_summary"),
+  }));
 }
 
 export function getPlayground() {
-  return requestJson<PlaygroundPageData>("/api/admin/playground");
+  return requestJson<JsonRecord>("/api/admin/playground").then((data) => ({
+    available_models: readStringArray(data, "available_models"),
+    last_run: data.last_run == null ? null : toPlaygroundRun(data.last_run),
+  }));
 }
 
 export function runPlayground(payload: PlaygroundRunRequest) {
-  return requestJson<PlaygroundRunResponse>("/api/admin/playground/chat", {
+  return requestJson<JsonRecord>("/api/admin/playground/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
-  });
-}
-
-export function getKnowledgeBases() {
-  return requestJson<KnowledgeBasesPageData>("/api/admin/knowledge-bases");
+  }).then(toPlaygroundRun);
 }
 
 export function getAudit() {
-  return requestJson<AuditPageData>("/api/admin/audit");
+  return requestJson<JsonRecord>("/api/admin/audit").then((data) => ({
+    metrics: Array.isArray(data.metrics) ? (data.metrics as AuditMetric[]) : [],
+    events: Array.isArray(data.events) ? (data.events as AuditEvent[]) : [],
+    items: Array.isArray(data.items)
+      ? data.items.map((value) => {
+          const record = asRecord(value);
+          return {
+            time: readString(record, "time"),
+            tenant: readString(record, "tenant"),
+            endpoint: readString(record, "endpoint"),
+            request_model: readString(record, "request_model"),
+            upstream_model: readString(record, "upstream_model"),
+            status: readString(record, "status"),
+            route_label: readRouteLabel(record),
+            latency: readString(record, "latency"),
+            usage_source: readString(record, "usage_source"),
+          };
+        })
+      : [],
+    summaries: Array.isArray(data.summaries) ? (data.summaries as AuditSummary[]) : [],
+  }));
 }
 
 export function getUsageOverview() {
@@ -406,7 +455,32 @@ export function getUsageTrends() {
 }
 
 export function getUsageLatencyWall(window: "6h" | "24h" | "7d" = "24h") {
-  return requestJson<UsageLatencyWallData>(`/api/admin/usage/latency-wall?window=${window}`);
+  return requestJson<JsonRecord>(`/api/admin/usage/latency-wall?window=${window}`).then((data) => ({
+    window_label: readString(data, "window_label"),
+    buckets: readStringArray(data, "buckets"),
+    lanes: Array.isArray(data.lanes)
+      ? data.lanes.map((value) => {
+          const record = asRecord(value);
+          return {
+            model: readString(record, "model"),
+            route_label: readRouteLabel(record),
+            success_rate: readString(record, "success_rate"),
+            average_latency: readString(record, "average_latency"),
+            cells: Array.isArray(record.cells)
+              ? record.cells.map((cellValue) => {
+                  const cell = asRecord(cellValue);
+                  return {
+                    bucket_label: readString(cell, "bucket_label"),
+                    latency: readString(cell, "latency"),
+                    status: readString(cell, "status"),
+                    requests: readString(cell, "requests"),
+                  };
+                })
+              : [],
+          };
+        })
+      : [],
+  }));
 }
 
 export function getUsageFailures() {

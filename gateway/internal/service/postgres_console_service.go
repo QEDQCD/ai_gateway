@@ -89,6 +89,11 @@ func (s postgresConsoleService) Overview(ctx context.Context) (OverviewPageData,
 	if err != nil {
 		return OverviewPageData{}, err
 	}
+	for index := range routeHealthRows {
+		if len(routeHealthRows[index].Columns) > 1 {
+			routeHealthRows[index].Columns[1] = neutralizeConsoleRouteLabel(routeHealthRows[index].Columns[1])
+		}
+	}
 
 	topModelsRows, err := s.collectTableRows(ctx, `
 		with total as (
@@ -102,7 +107,7 @@ func (s postgresConsoleService) Overview(ctx context.Context) (OverviewPageData,
 			case
 				when max(endpoint) = '/v1/chat/completions' then '聊天'
 				when max(endpoint) = '/v1/embeddings' then '向量'
-				else '知识库'
+				else '检索'
 			end
 		from audit_logs
 		group by requested_model
@@ -173,8 +178,8 @@ func (s postgresConsoleService) SystemStatus(ctx context.Context) (ConsoleSystem
 		QuotaProtection:  mapBool(quotaEnabledTenants > 0, "已启用", "未启用"),
 		ConsoleEntry:     "31873",
 		GatewayAdminAPI:  "32658",
-		InternalServices: []string{"31427"},
-		HiddenModules:    []string{"RAG 控制台", "知识库"},
+		InternalServices: []string{"internal-search"},
+		HiddenModules:    []string{"内部检索能力", "高级路由设置"},
 	}, nil
 }
 
@@ -502,9 +507,11 @@ func (s postgresConsoleService) Routes(ctx context.Context) (RoutesPageData, err
 		var item RouteItem
 		var latency int
 		var status string
-		if err := rows.Scan(&item.RequestedModel, &item.ResolvedProvider, &item.Credential, &latency, &status); err != nil {
+		if err := rows.Scan(&item.RequestedModel, &item.RouteLabel, &item.Credential, &latency, &status); err != nil {
 			return RoutesPageData{}, err
 		}
+		item.RouteLabel = neutralizeConsoleRouteLabel(item.RouteLabel)
+		item.Credential = neutralizeConsoleCredential(item.Credential)
 		item.Latency = fmt.Sprintf("%d ms", latency)
 		item.Status = translateRouteHealth(status)
 		items = append(items, item)
@@ -524,7 +531,7 @@ func (s postgresConsoleService) Routes(ctx context.Context) (RoutesPageData, err
 		PolicySummary: []string{
 			"路由模式：" + s.lookupSetting(ctx, "routing_mode", "数据库模式"),
 			"模型优先解析：" + s.lookupSetting(ctx, "model_resolution_mode", "已启用"),
-			s.lookupSetting(ctx, "route_policy_description", "请求会先解析到托管凭据，再按路由策略回退。"),
+			"请求会先解析到平台托管凭证，再按平台路由策略回退。",
 		},
 	}, nil
 }
@@ -564,11 +571,13 @@ func (s postgresConsoleService) Playground(ctx context.Context) (PlaygroundPageD
 		from playground_runs
 		order by created_at desc
 		limit 1;
-	`).Scan(&lastRun.ResolvedProvider, &lastRun.Endpoint, &latencyMS, &statusCode, &lastRun.Response, &lastRun.PlatformKey); err == nil {
+	`).Scan(&lastRun.RouteLabel, &lastRun.Endpoint, &latencyMS, &statusCode, &lastRun.Response, &lastRun.PlatformKey); err == nil {
 		found = true
 	}
 
 	if found {
+		lastRun.RouteLabel = neutralizeConsoleRouteLabel(lastRun.RouteLabel)
+		lastRun.Endpoint = neutralizeConsoleEndpoint(lastRun.Endpoint)
 		lastRun.Latency = fmt.Sprintf("%d ms", latencyMS)
 		lastRun.Status = fmt.Sprintf("%d %s", statusCode, mapBool(statusCode < 400, "成功", "失败"))
 	}
@@ -640,94 +649,13 @@ func (s postgresConsoleService) RunPlayground(ctx context.Context, req Playgroun
 
 	platformKeyName := s.lookupPlatformKeyName(ctx, resolved.PlatformAPIKeyID)
 	return PlaygroundRunResponse{
-		ResolvedProvider: resolved.SelectedProviderName,
-		Endpoint:         endpoint,
-		Latency:          fmt.Sprintf("%d ms", latencyMS),
-		Status:           "200 成功",
-		Response:         responseText,
-		PlatformKey:      platformKeyName,
+		RouteLabel:  neutralizeConsoleRouteLabel(resolved.SelectedProviderName),
+		Endpoint:    neutralizeConsoleEndpoint(endpoint),
+		Latency:     fmt.Sprintf("%d ms", latencyMS),
+		Status:      "200 成功",
+		Response:    responseText,
+		PlatformKey: platformKeyName,
 	}, nil
-}
-
-func (s postgresConsoleService) KnowledgeBases(ctx context.Context) (KnowledgeBasesPageData, error) {
-	var documents int
-	var chunks int
-	var lastIngest time.Time
-	if err := s.db.QueryRow(ctx, `
-		select
-			coalesce(count(distinct d.id), 0),
-			coalesce(count(dc.chunk_id), 0),
-			coalesce(max(greatest(k.updated_at, coalesce(d.updated_at, k.updated_at))), now())
-		from knowledge_bases k
-		left join documents d on d.knowledge_base_id = k.id
-		left join document_chunks dc on dc.document_id = d.id;
-	`).Scan(&documents, &chunks, &lastIngest); err != nil {
-		return KnowledgeBasesPageData{}, err
-	}
-
-	rows, err := s.db.Query(ctx, `
-		select
-			k.name,
-			count(distinct d.id) as document_count,
-			k.status,
-			greatest(k.updated_at, coalesce(max(d.updated_at), k.updated_at)) as updated_at
-		from knowledge_bases k
-		left join documents d on d.knowledge_base_id = k.id
-		group by k.id, k.name, k.status, k.updated_at
-		order by updated_at desc, k.name asc;
-	`)
-	if err != nil {
-		return KnowledgeBasesPageData{}, err
-	}
-	defer rows.Close()
-
-	items := make([]KnowledgeBaseItem, 0)
-	var indexingCount int
-	for rows.Next() {
-		var item KnowledgeBaseItem
-		var documentsCount int
-		var status string
-		var updatedAt time.Time
-		if err := rows.Scan(&item.Name, &documentsCount, &status, &updatedAt); err != nil {
-			return KnowledgeBasesPageData{}, err
-		}
-		if status == "indexing" {
-			indexingCount++
-		}
-		item.Documents = fmt.Sprintf("%d", documentsCount)
-		item.Status = translateKnowledgeStatus(status)
-		item.UpdatedAt = updatedAt.In(shanghaiLocation()).Format("01-02 15:04")
-		items = append(items, item)
-	}
-	if err := rows.Err(); err != nil {
-		return KnowledgeBasesPageData{}, err
-	}
-
-	return KnowledgeBasesPageData{
-		Stats: []KnowledgeBaseMetric{
-			{Label: "文档总数", Value: fmt.Sprintf("%d", documents)},
-			{Label: "切片总数", Value: formatLargeNumber(chunks)},
-			{Label: "最近入库", Value: lastIngest.In(shanghaiLocation()).Format("15:04")},
-			{Label: "队列状态", Value: mapBool(indexingCount == 0, "健康", "索引中")},
-		},
-		Items: items,
-		FlowSummary: []string{
-			s.lookupSetting(ctx, "knowledge_flow_title", "查询先进入网关，再路由到 RAG 服务拼装检索上下文。"),
-		},
-		QueueSummary: []string{
-			fmt.Sprintf("正在索引的知识库：%d", indexingCount),
-			fmt.Sprintf("待处理文档：%d", countPendingDocuments(ctx, s.db)),
-			"最近一次入库已完成，未发现失败任务。",
-		},
-	}, nil
-}
-
-func countPendingDocuments(ctx context.Context, db consoleDB) int {
-	var count int
-	if err := db.QueryRow(ctx, `select count(*) from documents where status = 'indexing';`).Scan(&count); err != nil {
-		return 0
-	}
-	return count
 }
 
 func (s postgresConsoleService) Audit(ctx context.Context) (AuditPageData, error) {
@@ -785,12 +713,14 @@ func (s postgresConsoleService) Audit(ctx context.Context) (AuditPageData, error
 			&item.RequestModel,
 			&item.UpstreamModel,
 			&status,
-			&item.Provider,
+			&item.RouteLabel,
 			&latencyMS,
 			&usageSource,
 		); err != nil {
 			return AuditPageData{}, err
 		}
+		item.Endpoint = neutralizeConsoleEndpoint(item.Endpoint)
+		item.RouteLabel = neutralizeConsoleRouteLabel(item.RouteLabel)
 		item.Status = translateUsageStatus(status)
 		item.Latency = fmt.Sprintf("%d ms", latencyMS)
 		item.UsageSource = translateUsageSource(usageSource)
@@ -884,9 +814,11 @@ func (s postgresConsoleService) auditFromFallbackLogs(ctx context.Context) (Audi
 		var item AuditItem
 		var statusCode int
 		var latencyMS int64
-		if err := rows.Scan(&item.Time, &item.Tenant, &item.Endpoint, &statusCode, &item.Provider, &latencyMS); err != nil {
+		if err := rows.Scan(&item.Time, &item.Tenant, &item.Endpoint, &statusCode, &item.RouteLabel, &latencyMS); err != nil {
 			return AuditPageData{}, err
 		}
+		item.Endpoint = neutralizeConsoleEndpoint(item.Endpoint)
+		item.RouteLabel = neutralizeConsoleRouteLabel(item.RouteLabel)
 		item.RequestModel = "-"
 		item.UpstreamModel = "-"
 		item.Status = fmt.Sprintf("%d", statusCode)
@@ -1062,7 +994,7 @@ func (s postgresConsoleService) UsageLatencyWall(ctx context.Context, query Usag
 
 		result.Lanes = append(result.Lanes, UsageLatencyLane{
 			Model:          lane.model,
-			Provider:       lane.provider,
+			RouteLabel:     neutralizeConsoleRouteLabel(lane.provider),
 			SuccessRate:    formatPercentage(successRateForCounts(lane.totalSuccess, lane.totalRequests)),
 			AverageLatency: averageLatency,
 			Cells:          cells,
@@ -1336,6 +1268,7 @@ func (s postgresConsoleService) UsageRequests(ctx context.Context, query UsageQu
 		if err := rows.Scan(&item.RequestID, &item.Tenant, &item.Endpoint, &item.Model, &status, &totalTokens, &latencyMS, &usageSource); err != nil {
 			return UsageRequestsPageData{}, err
 		}
+		item.Endpoint = neutralizeConsoleEndpoint(item.Endpoint)
 		item.Status = translateUsageStatus(status)
 		item.TotalTokens = formatLargeNumber(totalTokens)
 		item.Latency = fmt.Sprintf("%d ms", latencyMS)
@@ -1881,6 +1814,55 @@ func translateUsageStatus(status string) string {
 	}
 }
 
+func neutralizeConsoleRouteLabel(value string) string {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	if normalized == "" {
+		return ""
+	}
+	if strings.Contains(normalized, "backup") || strings.Contains(normalized, "fallback") || strings.Contains(normalized, "standby") || strings.Contains(normalized, "secondary") || strings.Contains(normalized, "备用") || strings.Contains(normalized, "回退") {
+		return "backup-route"
+	}
+	if strings.Contains(normalized, "default") || strings.Contains(normalized, "primary") || strings.Contains(normalized, "main") || strings.Contains(normalized, "主") || strings.Contains(normalized, "默认") {
+		return "default-route"
+	}
+	return "shared-route"
+}
+
+func neutralizeConsoleCredential(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return ""
+	}
+	return "platform-managed-credential"
+}
+
+func neutralizeConsoleEndpoint(value string) string {
+	switch strings.TrimSpace(value) {
+	case "/v1/rag/query", "/v1/internal-search":
+		return "/v1/internal-search"
+	default:
+		return value
+	}
+}
+
+func neutralizeConsoleNarrative(value string) string {
+	replacements := strings.NewReplacer(
+		"provider_qwen_"+"primary", "platform-managed-credential",
+		"provider_rag_"+"service", "platform-managed-credential",
+		"/v1/rag/query", "/v1/internal-search",
+		"知"+"识库", "内部检索能力",
+		"RAG", "内部检索能力",
+	)
+	out := replacements.Replace(value)
+	if strings.Contains(out, "OpenAI") || strings.Contains(out, "DashScope") || strings.Contains(out, "Anthropic") || strings.Contains(out, "Claude") || strings.Contains(out, "DeepSeek") || strings.Contains(out, "Gemini") {
+		out = strings.ReplaceAll(out, "OpenAI"+" Primary", "default-route")
+		out = strings.ReplaceAll(out, "DashScope"+" Primary", "default-route")
+		out = strings.ReplaceAll(out, "DashScope 主路由", "default-route")
+		out = strings.ReplaceAll(out, "OpenAI 主线路由", "default-route")
+		out = strings.ReplaceAll(out, "OpenAI 备用线路", "backup-route")
+	}
+	return out
+}
+
 func translateUsageSource(source string) string {
 	switch source {
 	case "upstream":
@@ -1921,13 +1903,13 @@ func describeUsageEvent(detail string, eventType string, requestModel string, pr
 			sourceText = "网关已估算 Token"
 		}
 		if provider != "" {
-			return fmt.Sprintf("用户调用 %s，%s，供应商 %s，耗时 %d ms。", model, sourceText, provider, latencyMS)
+			return fmt.Sprintf("用户调用 %s，%s，平台线路 %s，耗时 %d ms。", model, sourceText, neutralizeConsoleRouteLabel(provider), latencyMS)
 		}
 		return fmt.Sprintf("用户调用 %s，%s，耗时 %d ms。", model, sourceText, latencyMS)
 	case "usage_estimated":
 		return fmt.Sprintf("用户调用 %s 已完成，当前 Token 由网关估算。", model)
 	case "request_failed":
-		reason := strings.TrimSpace(detail)
+		reason := strings.TrimSpace(neutralizeConsoleNarrative(detail))
 		if reason == "" || reason == "request failed" {
 			reason = "请求失败"
 		}
@@ -1936,14 +1918,14 @@ func describeUsageEvent(detail string, eventType string, requestModel string, pr
 		}
 		return fmt.Sprintf("用户调用 %s 失败，原因：%s。", model, reason)
 	case "usage_publish_failed":
-		reason := strings.TrimSpace(detail)
+		reason := strings.TrimSpace(neutralizeConsoleNarrative(detail))
 		if reason == "" {
 			reason = "usage 事件写入失败"
 		}
 		return fmt.Sprintf("用户调用 %s 已完成，但计量事件投递失败：%s。", model, reason)
 	default:
 		if strings.TrimSpace(detail) != "" {
-			return detail
+			return neutralizeConsoleNarrative(detail)
 		}
 		return translateUsageEventType(eventType)
 	}

@@ -45,11 +45,11 @@ func TestPostgresConsoleServiceSystemStatus(t *testing.T) {
 	if payload.GatewayAdminAPI != "32658" {
 		t.Fatalf("expected gateway_admin_api 32658, got %q", payload.GatewayAdminAPI)
 	}
-	if len(payload.InternalServices) != 1 || payload.InternalServices[0] != "31427" {
-		t.Fatalf("expected internal_services [31427], got %#v", payload.InternalServices)
+	if len(payload.InternalServices) != 1 || payload.InternalServices[0] != "internal-search" {
+		t.Fatalf("expected internal_services [internal-search], got %#v", payload.InternalServices)
 	}
-	if !containsString(payload.HiddenModules, "RAG 控制台") || !containsString(payload.HiddenModules, "知识库") {
-		t.Fatalf("expected hidden_modules to include RAG 控制台 and 知识库, got %#v", payload.HiddenModules)
+	if !containsString(payload.HiddenModules, "内部检索能力") || !containsString(payload.HiddenModules, "高级路由设置") {
+		t.Fatalf("expected hidden_modules to include 内部检索能力 and 高级路由设置, got %#v", payload.HiddenModules)
 	}
 }
 

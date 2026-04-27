@@ -122,7 +122,7 @@ func TestNewServerAppRoutesRAGRequestsToDedicatedRAGService(t *testing.T) {
 		RAGServiceBaseURL:            ragServer.URL,
 	})
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/rag/query", bytes.NewBufferString(`{"tenant_id":"client_tenant","knowledge_base_id":"kb_demo","question":"Where is the answer?"}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/internal-search", bytes.NewBufferString(`{"tenant_id":"client_tenant","knowledge_base_id":"kb_demo","question":"Where is the answer?"}`))
 	req.Header.Set("Authorization", "Bearer platform-live-key")
 	req.Header.Set("Content-Type", "application/json")
 

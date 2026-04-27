@@ -4,6 +4,7 @@ import {
   StatCard,
   TableSection,
 } from "../components/console";
+import { neutralizeLineLabel } from "../lib/platform-routing";
 import { getOverview } from "../lib/console-api";
 import { useRemoteData } from "../lib/use-remote-data";
 
@@ -28,8 +29,13 @@ export function DashboardPage() {
       <div className="two-column-grid">
         <TableSection
           title="路由健康"
-          columns={["请求模型", "解析供应商", "延迟", "状态"]}
-          rows={data.route_health.map((row) => row.columns)}
+          columns={["请求模型", "平台路由结果", "延迟", "状态"]}
+          rows={data.route_health.map((row) => [
+            row.columns[0] ?? "",
+            neutralizeLineLabel(row.columns[1] ?? ""),
+            row.columns[2] ?? "",
+            row.columns[3] ?? "",
+          ])}
         />
         <TableSection
           title="热门模型"

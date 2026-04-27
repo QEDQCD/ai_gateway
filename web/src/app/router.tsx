@@ -19,6 +19,23 @@ type ConsoleRouteDefinition = ConsoleNavigationItem & {
   element: ReactElement;
 };
 
+const adminHiddenNavigation = [
+  {
+    path: "/routes",
+    label: "路由",
+    title: "路由",
+    description: "检查模型映射、路由标签与执行策略。",
+    element: <RoutesPage />,
+  },
+  {
+    path: "/playground",
+    label: "调试场",
+    title: "调试场",
+    description: "在正式使用前验证平台接口与处理链路结果。",
+    element: <PlaygroundPage />,
+  },
+] satisfies readonly ConsoleRouteDefinition[];
+
 export const adminNavigation = [
   {
     path: "/applications",
@@ -38,7 +55,7 @@ export const adminNavigation = [
     path: "/",
     label: "总览",
     title: "总览",
-    description: "查看网关健康、路由态势与核心平台指标。",
+    description: "查看网关健康、租户态势与核心平台指标。",
     element: <DashboardPage />,
   },
   {
@@ -47,20 +64,6 @@ export const adminNavigation = [
     title: "API 密钥",
     description: "管理平台密钥、权限范围与租户访问状态。",
     element: <APIKeysPage />,
-  },
-  {
-    path: "/routes",
-    label: "路由",
-    title: "路由",
-    description: "检查模型映射、供应商解析与回退策略。",
-    element: <RoutesPage />,
-  },
-  {
-    path: "/playground",
-    label: "调试场",
-    title: "调试场",
-    description: "在正式使用前验证模型请求与路由结果。",
-    element: <PlaygroundPage />,
   },
   {
     path: "/usage",
@@ -73,7 +76,7 @@ export const adminNavigation = [
     path: "/audit",
     label: "审计",
     title: "审计",
-    description: "追踪请求历史、供应商解析与运维事件。",
+    description: "追踪请求历史、处理链路与运维事件。",
     element: <AuditPage />,
   },
 ] satisfies readonly ConsoleRouteDefinition[];
@@ -88,30 +91,30 @@ export const memberNavigation = [
   },
   {
     path: "/api-keys",
-    label: "我的密钥",
-    title: "我的密钥",
-    description: "管理当前成员创建的 API 密钥与使用范围。",
+    label: "API 密钥",
+    title: "API 密钥",
+    description: "自助创建、轮换与停用平台密钥。",
     element: <APIKeysPage />,
   },
   {
     path: "/usage",
-    label: "调用观测",
-    title: "调用观测",
-    description: "查看当前租户请求量、成功率和成本估算。",
+    label: "调用记录",
+    title: "调用记录",
+    description: "查看当前租户请求、Token 与状态。",
     element: <MemberUsagePage />,
   },
   {
     path: "/failures",
-    label: "失败分析",
-    title: "失败分析",
-    description: "定位失败类别、时间分布与最近异常请求。",
+    label: "失败记录",
+    title: "失败记录",
+    description: "查看失败分类、阶段和可重试性。",
     element: <MemberFailuresPage />,
   },
   {
     path: "/audit",
-    label: "审计记录",
-    title: "审计记录",
-    description: "查看成员侧密钥操作与租户内审计事件。",
+    label: "审计轨迹",
+    title: "审计轨迹",
+    description: "查看关键操作和风控提示。",
     element: <AuditPage />,
   },
 ] satisfies readonly ConsoleRouteDefinition[];
@@ -148,7 +151,7 @@ function createRouteTree(session: ConsoleSession) {
   const children =
     session.role === "member"
       ? [{ index: true, element: <Navigate to="/me" replace /> }, ...navigation.map(createChildRoute)]
-      : navigation.map(createChildRoute);
+      : [...navigation, ...adminHiddenNavigation].map(createChildRoute);
 
   return [
     {

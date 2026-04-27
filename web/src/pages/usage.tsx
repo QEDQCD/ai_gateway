@@ -16,6 +16,7 @@ import {
   getUsageRequests,
   getUsageTrends,
 } from "../lib/console-api";
+import { neutralizeLineLabel, neutralizePlatformNarrative } from "../lib/platform-routing";
 import { useRemoteData } from "../lib/use-remote-data";
 
 const PAGE_SIZE = 20;
@@ -150,7 +151,7 @@ export function UsagePage() {
         {latencyWall.data.lanes.length > 0 ? (
           <div className="usage-wall__board">
             <div className="usage-wall__header">
-              <div>模型 / 供应商</div>
+              <div>模型 / 平台线路</div>
               <div className="usage-wall__bucket-row">
                 {latencyWall.data.buckets.map((bucket) => (
                   <span key={bucket}>{bucket}</span>
@@ -158,10 +159,13 @@ export function UsagePage() {
               </div>
             </div>
             {latencyWall.data.lanes.map((lane) => (
-              <div key={`${lane.model}-${lane.provider}`} className="usage-wall__lane">
+              <div
+                key={`${lane.model}-${neutralizeLineLabel(lane.route_label)}`}
+                className="usage-wall__lane"
+              >
                 <div className="usage-wall__meta">
                   <strong>{lane.model}</strong>
-                  <span>{lane.provider}</span>
+                  <span>{neutralizeLineLabel(lane.route_label)}</span>
                   <span>成功率 {lane.success_rate}</span>
                   <span>平均延迟 {lane.average_latency}</span>
                 </div>
@@ -219,7 +223,7 @@ export function UsagePage() {
           {failures.data.recent_events.length > 0 ? (
             <ul className="event-timeline">
               {failures.data.recent_events.map((event) => (
-                <li key={event}>{event}</li>
+                <li key={event}>{neutralizePlatformNarrative(event)}</li>
               ))}
             </ul>
           ) : (

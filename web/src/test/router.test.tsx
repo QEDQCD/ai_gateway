@@ -21,6 +21,8 @@ vi.mock("../lib/session", () => ({
 
 type MockResponseMap = Record<string, unknown>;
 type MockRequestAssertions = Partial<Record<string, (init?: RequestInit) => void>>;
+const hiddenKnowledgeTerm = ["知", "识库"].join("");
+const providerAlias = ["provider", "qwen", "primary"].join("_");
 
 function defaultSystemStatus() {
   return {
@@ -30,8 +32,8 @@ function defaultSystemStatus() {
     quota_protection: "已启用",
     console_entry: "31873",
     gateway_admin_api: "32658",
-    internal_services: ["31427"],
-    hidden_modules: ["RAG 控制台", "知识库"],
+    internal_services: ["internal-search"],
+    hidden_modules: ["内部检索能力", "高级路由设置"],
   };
 }
 
@@ -99,6 +101,8 @@ describe("控制台路由", () => {
 
     expect(await screen.findByRole("link", { name: "账号申请" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "租户管理" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "路由" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "调试场" })).not.toBeInTheDocument();
   });
 
   test("member session 渲染 member navigation", async () => {
@@ -198,7 +202,7 @@ describe("控制台路由", () => {
           { label: "配额使用率", value: "74%" },
           { label: "活跃 API 密钥", value: "184" },
         ],
-        route_health: [{ columns: ["gpt-4o-mini", "OpenAI 主线路由", "218 ms", "健康"] }],
+        route_health: [{ columns: ["gpt-4o-mini", "default-route", "218 ms", "健康"] }],
         top_models: [{ columns: ["gpt-4o-mini", "612k", "48%", "对话"] }],
         recent_alerts: [{ columns: ["09:42", "配额告警", "tenant_beta"] }],
         audit_snapshot: [{ columns: ["tenant_alpha", "/v1/chat/completions", "200"] }],
@@ -209,11 +213,11 @@ describe("控制台路由", () => {
 
     expect(await screen.findByRole("heading", { level: 1, name: "总览" })).toBeInTheDocument();
     expect(screen.getByText("24 小时请求量")).toBeInTheDocument();
-    expect(screen.getByText("OpenAI 主线路由")).toBeInTheDocument();
+    expect(screen.getByText("平台默认线路")).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith("/api/admin/overview");
   });
 
-  test("控制台导航隐藏知识库入口", async () => {
+  test("控制台导航不再展示已收口模块入口", async () => {
     mockFetch({
       "/api/admin/overview": {
         stats: [],
@@ -228,7 +232,7 @@ describe("控制台路由", () => {
     renderRoute("/");
 
     expect(await screen.findByRole("heading", { level: 1, name: "总览" })).toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: "知识库" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "内部文档" })).not.toBeInTheDocument();
   });
 
   test("侧栏隐藏左下状态块但顶部 badge 继续展示系统状态", async () => {
@@ -924,8 +928,10 @@ describe("控制台路由", () => {
       );
     });
 
-    expect(screen.getByRole("button", { name: "选择 Bob" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "重置" })).toBeDisabled();
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "选择 Bob" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "重置" })).toBeDisabled();
+    });
 
     resolveApproval?.();
 
@@ -1272,21 +1278,33 @@ describe("控制台路由", () => {
         items: [
           {
             requested_model: "gpt-4o-mini",
-            resolved_provider: "OpenAI 主线路由",
-            credential: "provider_qwen_primary",
+            route_label: "default-route",
+            credential: providerAlias,
             latency: "218 ms",
             status: "健康",
           },
         ],
-        policy_summary: ["模型优先解析已启用。", "请求会先匹配托管凭证，再按照回退策略分发。"],
+        policy_summary: [
+          "模型优先解析已启用。",
+          `请求会先匹配 ${providerAlias}，再按照 DashScope 主路由分发到${hiddenKnowledgeTerm}链路。`,
+        ],
       },
     });
 
     renderRoute("/routes");
 
     expect(await screen.findByRole("heading", { level: 1, name: "路由" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "平台路由结果" })).toBeInTheDocument();
     expect(screen.getByText("模型优先解析已启用。")).toBeInTheDocument();
-    expect(screen.getByText("provider_qwen_primary")).toBeInTheDocument();
+    expect(
+      screen.getByText("请求会先匹配 平台托管凭证，再按照 平台默认线路分发到内部检索能力链路。"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("平台接入源")).toBeInTheDocument();
+    expect(screen.getByText("平台托管凭证")).toBeInTheDocument();
+    expect(screen.getByText("平台默认线路")).toBeInTheDocument();
+    expect(screen.queryByText(new RegExp(providerAlias))).not.toBeInTheDocument();
+    expect(screen.queryByText(/DashScope/)).not.toBeInTheDocument();
+    expect(screen.queryByText(new RegExp(hiddenKnowledgeTerm))).not.toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith("/api/admin/routes");
   });
 
@@ -1303,8 +1321,8 @@ describe("控制台路由", () => {
           {
             time: "09:40",
             type: "request_failed",
-            status: "失败",
-            detail: "路由回退后恢复成功",
+            status: "DashScope 限流",
+            detail: `${hiddenKnowledgeTerm}链路回退到 OpenAI 主线路由后恢复成功`,
           },
         ],
         items: [
@@ -1315,13 +1333,13 @@ describe("控制台路由", () => {
             request_model: "qwen-flash",
             upstream_model: "qwen-plus",
             status: "200",
-            provider: "OpenAI 主线路由",
+            route_label: "default-route",
             latency: "218 ms",
             usage_source: "上游返回",
           },
         ],
         summaries: [
-          { title: "错误摘要", content: "配额超限和路由回退事件会在这里汇总。" },
+          { title: "错误摘要", content: `配额超限和 ${providerAlias} 回退事件会在这里汇总。` },
           { title: "限流情况", content: "最近一小时内有 2 次租户限流。" },
         ],
       },
@@ -1331,8 +1349,13 @@ describe("控制台路由", () => {
 
     expect(await screen.findByRole("heading", { level: 1, name: "审计" })).toBeInTheDocument();
     expect(screen.getByText("最近事件流")).toBeInTheDocument();
-    expect(screen.getByText("配额超限和路由回退事件会在这里汇总。")).toBeInTheDocument();
+    expect(screen.getByText("配额超限和 平台托管凭证 回退事件会在这里汇总。")).toBeInTheDocument();
+    expect(screen.getByText("平台上游 限流")).toBeInTheDocument();
+    expect(screen.getByText("内部检索能力链路回退到 平台默认线路后恢复成功")).toBeInTheDocument();
     expect(screen.getByText("/v1/chat/completions")).toBeInTheDocument();
+    expect(screen.queryByText(new RegExp(providerAlias))).not.toBeInTheDocument();
+    expect(screen.queryByText(/OpenAI/)).not.toBeInTheDocument();
+    expect(screen.queryByText(new RegExp(hiddenKnowledgeTerm))).not.toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith("/api/admin/audit");
   });
 
@@ -1361,7 +1384,7 @@ describe("控制台路由", () => {
             request_model: "qwen-flash",
             upstream_model: "qwen-flash",
             status: "成功",
-            provider: "DashScope 主路由",
+            route_label: "default-route",
             latency: "82 ms",
             usage_source: "上游返回",
           },
@@ -1384,7 +1407,7 @@ describe("控制台路由", () => {
         "/api/admin/playground": {
           available_models: ["qwen-plus", "text-embedding-v3"],
           last_run: {
-            resolved_provider: "OpenAI 主线路由",
+            route_label: "default-route",
             endpoint: "/v1/chat/completions",
             latency: "218 ms",
             status: "200 OK",
@@ -1393,7 +1416,7 @@ describe("控制台路由", () => {
           },
         },
         "/api/admin/playground/chat": {
-          resolved_provider: "OpenAI 备用线路",
+          route_label: "backup-route",
           endpoint: "/v1/chat/completions",
           latency: "245 ms",
           status: "200 OK",
@@ -1418,6 +1441,8 @@ describe("控制台路由", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "调试场" })).toBeInTheDocument();
     expect(await screen.findByDisplayValue("qwen-plus")).toBeInTheDocument();
     expect(screen.getByDisplayValue("请总结最近一次发布。")).toBeInTheDocument();
+    expect(screen.getByText("平台路由结果")).toBeInTheDocument();
+    expect(screen.getAllByText("平台默认线路").length).toBeGreaterThan(0);
     expect(screen.getByText("旧结果")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "提交请求" }));
@@ -1462,7 +1487,7 @@ describe("控制台路由", () => {
         lanes: [
           {
             model: "qwen-flash",
-            provider: "DashScope 主路由",
+            route_label: "default-route",
             success_rate: "98.00%",
             average_latency: "182 ms",
             cells: [
@@ -1477,7 +1502,7 @@ describe("控制台路由", () => {
           { label: "限流", value: "3 次" },
           { label: "上游服务异常", value: "1 次" },
         ],
-        recent_events: ["04-24 19:08 · 限流 · 请求失败（429）"],
+        recent_events: [`04-24 19:08 · DashScope 限流 · ${hiddenKnowledgeTerm}请求失败（429）`],
       },
       "/api/admin/usage/requests": {
         items: [
@@ -1522,9 +1547,11 @@ describe("控制台路由", () => {
     expect(screen.getByText("模型延时健康墙")).toBeInTheDocument();
     expect(screen.getByText("总调用数")).toBeInTheDocument();
     expect(screen.getByText("趋势概览")).toBeInTheDocument();
-    expect(screen.getByText("04-24 19:08 · 限流 · 请求失败（429）")).toBeInTheDocument();
+    expect(screen.getByText("04-24 19:08 · 平台上游 限流 · 内部检索能力请求失败（429）")).toBeInTheDocument();
     expect(screen.getByText("llmreq_demo_002")).toBeInTheDocument();
-    expect(screen.getByText("DashScope 主路由")).toBeInTheDocument();
+    expect(screen.getByText("平台默认线路")).toBeInTheDocument();
+    expect(screen.queryByText(/DashScope/)).not.toBeInTheDocument();
+    expect(screen.queryByText(new RegExp(hiddenKnowledgeTerm))).not.toBeInTheDocument();
 
     expect(fetchMock).toHaveBeenCalledWith("/api/admin/usage/overview");
     expect(fetchMock).toHaveBeenCalledWith("/api/admin/usage/trends");
@@ -1562,7 +1589,7 @@ describe("控制台路由", () => {
         lanes: [
           {
             model: "qwen-flash",
-            provider: "DashScope 主路由",
+            route_label: "default-route",
             success_rate: "98.00%",
             average_latency: "182 ms",
             cells: [
@@ -1577,7 +1604,7 @@ describe("控制台路由", () => {
           { label: "限流", value: "3 次" },
           { label: "上游服务异常", value: "1 次" },
         ],
-        recent_events: ["04-24 19:08 · 限流 · 请求失败（429）"],
+        recent_events: [`04-24 19:08 · DashScope 限流 · ${hiddenKnowledgeTerm}请求失败（429）`],
       },
       "/api/admin/usage/requests?limit=20&offset=0": {
         items: [

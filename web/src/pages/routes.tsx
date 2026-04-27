@@ -6,13 +6,19 @@ import {
   SummarySection,
 } from "../components/console";
 import { getRoutes } from "../lib/console-api";
+import {
+  neutralizeCredentialLabel,
+  neutralizeLineLabel,
+  neutralizePlatformNarrative,
+  neutralizeRouteMetricLabel,
+} from "../lib/platform-routing";
 import { useRemoteData } from "../lib/use-remote-data";
 
 export function RoutesPage() {
   const { data, loading, error } = useRemoteData(getRoutes);
 
   if (loading) {
-    return <LoadingSection text="正在加载路由策略..." />;
+    return <LoadingSection text="正在加载平台路由..." />;
   }
 
   if (error || !data) {
@@ -23,23 +29,30 @@ export function RoutesPage() {
     <div className="page-grid">
       <div className="stats-grid">
         {data.stats.map((item) => (
-          <StatCard key={item.label} label={item.label} value={item.value} />
+          <StatCard
+            key={item.label}
+            label={neutralizeRouteMetricLabel(item.label)}
+            value={item.value}
+          />
         ))}
       </div>
       <section className="section-card">
-        <h2>路由明细</h2>
+        <h2>执行线路明细</h2>
         <DataTable
-          columns={["请求模型", "解析供应商", "凭证", "延迟", "状态"]}
+          columns={["请求模型", "平台路由结果", "平台凭证", "延迟", "状态"]}
           rows={data.items.map((item) => [
             item.requested_model,
-            item.resolved_provider,
-            item.credential,
+            neutralizeLineLabel(item.route_label),
+            neutralizeCredentialLabel(item.credential),
             item.latency,
             item.status,
           ])}
         />
       </section>
-      <SummarySection title="路由策略说明" items={data.policy_summary} />
+      <SummarySection
+        title="处理链路说明"
+        items={data.policy_summary.map((item) => neutralizePlatformNarrative(item))}
+      />
     </div>
   );
 }

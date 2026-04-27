@@ -46,7 +46,7 @@ func TestRAGQueryProxy(t *testing.T) {
 
 	app, _ := newGatewayApp(t, providerServer.URL+"/v1", providerServer.URL)
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/rag/query", bytes.NewBufferString(`{"tenant_id":"tenant_client","knowledge_base_id":"kb_demo","question":"Where is the answer?"}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/internal-search", bytes.NewBufferString(`{"tenant_id":"tenant_client","knowledge_base_id":"kb_demo","question":"Where is the answer?"}`))
 	req.Header.Set("Authorization", "Bearer platform-live-key")
 	req.Header.Set("Content-Type", "application/json")
 
@@ -95,7 +95,7 @@ func TestRAGQueryProxy(t *testing.T) {
 		t.Fatalf("expected upstream question %q, got %q", "Where is the answer?", got.Question)
 	}
 
-	unauthorizedReq := httptest.NewRequest(http.MethodPost, "/v1/rag/query", bytes.NewBufferString(`{"knowledge_base_id":"kb_demo","question":"Where is the answer?"}`))
+	unauthorizedReq := httptest.NewRequest(http.MethodPost, "/v1/internal-search", bytes.NewBufferString(`{"knowledge_base_id":"kb_demo","question":"Where is the answer?"}`))
 	unauthorizedReq.Header.Set("Authorization", "Bearer platform-wrong-key")
 	unauthorizedReq.Header.Set("Content-Type", "application/json")
 

@@ -151,16 +151,6 @@ func ConsoleRunPlayground(console service.ConsoleService) fiber.Handler {
 	}
 }
 
-func ConsoleKnowledgeBases(console service.ConsoleService) fiber.Handler {
-	return func(c *fiber.Ctx) error {
-		payload, err := console.KnowledgeBases(c.UserContext())
-		if err != nil {
-			return consoleError(err)
-		}
-		return c.JSON(payload)
-	}
-}
-
 func ConsoleAudit(console service.ConsoleService) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		payload, err := console.Audit(c.UserContext())

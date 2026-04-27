@@ -6,6 +6,7 @@ import {
   runPlayground,
   type PlaygroundRunResponse,
 } from "../lib/console-api";
+import { neutralizeLineLabel } from "../lib/platform-routing";
 import { useRemoteData } from "../lib/use-remote-data";
 
 const DEFAULT_PROMPT = "请总结最近一次发布。";
@@ -28,7 +29,7 @@ export function PlaygroundPage() {
   }, [data]);
 
   if (loading) {
-    return <LoadingSection text="正在加载调试场配置..." />;
+    return <LoadingSection text="正在加载接口验证配置..." />;
   }
 
   if (error || !data) {
@@ -37,6 +38,7 @@ export function PlaygroundPage() {
 
   const selectedModel = model || data.available_models[0] || "";
   const currentRun = lastRun ?? data.last_run ?? null;
+  const visibleRouteLabel = currentRun ? neutralizeLineLabel(currentRun.route_label) : "";
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -63,7 +65,7 @@ export function PlaygroundPage() {
     <div className="page-grid">
       <div className="two-column-grid">
         <section className="section-card">
-          <h2>请求调试</h2>
+          <h2>接口验证</h2>
           <form className="form-grid" onSubmit={handleSubmit}>
             <label className="field-shell">
               <span>模型</span>
@@ -99,13 +101,13 @@ export function PlaygroundPage() {
           </form>
         </section>
         <section className="section-card">
-          <h3>最近一次结果</h3>
+          <h3>最近一次执行结果</h3>
           <DetailList
             items={
               currentRun
                 ? [
-                    { label: "解析供应商", value: currentRun.resolved_provider },
-                    { label: "端点", value: currentRun.endpoint },
+                    { label: "平台路由结果", value: visibleRouteLabel },
+                    { label: "执行端点", value: currentRun.endpoint },
                     { label: "延迟", value: currentRun.latency },
                     { label: "状态", value: currentRun.status },
                     { label: "响应内容", value: currentRun.response },
@@ -122,8 +124,8 @@ export function PlaygroundPage() {
             currentRun
               ? [
                   { label: "平台密钥", value: currentRun.platform_key },
-                  { label: "解析供应商", value: currentRun.resolved_provider },
-                  { label: "端点", value: currentRun.endpoint },
+                  { label: "处理链路", value: visibleRouteLabel },
+                  { label: "执行端点", value: currentRun.endpoint },
                 ]
               : []
           }

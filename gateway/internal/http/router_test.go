@@ -128,8 +128,8 @@ func TestAdminSystemStatusRouteReturnsConsoleData(t *testing.T) {
 				QuotaProtection:  "已启用",
 				ConsoleEntry:     "31873",
 				GatewayAdminAPI:  "32658",
-				InternalServices: []string{"31427"},
-				HiddenModules:    []string{"RAG 控制台", "知识库"},
+				InternalServices: []string{"internal-search"},
+				HiddenModules:    []string{"内部检索能力", "高级路由设置"},
 			},
 		},
 	})
@@ -149,7 +149,7 @@ func TestAdminSystemStatusRouteReturnsConsoleData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("io.ReadAll failed: %v", err)
 	}
-	expected := `{"console_stage":"控制台预览版","run_mode":"数据库模式","gateway_health":"健康","quota_protection":"已启用","console_entry":"31873","gateway_admin_api":"32658","internal_services":["31427"],"hidden_modules":["RAG 控制台","知识库"]}`
+	expected := `{"console_stage":"控制台预览版","run_mode":"数据库模式","gateway_health":"健康","quota_protection":"已启用","console_entry":"31873","gateway_admin_api":"32658","internal_services":["internal-search"],"hidden_modules":["内部检索能力","高级路由设置"]}`
 	if string(body) != expected {
 		t.Fatalf("expected body %q, got %q", expected, string(body))
 	}
@@ -678,7 +678,7 @@ func TestAdminUsageLatencyWallRouteReturnsConsoleData(t *testing.T) {
 				Lanes: []service.UsageLatencyLane{
 					{
 						Model:          "qwen-flash",
-						Provider:       "DashScope 主路由",
+						RouteLabel:     "default-route",
 						SuccessRate:    "98.00%",
 						AverageLatency: "182 ms",
 						Cells: []service.UsageLatencyCell{
@@ -710,7 +710,7 @@ func TestAdminUsageLatencyWallRouteReturnsConsoleData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("io.ReadAll failed: %v", err)
 	}
-	expected := `{"window_label":"最近 24 小时","buckets":["04-24 18:00"],"lanes":[{"model":"qwen-flash","provider":"DashScope 主路由","success_rate":"98.00%","average_latency":"182 ms","cells":[{"bucket_label":"04-24 18:00","latency":"148 ms","status":"健康","requests":"12 次"}]}]}`
+	expected := `{"window_label":"最近 24 小时","buckets":["04-24 18:00"],"lanes":[{"model":"qwen-flash","route_label":"default-route","success_rate":"98.00%","average_latency":"182 ms","cells":[{"bucket_label":"04-24 18:00","latency":"148 ms","status":"健康","requests":"12 次"}]}]}`
 	if string(body) != expected {
 		t.Fatalf("expected body %q, got %q", expected, string(body))
 	}
@@ -1080,7 +1080,7 @@ func TestAuthCheckRouteWithInjectedAuthServiceReturnsSuccess(t *testing.T) {
 			TenantID:             "tenant_123",
 			PlatformAPIKeyID:     "pak_123",
 			SelectedProviderID:   "pc_123",
-			SelectedProviderName: "OpenAI Primary",
+			SelectedProviderName: "Platform Default Route",
 		},
 	}
 	app := apphttp.NewRouterWithAuth(stub)
@@ -1288,10 +1288,6 @@ func (s stubConsoleService) Playground(context.Context) (service.PlaygroundPageD
 
 func (s stubConsoleService) RunPlayground(context.Context, service.PlaygroundRunRequest) (service.PlaygroundRunResponse, error) {
 	return service.PlaygroundRunResponse{}, nil
-}
-
-func (s stubConsoleService) KnowledgeBases(context.Context) (service.KnowledgeBasesPageData, error) {
-	return service.KnowledgeBasesPageData{}, nil
 }
 
 func (s stubConsoleService) Audit(context.Context) (service.AuditPageData, error) {

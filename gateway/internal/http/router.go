@@ -92,7 +92,6 @@ func NewRouterWithDependencies(deps RouterDependencies) *fiber.App {
 	admin.Get("/routes", handlers.ConsoleRoutes(deps.ConsoleService))
 	admin.Get("/playground", handlers.ConsolePlayground(deps.ConsoleService))
 	admin.Post("/playground/chat", handlers.ConsoleRunPlayground(deps.ConsoleService))
-	admin.Get("/knowledge-bases", handlers.ConsoleKnowledgeBases(deps.ConsoleService))
 	admin.Get("/audit", handlers.ConsoleAudit(deps.ConsoleService))
 	admin.Get("/usage/overview", handlers.ConsoleUsageOverview(deps.ConsoleService))
 	admin.Get("/usage/trends", handlers.ConsoleUsageTrends(deps.ConsoleService))
@@ -122,6 +121,6 @@ func NewRouterWithDependencies(deps RouterDependencies) *fiber.App {
 	})
 	v1.Post("/chat/completions", handlers.ChatCompletion(deps.ChatProxy))
 	v1.Post("/embeddings", handlers.Embeddings(deps.EmbeddingProxy))
-	v1.Post("/rag/query", handlers.RAGQuery(deps.RAGProxy))
+	v1.Post("/internal-search", handlers.RAGQuery(deps.RAGProxy))
 	return app
 }

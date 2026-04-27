@@ -40,7 +40,7 @@ services:
       dockerfile: model-service/Dockerfile
     restart: unless-stopped
 
-  rag-service:
+  internal-search:
     build:
       context: ../..
       dockerfile: rag-service/Dockerfile
@@ -55,8 +55,6 @@ services:
       RAG_LLM_API_KEY_FILE: "/run/secrets/dashscope_api_key"
       RAG_LLM_CHAT_MODEL: "qwen-flash"
       RAG_LLM_EMBEDDING_MODEL: "text-embedding-v4"
-    ports:
-      - "31427:8000"
     volumes:
       - ${AI_GATEWAY_SECRET_DIR:-../../.ai_gateway_secrets}/dashscope_api_key:/run/secrets/dashscope_api_key:ro
 
@@ -69,21 +67,21 @@ services:
       - postgres
       - redis
       - rabbitmq
-      - rag-service
+      - internal-search
       - model-service
     environment:
       GATEWAY_LISTEN_ADDR: ":8080"
       GATEWAY_DATABASE_URL: "postgres://${POSTGRES_USER:-example-db-user}:${POSTGRES_PASSWORD:-change-me-db-password}@postgres:5432/${POSTGRES_DB:-ai_gateway}?sslmode=disable"
       GATEWAY_REDIS_URL: "redis://${REDIS_USERNAME:-example-cache-user}:${REDIS_PASSWORD:-change-me-cache-password}@redis:6379/0"
       GATEWAY_RABBITMQ_URL: "amqp://${RABBITMQ_DEFAULT_USER:-example-mq-user}:${RABBITMQ_DEFAULT_PASS:-change-me-mq-password}@rabbitmq:5672/${RABBITMQ_DEFAULT_VHOST:-ai_gateway}"
-      GATEWAY_RAG_SERVICE_BASE_URL: "http://rag-service:8000"
+      GATEWAY_RAG_SERVICE_BASE_URL: "http://internal-search:8000"
       GATEWAY_RAG_SERVICE_USERNAME: "${RAG_SERVICE_BASIC_AUTH_USERNAME:-example-rag-user}"
       GATEWAY_RAG_SERVICE_PASSWORD: "${RAG_SERVICE_BASIC_AUTH_PASSWORD:-change-me-rag-password}"
       GATEWAY_SERVICE_AUTH_USERNAME: "${GATEWAY_SERVICE_AUTH_USERNAME:-example-console-user}"
       GATEWAY_SERVICE_AUTH_PASSWORD: "${GATEWAY_SERVICE_AUTH_PASSWORD:-change-me-console-password}"
       GATEWAY_SEED_PLATFORM_API_KEY_FILE: "/run/secrets/gateway_seed_platform_api_key"
       GATEWAY_SEED_PROVIDER: "dashscope"
-      GATEWAY_SEED_PROVIDER_DISPLAY_NAME: "DashScope Primary"
+      GATEWAY_SEED_PROVIDER_DISPLAY_NAME: "Platform Default Route"
       GATEWAY_SEED_PROVIDER_BASE_URL: "https://dashscope.aliyuncs.com/compatible-mode/v1"
       GATEWAY_SEED_PROVIDER_API_KEY_FILE: "/run/secrets/dashscope_api_key"
       GATEWAY_PROVIDER_SECRET_KEY_FILE: "/run/secrets/provider_master_key"

@@ -2,6 +2,7 @@ import { useCallback } from "react";
 
 import { DataTable, ErrorSection, LoadingSection, StatCard } from "../components/console";
 import { getAudit, getMemberAuditEvents } from "../lib/console-api";
+import { neutralizeLineLabel, neutralizePlatformNarrative } from "../lib/platform-routing";
 import { useConsoleSession } from "../lib/session";
 import { useRemoteData } from "../lib/use-remote-data";
 
@@ -57,7 +58,7 @@ export function AuditPage() {
       <section className="section-card">
         <h2>审计明细</h2>
         <DataTable
-          columns={["时间", "租户", "端点", "请求模型", "上游模型", "状态", "供应商", "延迟", "计量来源"]}
+          columns={["时间", "租户", "端点", "请求模型", "上游模型", "状态", "平台线路", "延迟", "计量来源"]}
           rows={items.map((item) => [
             item.time,
             item.tenant,
@@ -65,7 +66,7 @@ export function AuditPage() {
             item.request_model,
             item.upstream_model,
             item.status,
-            item.provider,
+            neutralizeLineLabel(item.route_label),
             item.latency,
             item.usage_source,
           ])}
@@ -79,8 +80,8 @@ export function AuditPage() {
               {events.map((event) => (
                 <li key={`${event.time}-${event.type}`}>
                   <strong>{event.time}</strong>
-                  <p>{event.status}</p>
-                  <p>{event.detail}</p>
+                  <p>{neutralizePlatformNarrative(event.status)}</p>
+                  <p>{neutralizePlatformNarrative(event.detail)}</p>
                 </li>
               ))}
             </ul>
@@ -92,7 +93,7 @@ export function AuditPage() {
           {summaries.map((summary) => (
             <section key={summary.title} className="section-card">
               <h3>{summary.title}</h3>
-              <p>{summary.content}</p>
+              <p>{neutralizePlatformNarrative(summary.content)}</p>
             </section>
           ))}
         </div>
