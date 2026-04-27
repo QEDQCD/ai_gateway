@@ -1,9 +1,18 @@
+import { useCallback } from "react";
+
 import { DataTable, ErrorSection, LoadingSection, StatCard } from "../components/console";
-import { getAudit } from "../lib/console-api";
+import { getAudit, getMemberAuditEvents } from "../lib/console-api";
+import { useConsoleSession } from "../lib/session";
 import { useRemoteData } from "../lib/use-remote-data";
 
 export function AuditPage() {
-  const { data, loading, error } = useRemoteData(getAudit);
+  const session = useConsoleSession();
+  const isAdmin = session.role === "admin";
+  const loadAudit = useCallback(
+    () => (isAdmin ? getAudit() : getMemberAuditEvents()),
+    [isAdmin],
+  );
+  const { data, loading, error } = useRemoteData(loadAudit);
 
   if (loading) {
     return <LoadingSection text="正在加载审计日志..." />;
@@ -11,6 +20,26 @@ export function AuditPage() {
 
   if (error || !data) {
     return <ErrorSection message={error ?? "审计数据加载失败。"} />;
+  }
+
+  if (!isAdmin) {
+    return (
+      <div className="page-grid">
+        <section className="section-card">
+          <h2>成员审计事件</h2>
+          <DataTable
+            columns={["时间", "事件类型", "目标类型", "目标 ID", "详情"]}
+            rows={data.items.map((item) => [
+              item.time,
+              item.event_type,
+              item.target_type,
+              item.target_id,
+              item.detail,
+            ])}
+          />
+        </section>
+      </div>
+    );
   }
 
   const metrics = data.metrics ?? [];

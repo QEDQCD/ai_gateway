@@ -2,8 +2,13 @@ import type { ReactElement } from "react";
 import { Navigate, createBrowserRouter, createMemoryRouter } from "react-router-dom";
 
 import { APIKeysPage } from "../pages/api-keys";
+import { AdminApplicationsPage } from "../pages/admin-applications";
+import { AdminTenantsPage } from "../pages/admin-tenants";
 import { AuditPage } from "../pages/audit";
 import { DashboardPage } from "../pages/dashboard";
+import { MemberFailuresPage } from "../pages/member-failures";
+import { MemberOverviewPage } from "../pages/member-overview";
+import { MemberUsagePage } from "../pages/member-usage";
 import { PlaygroundPage } from "../pages/playground";
 import { RoutesPage } from "../pages/routes";
 import { UsagePage } from "../pages/usage";
@@ -14,28 +19,20 @@ type ConsoleRouteDefinition = ConsoleNavigationItem & {
   element: ReactElement;
 };
 
-function PlaceholderPage({ title }: { title: string }) {
-  return (
-    <section>
-      <h2>{title}</h2>
-    </section>
-  );
-}
-
 export const adminNavigation = [
   {
     path: "/applications",
     label: "账号申请",
     title: "账号申请",
     description: "审核待处理申请并为新成员分配租户归属。",
-    element: <PlaceholderPage title="账号申请" />,
+    element: <AdminApplicationsPage />,
   },
   {
     path: "/tenants",
     label: "租户管理",
     title: "租户管理",
     description: "查看租户状态、成员归属与平台侧治理信息。",
-    element: <PlaceholderPage title="租户管理" />,
+    element: <AdminTenantsPage />,
   },
   {
     path: "/",
@@ -87,35 +84,35 @@ export const memberNavigation = [
     label: "我的总览",
     title: "我的总览",
     description: "查看租户侧账号、调用和配额概览。",
-    element: <PlaceholderPage title="我的总览" />,
+    element: <MemberOverviewPage />,
   },
   {
     path: "/api-keys",
     label: "我的密钥",
     title: "我的密钥",
     description: "管理当前成员创建的 API 密钥与使用范围。",
-    element: <PlaceholderPage title="我的密钥" />,
+    element: <APIKeysPage />,
   },
   {
     path: "/usage",
     label: "调用观测",
     title: "调用观测",
     description: "查看当前租户请求量、成功率和成本估算。",
-    element: <PlaceholderPage title="调用观测" />,
+    element: <MemberUsagePage />,
   },
   {
     path: "/failures",
     label: "失败分析",
     title: "失败分析",
     description: "定位失败类别、时间分布与最近异常请求。",
-    element: <PlaceholderPage title="失败分析" />,
+    element: <MemberFailuresPage />,
   },
   {
     path: "/audit",
     label: "审计记录",
     title: "审计记录",
     description: "查看成员侧密钥操作与租户内审计事件。",
-    element: <PlaceholderPage title="审计记录" />,
+    element: <AuditPage />,
   },
 ] satisfies readonly ConsoleRouteDefinition[];
 

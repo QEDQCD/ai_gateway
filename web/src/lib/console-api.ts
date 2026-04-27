@@ -33,11 +33,12 @@ export type APIKeyItem = {
   status: string;
   scopes: APIKeyScope[];
   last_used_at: string;
+  owner_user_id?: string;
 };
 
 export type APIKeysPageData = {
   items: APIKeyItem[];
-  credential_mode: string;
+  credential_mode?: string;
 };
 
 export type APIKeyScope = "chat" | "rag" | "embeddings";
@@ -45,6 +46,30 @@ export type APIKeyScope = "chat" | "rag" | "embeddings";
 export type APIKeyMutationResult = {
   item: APIKeyItem;
   raw_key?: string;
+};
+
+export type ApplicationItem = {
+  id: string;
+  email: string;
+  name: string;
+  company_name: string;
+  use_case: string;
+  status: string;
+  created_at: string;
+};
+
+export type ApplicationsPageData = {
+  items: ApplicationItem[];
+};
+
+export type ApproveApplicationPayload = {
+  actor_id: string;
+  comment: string;
+  tenant_id: string;
+};
+
+export type ApplicationMutationResult = {
+  item: ApplicationItem;
 };
 
 export type RouteMetric = {
@@ -213,6 +238,24 @@ export type UsageRequestsQuery = {
   offset: number;
 };
 
+export type MemberOverviewPageData = {
+  tenant_id: string;
+  tenant_name: string;
+  active_api_keys: number;
+};
+
+export type MemberAuditItem = {
+  time: string;
+  event_type: string;
+  target_type: string;
+  target_id: string;
+  detail: string;
+};
+
+export type MemberAuditPageData = {
+  items: MemberAuditItem[];
+};
+
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = init ? await fetch(path, init) : await fetch(path);
 
@@ -242,6 +285,18 @@ export function getSystemStatus() {
 
 export function getAPIKeys() {
   return requestJson<APIKeysPageData>("/api/admin/api-keys");
+}
+
+export function getApplications() {
+  return requestJson<ApplicationsPageData>("/api/admin/applications");
+}
+
+export function approveApplication(id: string, payload: ApproveApplicationPayload) {
+  return requestJson<ApplicationMutationResult>(`/api/admin/applications/${id}/approve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
 }
 
 export type CreateAPIKeyPayload = {
@@ -280,6 +335,41 @@ export function deactivateAPIKey(id: string) {
 export function deleteAPIKey(id: string) {
   return requestJson<APIKeyMutationResult>(`/api/admin/api-keys/${id}`, {
     method: "DELETE",
+  });
+}
+
+export type CreateMemberAPIKeyPayload = {
+  name: string;
+  scopes: APIKeyScope[];
+};
+
+export function getMemberOverview() {
+  return requestJson<MemberOverviewPageData>("/me/overview");
+}
+
+export function getMemberAPIKeys() {
+  return requestJson<APIKeysPageData>("/me/api-keys");
+}
+
+export function createMemberAPIKey(payload: CreateMemberAPIKeyPayload) {
+  return requestJson<APIKeyMutationResult>("/me/api-keys", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function rotateMemberAPIKey(id: string, payload: RotateAPIKeyPayload) {
+  return requestJson<APIKeyMutationResult>(`/me/api-keys/${id}/rotate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deactivateMemberAPIKey(id: string) {
+  return requestJson<APIKeyMutationResult>(`/me/api-keys/${id}/deactivate`, {
+    method: "POST",
   });
 }
 
@@ -323,11 +413,31 @@ export function getUsageFailures() {
   return requestJson<UsageFailureData>("/api/admin/usage/failures");
 }
 
-export function getUsageRequests(query: UsageRequestsQuery) {
-  const search = new URLSearchParams({
+function createUsageRequestsSearch(query: UsageRequestsQuery) {
+  return new URLSearchParams({
     limit: String(query.limit),
     offset: String(query.offset),
-  });
+  }).toString();
+}
 
-  return requestJson<UsageRequestsPageData>(`/api/admin/usage/requests?${search.toString()}`);
+export function getUsageRequests(query: UsageRequestsQuery) {
+  return requestJson<UsageRequestsPageData>(
+    `/api/admin/usage/requests?${createUsageRequestsSearch(query)}`,
+  );
+}
+
+export function getMemberUsageOverview() {
+  return requestJson<UsageOverviewData>("/me/usage/overview");
+}
+
+export function getMemberUsageRequests(query: UsageRequestsQuery) {
+  return requestJson<UsageRequestsPageData>(`/me/usage/requests?${createUsageRequestsSearch(query)}`);
+}
+
+export function getMemberFailures() {
+  return requestJson<UsageFailureData>("/me/failures");
+}
+
+export function getMemberAuditEvents() {
+  return requestJson<MemberAuditPageData>("/me/audit-events");
 }

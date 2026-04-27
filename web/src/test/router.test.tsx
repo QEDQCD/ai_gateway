@@ -115,10 +115,24 @@ describe("控制台路由", () => {
     expect(screen.queryByText("账号申请")).not.toBeInTheDocument();
   });
 
-  test("member session 不会请求任何 /api/admin/* 接口", async () => {
+  test("member session 只请求 /me/overview 且不会请求任何 /api/admin/* 接口", async () => {
     mockSession({ role: "member", tenant_id: "tenant_demo", user_id: "user_member_a" });
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input.toString();
+
+      if (url === "/me/overview") {
+        return new Response(
+          JSON.stringify({
+            tenant_id: "tenant_demo",
+            tenant_name: "Demo Tenant",
+            active_api_keys: 2,
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
 
       throw new Error(`Unexpected fetch url: ${url}`);
     });
@@ -130,14 +144,18 @@ describe("控制台路由", () => {
 
     expect(await screen.findByRole("heading", { level: 1, name: "我的总览" })).toBeInTheDocument();
     await waitFor(() => {
-      expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([]);
+      expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual(["/me/overview"]);
     });
   });
 
   test("member session 访问根路径时会跳转到 /me", async () => {
     mockSession({ role: "member", tenant_id: "tenant_demo", user_id: "user_member_a" });
     mockFetch({
-      "/api/admin/system/status": defaultSystemStatus(),
+      "/me/overview": {
+        tenant_id: "tenant_demo",
+        tenant_name: "Demo Tenant",
+        active_api_keys: 1,
+      },
     });
 
     render(
@@ -739,6 +757,507 @@ describe("控制台路由", () => {
 
     expect(await screen.findByText("停用操作已完成")).toBeInTheDocument();
     expect(screen.getByText("停用")).toBeInTheDocument();
+  });
+
+  test("账号申请页使用 /api/admin/applications 数据并支持审批", async () => {
+    mockSession({ role: "admin", user_id: "user_admin_demo" });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+
+      if (url === "/api/admin/system/status") {
+        return new Response(JSON.stringify(defaultSystemStatus()), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url === "/api/admin/applications" && !init?.method) {
+        return new Response(
+          JSON.stringify({
+            items: [
+              {
+                id: "app_pending",
+                email: "pending@example.com",
+                name: "待审批用户",
+                company_name: "Pending Co",
+                use_case: "租户接入",
+                status: "pending",
+                created_at: "2026-04-25T09:02:03+08:00",
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+      if (url === "/api/admin/applications/app_pending/approve" && init?.method === "POST") {
+        expect(JSON.parse(String(init.body))).toEqual({
+          actor_id: "user_admin_demo",
+          comment: "通过控制台审批",
+          tenant_id: "tenant_demo",
+        });
+
+        return new Response(
+          JSON.stringify({
+            item: {
+              id: "app_pending",
+              email: "pending@example.com",
+              name: "待审批用户",
+              company_name: "Pending Co",
+              use_case: "租户接入",
+              status: "approved",
+              created_at: "2026-04-25T09:02:03+08:00",
+            },
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+
+      throw new Error(`Unexpected fetch url: ${url}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderRoute("/applications");
+
+    expect((await screen.findAllByText("待审批用户")).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: "选择 待审批用户" }));
+    fireEvent.change(screen.getByLabelText("租户 ID"), { target: { value: "tenant_demo" } });
+    fireEvent.click(screen.getByRole("button", { name: "审批通过" }));
+
+    expect(await screen.findByText("审批已完成")).toBeInTheDocument();
+    expect(screen.getByText("approved")).toBeInTheDocument();
+  });
+
+  test("账号申请页在审批提交中锁定上下文，成功结果不受后续选择或租户输入漂移影响", async () => {
+    mockSession({ role: "admin", user_id: "user_admin_demo" });
+    let resolveApproval: (() => void) | null = null;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+
+      if (url === "/api/admin/system/status") {
+        return new Response(JSON.stringify(defaultSystemStatus()), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url === "/api/admin/applications" && !init?.method) {
+        return new Response(
+          JSON.stringify({
+            items: [
+              {
+                id: "app_alice",
+                email: "alice@example.com",
+                name: "Alice",
+                company_name: "Alice Co",
+                use_case: "租户接入",
+                status: "pending",
+                created_at: "2026-04-25T09:02:03+08:00",
+              },
+              {
+                id: "app_bob",
+                email: "bob@example.com",
+                name: "Bob",
+                company_name: "Bob Co",
+                use_case: "分析集成",
+                status: "pending",
+                created_at: "2026-04-25T10:02:03+08:00",
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+      if (url === "/api/admin/applications/app_alice/approve" && init?.method === "POST") {
+        expect(JSON.parse(String(init.body))).toEqual({
+          actor_id: "user_admin_demo",
+          comment: "通过控制台审批",
+          tenant_id: "tenant_alice",
+        });
+
+        return new Promise<Response>((resolve) => {
+          resolveApproval = () =>
+            resolve(
+              new Response(
+                JSON.stringify({
+                  item: {
+                    id: "app_alice",
+                    email: "alice@example.com",
+                    name: "Alice",
+                    company_name: "Alice Co",
+                    use_case: "租户接入",
+                    status: "approved",
+                    created_at: "2026-04-25T09:02:03+08:00",
+                  },
+                }),
+                {
+                  status: 200,
+                  headers: { "Content-Type": "application/json" },
+                },
+              ),
+            );
+        });
+      }
+
+      throw new Error(`Unexpected fetch url: ${url}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderRoute("/applications");
+
+    expect(await screen.findByRole("button", { name: "选择 Alice" })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("租户 ID"), { target: { value: "tenant_alice" } });
+    fireEvent.click(screen.getByRole("button", { name: "审批通过" }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/admin/applications/app_alice/approve",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    expect(screen.getByRole("button", { name: "选择 Bob" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "重置" })).toBeDisabled();
+
+    resolveApproval?.();
+
+    expect(await screen.findByText("审批已完成")).toBeInTheDocument();
+    expect(screen.getByText("申请人：Alice")).toBeInTheDocument();
+    expect(screen.getByText("租户：tenant_alice")).toBeInTheDocument();
+  });
+
+  test("租户管理页聚合 overview、api-keys 和 usage overview 数据", async () => {
+    const fetchMock = mockFetch({
+      "/api/admin/overview": {
+        stats: [
+          { label: "24 小时请求量", value: "128 万" },
+          { label: "成功率", value: "99.42%" },
+          { label: "配额使用率", value: "74%" },
+          { label: "活跃 API 密钥", value: "184" },
+        ],
+        route_health: [],
+        top_models: [],
+        recent_alerts: [],
+        audit_snapshot: [],
+      },
+      "/api/admin/api-keys": {
+        items: [
+          {
+            id: "key_1",
+            name: "生产网关",
+            tenant: "tenant_alpha",
+            status: "启用",
+            scopes: ["chat", "rag"],
+            last_used_at: "2 分钟前",
+          },
+          {
+            id: "key_2",
+            name: "测试网关",
+            tenant: "tenant_beta",
+            status: "停用",
+            scopes: ["chat"],
+            last_used_at: "1 小时前",
+          },
+        ],
+        credential_mode: "平台密钥与上游凭证分离管理。",
+      },
+      "/api/admin/usage/overview": {
+        total_requests: 4200,
+        success_rate: "99.20%",
+        total_tokens: "320 万",
+        average_latency: "184 ms",
+        estimated_share: "37%",
+      },
+    });
+
+    renderRoute("/tenants");
+
+    expect(await screen.findByRole("heading", { level: 1, name: "租户管理" })).toBeInTheDocument();
+    expect(screen.getByText("tenant_alpha")).toBeInTheDocument();
+    expect(screen.getByText("生产网关")).toBeInTheDocument();
+    expect(screen.getByText("320 万")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith("/api/admin/overview");
+    expect(fetchMock).toHaveBeenCalledWith("/api/admin/api-keys");
+    expect(fetchMock).toHaveBeenCalledWith("/api/admin/usage/overview");
+  });
+
+  test("member 总览页使用 /me/overview 数据", async () => {
+    mockSession({ role: "member", tenant_id: "tenant_demo", user_id: "user_member_a" });
+    const fetchMock = mockFetch({
+      "/me/overview": {
+        tenant_id: "tenant_demo",
+        tenant_name: "Demo Tenant",
+        active_api_keys: 3,
+      },
+    });
+
+    renderRoute("/me");
+
+    expect((await screen.findAllByText("Demo Tenant")).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText("tenant_demo")).length).toBeGreaterThan(0);
+    expect(screen.getByText("3")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith("/me/overview");
+  });
+
+  test("member API 密钥页走 /me 接口且不显示租户输入或删除操作", async () => {
+    mockSession({ role: "member", tenant_id: "tenant_demo", user_id: "user_member_a" });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+
+      if (url === "/me/api-keys" && !init?.method) {
+        return new Response(
+          JSON.stringify({
+            items: [
+              {
+                id: "mk_1",
+                name: "我的密钥",
+                tenant: "tenant_demo",
+                status: "启用",
+                scopes: ["chat"],
+                last_used_at: "刚刚",
+                owner_user_id: "user_member_a",
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+      if (url === "/me/api-keys" && init?.method === "POST") {
+        expect(JSON.parse(String(init.body))).toEqual({
+          name: "member-key",
+          scopes: ["chat"],
+        });
+
+        return new Response(
+          JSON.stringify({
+            item: {
+              id: "mk_new",
+              name: "member-key",
+              tenant: "tenant_demo",
+              status: "启用",
+              scopes: ["chat"],
+              last_used_at: "刚刚",
+              owner_user_id: "user_member_a",
+            },
+            raw_key: "mk_live_secret",
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+
+      throw new Error(`Unexpected fetch url: ${url}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderRoute("/api-keys");
+
+    expect(await screen.findByRole("button", { name: "选择 我的密钥" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "删除密钥" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "新建密钥" }));
+    expect(screen.queryByLabelText("租户 ID")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("名称"), { target: { value: "member-key" } });
+    fireEvent.click(screen.getByRole("button", { name: "确认创建" }));
+
+    expect(await screen.findByText("新建密钥已完成")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith("/me/api-keys");
+  });
+
+  test("member API 密钥页在 rotate 和 deactivate 时命中 /me 分支并更新本地状态", async () => {
+    mockSession({ role: "member", tenant_id: "tenant_demo", user_id: "user_member_a" });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+
+      if (url === "/me/api-keys" && !init?.method) {
+        return new Response(
+          JSON.stringify({
+            items: [
+              {
+                id: "mk_live",
+                name: "member-live-key",
+                tenant: "tenant_demo",
+                status: "启用",
+                scopes: ["chat", "rag"],
+                last_used_at: "刚刚",
+                owner_user_id: "user_member_a",
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+      if (url === "/me/api-keys/mk_live/rotate" && init?.method === "POST") {
+        expect(JSON.parse(String(init.body))).toEqual({
+          name: "member-rotated-key",
+          scopes: ["chat", "rag"],
+        });
+
+        return new Response(
+          JSON.stringify({
+            item: {
+              id: "mk_rotated",
+              name: "member-rotated-key",
+              tenant: "tenant_demo",
+              status: "启用",
+              scopes: ["chat", "rag"],
+              last_used_at: "刚刚",
+              owner_user_id: "user_member_a",
+            },
+            raw_key: "mk_rotated_secret",
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+      if (url === "/me/api-keys/mk_rotated/deactivate" && init?.method === "POST") {
+        return new Response(
+          JSON.stringify({
+            item: {
+              id: "mk_rotated",
+              name: "member-rotated-key",
+              tenant: "tenant_demo",
+              status: "停用",
+              scopes: ["chat", "rag"],
+              last_used_at: "刚刚",
+              owner_user_id: "user_member_a",
+            },
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+
+      throw new Error(`Unexpected fetch url: ${url}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderRoute("/api-keys");
+
+    fireEvent.click(await screen.findByRole("button", { name: "选择 member-live-key" }));
+    fireEvent.click(screen.getByRole("button", { name: "轮换密钥" }));
+    fireEvent.change(screen.getByLabelText("新名称"), { target: { value: "member-rotated-key" } });
+    fireEvent.click(screen.getByRole("button", { name: "确认轮换" }));
+
+    expect(await screen.findByText("轮换操作已完成")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/me/api-keys/mk_live/rotate",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(screen.getByText("member-rotated-key")).toBeInTheDocument();
+    expect(screen.getAllByText("停用").length).toBeGreaterThan(0);
+    expect(screen.getByText("名称：member-rotated-key")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "停用密钥" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认停用" }));
+
+    expect(await screen.findByText("停用操作已完成")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/me/api-keys/mk_rotated/deactivate",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(screen.getByText("状态：停用")).toBeInTheDocument();
+  });
+
+  test("member 调用观测页使用 /me usage overview 和 requests 数据", async () => {
+    mockSession({ role: "member", tenant_id: "tenant_demo", user_id: "user_member_a" });
+    const fetchMock = mockFetch({
+      "/me/usage/overview": {
+        total_requests: 120,
+        success_rate: "98.40%",
+        total_tokens: "12 万",
+        average_latency: "228 ms",
+        estimated_share: "14%",
+      },
+      "/me/usage/requests?limit=20&offset=0": {
+        items: [
+          {
+            request_id: "req_1",
+            tenant: "tenant_demo",
+            endpoint: "/v1/chat/completions",
+            model: "gpt-4o-mini",
+            status: "成功",
+            total_tokens: "1280",
+            latency: "210 ms",
+            usage_source: "member_key",
+          },
+        ],
+        total: 1,
+        limit: 20,
+        offset: 0,
+      },
+    });
+
+    renderRoute("/usage");
+
+    expect(await screen.findByText("98.40%")).toBeInTheDocument();
+    expect(screen.getByText("req_1")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith("/me/usage/overview");
+    expect(fetchMock).toHaveBeenCalledWith("/me/usage/requests?limit=20&offset=0");
+  });
+
+  test("member 失败分析页使用 /me/failures 数据", async () => {
+    mockSession({ role: "member", tenant_id: "tenant_demo", user_id: "user_member_a" });
+    const fetchMock = mockFetch({
+      "/me/failures": {
+        breakdown: [
+          { label: "上游超时", value: "8 次" },
+          { label: "配额限制", value: "2 次" },
+        ],
+        recent_events: ["10:02 上游超时 /v1/chat/completions req_42"],
+      },
+    });
+
+    renderRoute("/failures");
+
+    expect(await screen.findByText("上游超时")).toBeInTheDocument();
+    expect(screen.getByText("10:02 上游超时 /v1/chat/completions req_42")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith("/me/failures");
+  });
+
+  test("member 审计页使用 /me/audit-events 数据而不是 admin audit", async () => {
+    mockSession({ role: "member", tenant_id: "tenant_demo", user_id: "user_member_a" });
+    const fetchMock = mockFetch({
+      "/me/audit-events": {
+        items: [
+          {
+            time: "2026-04-28 10:03",
+            event_type: "api_key.rotate",
+            target_type: "api_key",
+            target_id: "mk_1",
+            detail: "轮换 member key",
+          },
+        ],
+      },
+    });
+
+    renderRoute("/audit");
+
+    expect(await screen.findByText("api_key.rotate")).toBeInTheDocument();
+    expect(screen.getByText("轮换 member key")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith("/me/audit-events");
+    expect(fetchMock).not.toHaveBeenCalledWith("/api/admin/audit");
   });
 
   test("路由页使用 /api/admin/routes 数据", async () => {

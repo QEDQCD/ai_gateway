@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from "react";
+import { useCallback, useEffect, useId, useState } from "react";
 
 import { ErrorSection, LoadingSection } from "../components/console";
 import {
@@ -6,11 +6,16 @@ import {
   type APIKeyMutationResult,
   type APIKeyScope,
   createAPIKey,
+  createMemberAPIKey,
   deactivateAPIKey,
+  deactivateMemberAPIKey,
   deleteAPIKey,
   getAPIKeys,
+  getMemberAPIKeys,
   rotateAPIKey,
+  rotateMemberAPIKey,
 } from "../lib/console-api";
+import { useConsoleSession } from "../lib/session";
 import { useRemoteData } from "../lib/use-remote-data";
 
 type ActionMode = "create" | "rotate" | "deactivate" | "delete" | null;
@@ -112,7 +117,13 @@ function ScopePicker({
 }
 
 export function APIKeysPage() {
-  const { data, loading, error } = useRemoteData(getAPIKeys);
+  const session = useConsoleSession();
+  const isAdmin = session.role === "admin";
+  const loadAPIKeys = useCallback(
+    () => (isAdmin ? getAPIKeys() : getMemberAPIKeys()),
+    [isAdmin],
+  );
+  const { data, loading, error } = useRemoteData(loadAPIKeys);
   const [items, setItems] = useState<APIKeyItem[]>([]);
   const [selectedID, setSelectedID] = useState<string | null>(null);
   const [actionMode, setActionMode] = useState<ActionMode>(null);
@@ -232,11 +243,16 @@ export function APIKeysPage() {
       }
 
       if (actionMode === "create") {
-        const result = await createAPIKey({
-          tenant_id: tenantID.trim(),
-          name: name.trim(),
-          scopes: selectedScopes,
-        });
+        const result = isAdmin
+          ? await createAPIKey({
+              tenant_id: tenantID.trim(),
+              name: name.trim(),
+              scopes: selectedScopes,
+            })
+          : await createMemberAPIKey({
+              name: name.trim(),
+              scopes: selectedScopes,
+            });
         setItems((current) => [result.item, ...current]);
         setSelectedID(result.item.id);
         setActionResult(result);
@@ -246,10 +262,15 @@ export function APIKeysPage() {
       }
 
       if (actionMode === "rotate" && selectedItem) {
-        const result = await rotateAPIKey(selectedItem.id, {
-          name: name.trim(),
-          scopes: selectedScopes,
-        });
+        const result = isAdmin
+          ? await rotateAPIKey(selectedItem.id, {
+              name: name.trim(),
+              scopes: selectedScopes,
+            })
+          : await rotateMemberAPIKey(selectedItem.id, {
+              name: name.trim(),
+              scopes: selectedScopes,
+            });
         setItems((current) => [
           result.item,
           ...current.map((item) =>
@@ -264,7 +285,9 @@ export function APIKeysPage() {
       }
 
       if (actionMode === "deactivate" && selectedItem) {
-        const result = await deactivateAPIKey(selectedItem.id);
+        const result = isAdmin
+          ? await deactivateAPIKey(selectedItem.id)
+          : await deactivateMemberAPIKey(selectedItem.id);
         setItems((current) =>
           current.map((item) => (item.id === selectedItem.id ? result.item : item)),
         );
@@ -274,7 +297,7 @@ export function APIKeysPage() {
         return;
       }
 
-      if (actionMode === "delete" && selectedItem) {
+      if (isAdmin && actionMode === "delete" && selectedItem) {
         const result = await deleteAPIKey(selectedItem.id);
         setItems((current) => current.filter((item) => item.id !== selectedItem.id));
         setSelectedID((current) => {
@@ -317,14 +340,16 @@ export function APIKeysPage() {
         >
           停用密钥
         </button>
-        <button
-          type="button"
-          className="button-shell button-shell--danger"
-          disabled={!selectedItem}
-          onClick={openDelete}
-        >
-          删除密钥
-        </button>
+        {isAdmin ? (
+          <button
+            type="button"
+            className="button-shell button-shell--danger"
+            disabled={!selectedItem}
+            onClick={openDelete}
+          >
+            删除密钥
+          </button>
+        ) : null}
       </div>
 
       <section className="section-card">
@@ -387,10 +412,12 @@ export function APIKeysPage() {
           </h3>
           {actionMode === "create" ? (
             <div className="form-grid">
-              <label className="field-shell">
-                租户 ID
-                <input value={tenantID} onChange={(event) => setTenantID(event.target.value)} />
-              </label>
+              {isAdmin ? (
+                <label className="field-shell">
+                  租户 ID
+                  <input value={tenantID} onChange={(event) => setTenantID(event.target.value)} />
+                </label>
+              ) : null}
               <label className="field-shell">
                 名称
                 <input value={name} onChange={(event) => setName(event.target.value)} />
@@ -473,8 +500,8 @@ export function APIKeysPage() {
         <p>新建和轮换后页面仅展示脱敏值，请立即复制完整密钥并妥善保存。</p>
       </section>
       <section className="section-card">
-        <h3>凭证模式</h3>
-        <p>{data.credential_mode}</p>
+        <h3>{isAdmin ? "凭证模式" : "适用范围"}</h3>
+        <p>{isAdmin ? data.credential_mode : "当前成员只能管理自己创建且属于当前租户的密钥。"}</p>
       </section>
     </div>
   );
