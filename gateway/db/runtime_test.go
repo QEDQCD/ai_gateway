@@ -396,7 +396,7 @@ func TestRuntimeMigrationsCreateUsageObservabilityTablesWithDemoData(t *testing.
 	`).Scan(&routeID, &platformAPIKeyName, &usageSource, &usageStatus); err != nil {
 		t.Fatalf("QueryRow demo log failed: %v", err)
 	}
-	if routeID != "route:provider_openai_demo:default" {
+	if routeID != runtimeSeedRouteID("gpt-4o-mini") {
 		t.Fatalf("expected demo llm_request_logs row to use bootstrap route_id, got %q", routeID)
 	}
 	if platformAPIKeyName == "" {
@@ -584,7 +584,7 @@ func TestRuntimeMigrationsRejectCrossTenantUsageRows(t *testing.T) {
 			'tenant_demo',
 			'pak_other',
 			'provider_openai_demo',
-			'route:provider_openai_demo:default',
+			'`+runtimeSeedRouteID("gpt-4o-mini")+`',
 			'/v1/chat/completions',
 			'upstream',
 			'success',
@@ -942,6 +942,50 @@ func TestRuntimeSeedStatementsAreIdempotent(t *testing.T) {
 	assertTableCount(t, ctx, conn, "llm_usage_agg_hourly", 2)
 }
 
+func TestRuntimeSeedStatementsKeepProviderSecretCodecSafe(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	conn := openMigratedTestPostgres(t, ctx)
+
+	for _, statement := range RuntimeSeedStatements() {
+		if _, err := conn.Exec(ctx, statement); err != nil {
+			t.Fatalf("conn.Exec seed failed: %v", err)
+		}
+	}
+
+	var encryptedSecret string
+	if err := conn.QueryRow(ctx, `
+		select encrypted_secret
+		from provider_credentials
+		where id = $1
+	`, runtimeSeedProviderCredentialID).Scan(&encryptedSecret); err != nil {
+		t.Fatalf("QueryRow provider_credentials failed: %v", err)
+	}
+	if encryptedSecret != "" {
+		t.Fatalf("expected runtime demo seed encrypted_secret to be empty for codec-safe reads, got %q", encryptedSecret)
+	}
+
+	codec, err := secret.NewCodec("0123456789abcdef0123456789abcdef")
+	if err != nil {
+		t.Fatalf("secret.NewCodec failed: %v", err)
+	}
+
+	repository := store.NewAuthRepository(store.New(conn), codec)
+	credentials, err := repository.ListActiveProviderCredentials(ctx)
+	if err != nil {
+		t.Fatalf("ListActiveProviderCredentials failed: %v", err)
+	}
+
+	for _, credential := range credentials {
+		if credential.ID == runtimeSeedProviderCredentialID && credential.APIKey != "" {
+			t.Fatalf("expected runtime demo provider credential APIKey to remain empty, got %q", credential.APIKey)
+		}
+	}
+}
+
 func invalidUsageLogInsertSQL(status string, source string) string {
 	return validUsageLogInsertSQL("llm_demo_invalid", status, source, "tenant_demo", "pak_demo")
 }
@@ -973,7 +1017,7 @@ func validUsageLogInsertSQL(id string, status string, source string, tenantID st
 			'%s',
 			'demo key',
 			'provider_openai_demo',
-			'route:provider_openai_demo:default',
+			'%s',
 			'/v1/chat/completions',
 			'gpt-4o-mini',
 			'gpt-4o-mini',
@@ -987,7 +1031,7 @@ func validUsageLogInsertSQL(id string, status string, source string, tenantID st
 			timestamptz '2026-04-24T10:00:00Z',
 			timestamptz '2026-04-24T10:00:01Z'
 		)
-	`, id, tenantID, platformAPIKeyID, source, status)
+	`, id, tenantID, platformAPIKeyID, runtimeSeedRouteID("gpt-4o-mini"), source, status)
 }
 
 func openTestPostgres(t *testing.T, ctx context.Context) *pgx.Conn {

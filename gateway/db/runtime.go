@@ -355,10 +355,24 @@ func joinArrayLiteral(values []string) string {
 	return strings.Join(escaped, ",")
 }
 
+const (
+	runtimeSeedProviderCredentialID = "provider_openai_demo"
+	runtimeSeedProviderDisplayName  = "OpenAI Primary"
+	runtimeSeedProviderBaseURL      = "https://demo-openai.example/v1"
+	runtimeSeedEncryptedSecret      = ""
+)
+
+func runtimeSeedSupportedModels() []string {
+	return []string{"gpt-4o-mini", "text-embedding-3-small"}
+}
+
+func runtimeSeedRouteID(requestedModel string) string {
+	return service.RouteIDForCredential(runtimeSeedProviderCredentialID, runtimeSeedSupportedModels(), requestedModel)
+}
+
 func RuntimeSeedStatements() []string {
-	supportedModels := []string{"gpt-4o-mini", "text-embedding-3-small"}
-	chatRouteID := service.RouteIDForCredential("provider_openai_demo", supportedModels, "gpt-4o-mini")
-	embeddingRouteID := service.RouteIDForCredential("provider_openai_demo", supportedModels, "text-embedding-3-small")
+	chatRouteID := runtimeSeedRouteID("gpt-4o-mini")
+	embeddingRouteID := runtimeSeedRouteID("text-embedding-3-small")
 
 	statements := []string{
 		`
@@ -383,14 +397,14 @@ func RuntimeSeedStatements() []string {
 			base_url
 		)
 		values (
-			'provider_openai_demo',
+			'` + runtimeSeedProviderCredentialID + `',
 			'openai',
-			'OpenAI Primary',
-			'enc-demo-provider-secret',
+			'` + runtimeSeedProviderDisplayName + `',
+			'` + runtimeSeedEncryptedSecret + `',
 			'active',
 			timestamptz '2026-04-24T09:47:00Z',
 			'{"gpt-4o-mini","text-embedding-3-small"}',
-			'https://demo-openai.example/v1'
+			'` + runtimeSeedProviderBaseURL + `'
 		)
 		on conflict (id) do nothing;
 		`,
@@ -424,7 +438,7 @@ func RuntimeSeedStatements() []string {
 				'tenant_demo',
 				'pak_demo',
 				'demo key',
-				'provider_openai_demo',
+				'` + runtimeSeedProviderCredentialID + `',
 				'` + chatRouteID + `',
 				'/v1/chat/completions',
 				'gpt-4o-mini',
@@ -447,7 +461,7 @@ func RuntimeSeedStatements() []string {
 				'tenant_demo',
 				'pak_demo',
 				'demo key',
-				'provider_openai_demo',
+				'` + runtimeSeedProviderCredentialID + `',
 				'` + embeddingRouteID + `',
 				'/v1/embeddings',
 				'text-embedding-3-small',
@@ -483,8 +497,8 @@ func RuntimeSeedStatements() []string {
 			(
 				'` + chatRouteID + `',
 				'gpt-4o-mini',
-				'OpenAI Primary',
-				'provider_openai_demo',
+				'` + runtimeSeedProviderDisplayName + `',
+				'` + runtimeSeedProviderCredentialID + `',
 				'/v1/chat/completions',
 				182,
 				'healthy',
@@ -494,8 +508,8 @@ func RuntimeSeedStatements() []string {
 			(
 				'` + embeddingRouteID + `',
 				'text-embedding-3-small',
-				'OpenAI Primary',
-				'provider_openai_demo',
+				'` + runtimeSeedProviderDisplayName + `',
+				'` + runtimeSeedProviderCredentialID + `',
 				'/v1/embeddings',
 				95,
 				'warning',
