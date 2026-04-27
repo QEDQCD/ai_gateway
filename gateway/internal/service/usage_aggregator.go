@@ -45,9 +45,52 @@ type sqlUsageAggregator struct {
 	db store.DBTX
 }
 
-func NewUsageAggregator(db store.DBTX) queue.UsageConsumer {
+type UsageAggregator interface {
+	queue.UsageConsumer
+	AggregateHour(ctx context.Context, bucketStart time.Time) error
+}
+
+type noopUsageAggregator struct{}
+
+const upsertTenantUsageLedgerSQL = `
+insert into tenant_usage_ledger (
+	bucket_start,
+	tenant_id,
+	input_tokens,
+	output_tokens,
+	total_tokens,
+	request_count,
+	success_count,
+	failure_count,
+	estimated_count
+)
+select
+	bucket_start,
+	tenant_id,
+	coalesce(sum(prompt_tokens), 0) as input_tokens,
+	coalesce(sum(completion_tokens), 0) as output_tokens,
+	coalesce(sum(total_tokens), 0) as total_tokens,
+	coalesce(sum(request_count), 0) as request_count,
+	coalesce(sum(case when usage_status = 'success' then request_count else 0 end), 0) as success_count,
+	coalesce(sum(case when usage_status <> 'success' then request_count else 0 end), 0) as failure_count,
+	coalesce(sum(case when usage_source = 'estimated' then request_count else 0 end), 0) as estimated_count
+from llm_usage_agg_hourly
+where bucket_start = $1
+group by bucket_start, tenant_id
+on conflict (bucket_start, tenant_id) do update set
+	input_tokens = excluded.input_tokens,
+	output_tokens = excluded.output_tokens,
+	total_tokens = excluded.total_tokens,
+	request_count = excluded.request_count,
+	success_count = excluded.success_count,
+	failure_count = excluded.failure_count,
+	estimated_count = excluded.estimated_count,
+	updated_at = now()
+`
+
+func NewUsageAggregator(db store.DBTX) UsageAggregator {
 	if db == nil {
-		return queue.NewNoopUsageConsumer()
+		return noopUsageAggregator{}
 	}
 	return sqlUsageAggregator{db: db}
 }
@@ -67,7 +110,23 @@ func (a sqlUsageAggregator) Consume(ctx context.Context, event queue.UsageEvent)
 		max(0, event.CompletionTokens),
 		max(0, event.TotalTokens),
 	)
+	if err != nil {
+		return err
+	}
+	return a.AggregateHour(ctx, bucketStart)
+}
+
+func (a sqlUsageAggregator) AggregateHour(ctx context.Context, bucketStart time.Time) error {
+	_, err := a.db.Exec(ctx, upsertTenantUsageLedgerSQL, bucketStart.UTC().Truncate(time.Hour))
 	return err
+}
+
+func (noopUsageAggregator) Consume(context.Context, queue.UsageEvent) error {
+	return nil
+}
+
+func (noopUsageAggregator) AggregateHour(context.Context, time.Time) error {
+	return nil
 }
 
 func usageBucketStart(event queue.UsageEvent) time.Time {

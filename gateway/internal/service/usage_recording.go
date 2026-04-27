@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"strings"
 	"time"
@@ -22,6 +24,7 @@ type TokenUsage struct {
 type UsageRecord struct {
 	RequestID            string
 	TenantID             string
+	UserID               string
 	PlatformAPIKeyID     string
 	PlatformAPIKeyName   string
 	ProviderCredentialID string
@@ -45,6 +48,7 @@ type UsageRecord struct {
 
 type UsageRecorder interface {
 	Record(ctx context.Context, record UsageRecord) error
+	RecordFailure(ctx context.Context, input UsageFailureInput) error
 	RecordPublishFailure(ctx context.Context, record UsageRecord, publishErr error) error
 }
 
@@ -118,6 +122,24 @@ insert into llm_request_events (
 	$1, $2, $3, $4, $5, $6, $7, $8, $9
 )`
 
+const insertUsageFailureSQL = `
+insert into llm_request_failures (
+	id,
+	request_log_id,
+	tenant_id,
+	user_id,
+	platform_api_key_id,
+	failure_stage,
+	error_category,
+	status_code,
+	retryable,
+	user_message,
+	internal_message_digest,
+	created_at
+) values (
+	$1, $2, $3, nullif($4, ''), $5, $6, $7, $8, $9, $10, $11, $12
+)`
+
 func NewNoopUsageRecorder() UsageRecorder {
 	return noopUsageRecorder{}
 }
@@ -130,6 +152,10 @@ func NewUsageRecorder(db usageRecordStore) UsageRecorder {
 }
 
 func (noopUsageRecorder) Record(context.Context, UsageRecord) error {
+	return nil
+}
+
+func (noopUsageRecorder) RecordFailure(context.Context, UsageFailureInput) error {
 	return nil
 }
 
@@ -154,6 +180,12 @@ func (r sqlUsageRecorder) Record(ctx context.Context, record UsageRecord) error 
 	if err := insertUsageLifecycleEvent(recordCtx, tx, record, eventType, detail); err != nil {
 		_ = tx.Rollback(recordCtx)
 		return err
+	}
+	if isFailureStatus(record.Status) {
+		if err := insertUsageFailure(recordCtx, tx, usageFailureInputFromRecord(record)); err != nil {
+			_ = tx.Rollback(recordCtx)
+			return err
+		}
 	}
 	return tx.Commit(recordCtx)
 }
@@ -195,6 +227,44 @@ func insertUsageLifecycleEvent(ctx context.Context, db store.DBTX, record UsageR
 		record.StatusCode,
 		detail,
 		record.RequestCompletedAt,
+	)
+	return err
+}
+
+func (r sqlUsageRecorder) RecordFailure(ctx context.Context, input UsageFailureInput) error {
+	input = normalizeUsageFailureInput(input)
+	_, err := r.db.Exec(ctx, insertUsageFailureSQL,
+		input.RequestID,
+		input.RequestLogID,
+		input.TenantID,
+		input.UserID,
+		input.PlatformAPIKeyID,
+		input.FailureStage,
+		input.ErrorCategory,
+		input.StatusCode,
+		input.Retryable,
+		input.UserMessage,
+		digestFailureMessage(input.InternalMessage),
+		time.Now().UTC(),
+	)
+	return err
+}
+
+func insertUsageFailure(ctx context.Context, db store.DBTX, input UsageFailureInput) error {
+	input = normalizeUsageFailureInput(input)
+	_, err := db.Exec(ctx, insertUsageFailureSQL,
+		input.RequestID,
+		input.RequestLogID,
+		input.TenantID,
+		input.UserID,
+		input.PlatformAPIKeyID,
+		input.FailureStage,
+		input.ErrorCategory,
+		input.StatusCode,
+		input.Retryable,
+		input.UserMessage,
+		digestFailureMessage(input.InternalMessage),
+		time.Now().UTC(),
 	)
 	return err
 }
@@ -349,6 +419,7 @@ func newUsageRecord(
 	record := UsageRecord{
 		RequestID:            requestID,
 		TenantID:             requestContext.TenantID,
+		UserID:               requestContext.UserID,
 		PlatformAPIKeyID:     requestContext.PlatformAPIKeyID,
 		PlatformAPIKeyName:   requestContext.PlatformAPIKeyName,
 		ProviderCredentialID: requestContext.SelectedProviderID,
@@ -405,6 +476,146 @@ func lifecycleEventForRecord(record UsageRecord) (string, string) {
 
 	detail := firstNonEmpty(strings.TrimSpace(record.ErrorMessage), "request failed")
 	return "request_failed", detail
+}
+
+func normalizeUsageFailureInput(input UsageFailureInput) UsageFailureInput {
+	input.RequestID = strings.TrimSpace(input.RequestID)
+	input.RequestLogID = firstNonEmpty(input.RequestLogID, input.RequestID)
+	input.TenantID = strings.TrimSpace(input.TenantID)
+	input.UserID = strings.TrimSpace(input.UserID)
+	input.PlatformAPIKeyID = strings.TrimSpace(input.PlatformAPIKeyID)
+	input.ErrorCategory = normalizeUsageFailureCategory(input.ErrorCategory)
+	input.FailureStage = normalizeUsageFailureStage(input.FailureStage, input.ErrorCategory)
+	input.UserMessage = firstNonEmpty(input.UserMessage, userFailureMessage(UsageRecord{
+		Status:       usageStatusFromFailureCategory(input.ErrorCategory),
+		StatusCode:   input.StatusCode,
+		ErrorMessage: input.InternalMessage,
+	}))
+	return input
+}
+
+func usageFailureInputFromRecord(record UsageRecord) UsageFailureInput {
+	return UsageFailureInput{
+		RequestID:        record.RequestID,
+		RequestLogID:     record.RequestID,
+		TenantID:         record.TenantID,
+		UserID:           record.UserID,
+		PlatformAPIKeyID: record.PlatformAPIKeyID,
+		FailureStage:     failureStageFromRecord(record),
+		ErrorCategory:    failureCategoryFromRecord(record),
+		StatusCode:       record.StatusCode,
+		Retryable:        statusCodeRetryable(record.StatusCode),
+		UserMessage:      userFailureMessage(record),
+		InternalMessage:  record.ErrorMessage,
+	}
+}
+
+func normalizeUsageFailureStage(stage string, category string) string {
+	normalized := UsageFailureStage(strings.TrimSpace(stage))
+	if normalized.Valid() {
+		return string(normalized)
+	}
+	if UsageFailureCategory(category) == UsageFailureCategoryPublishFailure {
+		return string(UsageFailureStagePublish)
+	}
+	return string(UsageFailureStageInternal)
+}
+
+func normalizeUsageFailureCategory(category string) string {
+	normalized := UsageFailureCategory(strings.TrimSpace(category))
+	if normalized.Valid() {
+		return string(normalized)
+	}
+	return string(UsageFailureCategoryFailed)
+}
+
+func failureStageFromRecord(record UsageRecord) string {
+	switch record.Status {
+	case UsageStatusAuthFailed:
+		return string(UsageFailureStageRequest)
+	case UsageStatusRateLimited, UsageStatusTimeout, UsageStatusUpstreamError:
+		return string(UsageFailureStageUpstream)
+	case UsageStatusFailed:
+		switch record.StatusCode {
+		case 400, 401, 403:
+			return string(UsageFailureStageRequest)
+		}
+		if record.StatusCode == 429 || record.StatusCode >= 500 {
+			return string(UsageFailureStageUpstream)
+		}
+		return string(UsageFailureStageResponse)
+	}
+	return string(UsageFailureStageResponse)
+}
+
+func failureCategoryFromRecord(record UsageRecord) string {
+	switch record.Status {
+	case UsageStatusRateLimited:
+		return string(UsageFailureCategoryRateLimited)
+	case UsageStatusAuthFailed:
+		return string(UsageFailureCategoryAuthFailed)
+	case UsageStatusTimeout:
+		return string(UsageFailureCategoryTimeout)
+	case UsageStatusUpstreamError:
+		return string(UsageFailureCategoryUpstreamError)
+	default:
+		return string(UsageFailureCategoryFailed)
+	}
+}
+
+func usageStatusFromFailureCategory(category string) UsageStatus {
+	switch UsageFailureCategory(category) {
+	case UsageFailureCategoryRateLimited:
+		return UsageStatusRateLimited
+	case UsageFailureCategoryAuthFailed:
+		return UsageStatusAuthFailed
+	case UsageFailureCategoryTimeout:
+		return UsageStatusTimeout
+	case UsageFailureCategoryUpstreamError:
+		return UsageStatusUpstreamError
+	default:
+		return UsageStatusFailed
+	}
+}
+
+func userFailureMessage(record UsageRecord) string {
+	switch defaultStatusCode(record.StatusCode) {
+	case 400:
+		return "invalid request body"
+	case 401, 403:
+		return "unauthorized"
+	case 408, 504:
+		return "request timed out"
+	case 429:
+		return "rate limit exceeded"
+	default:
+		if defaultStatusCode(record.StatusCode) >= 500 {
+			return "upstream request failed"
+		}
+	}
+	return "request failed"
+}
+
+func digestFailureMessage(message string) string {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(message))
+	return hex.EncodeToString(sum[:])
+}
+
+func statusCodeRetryable(statusCode int) bool {
+	switch defaultStatusCode(statusCode) {
+	case 408, 409, 425, 429, 500, 502, 503, 504:
+		return true
+	default:
+		return false
+	}
+}
+
+func isFailureStatus(status UsageStatus) bool {
+	return status != UsageStatusSuccess
 }
 
 func normalizeUsage(upstream *TokenUsage, estimated TokenUsage) (TokenUsage, UsageSource) {

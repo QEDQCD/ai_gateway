@@ -130,6 +130,7 @@ func (s authService) Resolve(ctx context.Context, rawKey string, requestedModel 
 
 	return domain.RequestContext{
 		TenantID:             tenant.ID,
+		UserID:               platformKey.UserID,
 		PlatformAPIKeyID:     platformKey.ID,
 		PlatformAPIKeyName:   platformKey.Name,
 		SelectedProviderID:   route.ProviderID,

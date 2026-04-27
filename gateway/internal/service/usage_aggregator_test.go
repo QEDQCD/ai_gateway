@@ -364,6 +364,135 @@ func TestUsagePublisherWithConsumersUpdatesHourlyUsageWithFallbackAfterRequestCa
 	}
 }
 
+func TestUsageAggregatorRollsUpTenantUsageLedger(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	container, dsn := startPostgresContainer(ctx, t)
+	t.Cleanup(func() {
+		_ = container.Terminate(context.Background())
+	})
+
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("pgx.Connect failed: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = conn.Close(context.Background())
+	})
+
+	pool, err := gatewaydb.OpenPostgres(ctx, dsn)
+	if err != nil {
+		t.Fatalf("OpenPostgres failed: %v", err)
+	}
+	t.Cleanup(pool.Close)
+
+	if err := gatewaydb.ApplyMigrations(ctx, pool); err != nil {
+		t.Fatalf("ApplyMigrations failed: %v", err)
+	}
+	for _, statement := range gatewaydb.RuntimeSeedStatements() {
+		if _, err := conn.Exec(ctx, statement); err != nil {
+			t.Fatalf("conn.Exec seed failed: %v", err)
+		}
+	}
+
+	aggregator := service.NewUsageAggregator(conn)
+	bucketStart := time.Date(2026, time.April, 24, 12, 0, 0, 0, time.UTC)
+	events := []queue.UsageEvent{
+		{
+			RequestID:            "req-ledger-success",
+			TenantID:             "tenant_demo",
+			PlatformAPIKeyID:     "pak_demo",
+			ProviderCredentialID: "provider_openai_demo",
+			RouteID:              "route:provider_openai_demo:default",
+			Status:               "success",
+			UsageSource:          "upstream",
+			PromptTokens:         10,
+			CompletionTokens:     4,
+			TotalTokens:          14,
+			Endpoint:             "/v1/chat/completions",
+			OccurredAt:           bucketStart.Add(5 * time.Minute),
+		},
+		{
+			RequestID:            "req-ledger-failure",
+			TenantID:             "tenant_demo",
+			PlatformAPIKeyID:     "pak_demo",
+			ProviderCredentialID: "provider_openai_demo",
+			RouteID:              "route:provider_openai_demo:default",
+			Status:               "failed",
+			UsageSource:          "estimated",
+			PromptTokens:         6,
+			CompletionTokens:     0,
+			TotalTokens:          6,
+			Endpoint:             "/v1/chat/completions",
+			OccurredAt:           bucketStart.Add(20 * time.Minute),
+		},
+	}
+	for _, event := range events {
+		if err := aggregator.Consume(ctx, event); err != nil {
+			t.Fatalf("aggregator.Consume failed: %v", err)
+		}
+	}
+
+	if err := aggregator.AggregateHour(ctx, bucketStart); err != nil {
+		t.Fatalf("aggregator.AggregateHour failed: %v", err)
+	}
+
+	var inputTokens int
+	var outputTokens int
+	var totalTokens int
+	var requestCount int
+	var successCount int
+	var failureCount int
+	var estimatedCount int
+	if err := conn.QueryRow(ctx, `
+		select input_tokens,
+		       output_tokens,
+		       total_tokens,
+		       request_count,
+		       success_count,
+		       failure_count,
+		       estimated_count
+		from tenant_usage_ledger
+		where bucket_start = $1
+		  and tenant_id = 'tenant_demo'
+	`, bucketStart).Scan(
+		&inputTokens,
+		&outputTokens,
+		&totalTokens,
+		&requestCount,
+		&successCount,
+		&failureCount,
+		&estimatedCount,
+	); err != nil {
+		t.Fatalf("QueryRow tenant_usage_ledger failed: %v", err)
+	}
+
+	if inputTokens != 16 {
+		t.Fatalf("expected input_tokens 16, got %d", inputTokens)
+	}
+	if outputTokens != 4 {
+		t.Fatalf("expected output_tokens 4, got %d", outputTokens)
+	}
+	if totalTokens != 20 {
+		t.Fatalf("expected total_tokens 20, got %d", totalTokens)
+	}
+	if requestCount != 2 {
+		t.Fatalf("expected request_count 2, got %d", requestCount)
+	}
+	if successCount != 1 {
+		t.Fatalf("expected success_count 1, got %d", successCount)
+	}
+	if failureCount != 1 {
+		t.Fatalf("expected failure_count 1, got %d", failureCount)
+	}
+	if estimatedCount != 1 {
+		t.Fatalf("expected estimated_count 1, got %d", estimatedCount)
+	}
+}
+
 func startPostgresContainer(ctx context.Context, t *testing.T) (testcontainers.Container, string) {
 	t.Helper()
 

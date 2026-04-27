@@ -79,14 +79,17 @@ func TestUsageRecorderRecordWritesFailureLifecycleEvent(t *testing.T) {
 	if db.tx.commitCalls != 1 {
 		t.Fatalf("expected 1 commit call, got %d", db.tx.commitCalls)
 	}
-	if len(db.tx.execCalls) != 2 {
-		t.Fatalf("expected 2 tx exec calls, got %d", len(db.tx.execCalls))
+	if len(db.tx.execCalls) != 3 {
+		t.Fatalf("expected 3 tx exec calls, got %d", len(db.tx.execCalls))
 	}
 	if got := db.tx.execCalls[1].args[3]; got != "request_failed" {
 		t.Fatalf("expected lifecycle event_type %q, got %#v", "request_failed", got)
 	}
 	if got := db.tx.execCalls[1].args[7]; got == "" {
 		t.Fatal("expected lifecycle failure detail to be populated")
+	}
+	if !strings.Contains(db.tx.execCalls[2].query, "llm_request_failures") {
+		t.Fatalf("expected third exec to insert llm_request_failures, got %q", db.tx.execCalls[2].query)
 	}
 }
 
@@ -215,6 +218,198 @@ func TestUsageRecorderRecordRollsBackWhenLifecycleEventInsertFails(t *testing.T)
 	}
 }
 
+func TestUsageRecorderStoresTenantAndUserScopedFailureRecord(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	container, dsn := startPostgresContainer(ctx, t)
+	t.Cleanup(func() {
+		_ = container.Terminate(context.Background())
+	})
+
+	pool, err := gatewaydb.OpenPostgres(ctx, dsn)
+	if err != nil {
+		t.Fatalf("OpenPostgres failed: %v", err)
+	}
+	t.Cleanup(pool.Close)
+
+	if err := gatewaydb.ApplyMigrations(ctx, pool); err != nil {
+		t.Fatalf("ApplyMigrations failed: %v", err)
+	}
+	for _, statement := range gatewaydb.RuntimeSeedStatements() {
+		if _, err := pool.Exec(ctx, statement); err != nil {
+			t.Fatalf("pool.Exec seed failed: %v", err)
+		}
+	}
+	if _, err := pool.Exec(ctx, `
+		insert into users (id, email, name, role, status)
+		values ('user_member_demo', 'member@example.com', 'Demo Member', 'member', 'active')
+		on conflict (id) do nothing;
+
+		insert into tenant_memberships (id, tenant_id, user_id, role, status)
+		values ('tm_demo_member', 'tenant_demo', 'user_member_demo', 'member', 'active')
+		on conflict (tenant_id, user_id) do nothing;
+	`); err != nil {
+		t.Fatalf("pool.Exec membership seed failed: %v", err)
+	}
+
+	recorder := service.NewUsageRecorder(pool)
+	record := newUsageRecord(service.UsageStatusRateLimited, service.UsageSourceEstimated)
+	record.RequestID = "llmreq_failure_record"
+	record.UserID = "user_member_demo"
+	record.StatusCode = 429
+	record.ErrorMessage = "upstream rate limit"
+
+	if err := recorder.Record(ctx, record); err != nil {
+		t.Fatalf("recorder.Record failed: %v", err)
+	}
+
+	var failureID string
+	var requestLogID string
+	var tenantID string
+	var userID string
+	var platformAPIKeyID string
+	var failureStage string
+	var errorCategory string
+	var statusCode int
+	var retryable bool
+	var userMessage string
+	var internalMessageDigest string
+	if err := pool.QueryRow(ctx, `
+		select id,
+		       request_log_id,
+		       tenant_id,
+		       user_id,
+		       platform_api_key_id,
+		       failure_stage,
+		       error_category,
+		       status_code,
+		       retryable,
+		       user_message,
+		       internal_message_digest
+		from llm_request_failures
+		where id = $1
+	`, record.RequestID).Scan(
+		&failureID,
+		&requestLogID,
+		&tenantID,
+		&userID,
+		&platformAPIKeyID,
+		&failureStage,
+		&errorCategory,
+		&statusCode,
+		&retryable,
+		&userMessage,
+		&internalMessageDigest,
+	); err != nil {
+		t.Fatalf("QueryRow llm_request_failures failed: %v", err)
+	}
+
+	if failureID != record.RequestID {
+		t.Fatalf("expected failure id %q, got %q", record.RequestID, failureID)
+	}
+	if requestLogID != record.RequestID {
+		t.Fatalf("expected request_log_id %q, got %q", record.RequestID, requestLogID)
+	}
+	if tenantID != "tenant_demo" {
+		t.Fatalf("expected tenant_id %q, got %q", "tenant_demo", tenantID)
+	}
+	if userID != "user_member_demo" {
+		t.Fatalf("expected user_id %q, got %q", "user_member_demo", userID)
+	}
+	if platformAPIKeyID != "pak_demo" {
+		t.Fatalf("expected platform_api_key_id %q, got %q", "pak_demo", platformAPIKeyID)
+	}
+	if failureStage == "" {
+		t.Fatal("expected failure_stage to be populated")
+	}
+	if failureStage != string(service.UsageFailureStageUpstream) {
+		t.Fatalf("expected failure_stage %q, got %q", service.UsageFailureStageUpstream, failureStage)
+	}
+	if errorCategory != string(service.UsageFailureCategoryRateLimited) {
+		t.Fatalf("expected error_category %q, got %q", service.UsageFailureCategoryRateLimited, errorCategory)
+	}
+	if statusCode != 429 {
+		t.Fatalf("expected status_code 429, got %d", statusCode)
+	}
+	if !retryable {
+		t.Fatal("expected retryable failure record for status 429")
+	}
+	if userMessage == "" {
+		t.Fatal("expected user_message to be populated")
+	}
+	if internalMessageDigest == "" {
+		t.Fatal("expected internal_message_digest to be populated")
+	}
+	if internalMessageDigest == record.ErrorMessage {
+		t.Fatal("expected internal_message_digest to avoid storing plaintext internal error")
+	}
+}
+
+func TestUsageFailureStageFromRecordClassifiesResponseFailures(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	container, dsn := startPostgresContainer(ctx, t)
+	t.Cleanup(func() {
+		_ = container.Terminate(context.Background())
+	})
+
+	pool, err := gatewaydb.OpenPostgres(ctx, dsn)
+	if err != nil {
+		t.Fatalf("OpenPostgres failed: %v", err)
+	}
+	t.Cleanup(pool.Close)
+
+	if err := gatewaydb.ApplyMigrations(ctx, pool); err != nil {
+		t.Fatalf("ApplyMigrations failed: %v", err)
+	}
+	for _, statement := range gatewaydb.RuntimeSeedStatements() {
+		if _, err := pool.Exec(ctx, statement); err != nil {
+			t.Fatalf("pool.Exec seed failed: %v", err)
+		}
+	}
+	if _, err := pool.Exec(ctx, `
+		insert into users (id, email, name, role, status)
+		values ('user_member_response', 'response@example.com', 'Response Member', 'member', 'active')
+		on conflict (id) do nothing;
+
+		insert into tenant_memberships (id, tenant_id, user_id, role, status)
+		values ('tm_response_member', 'tenant_demo', 'user_member_response', 'member', 'active')
+		on conflict (tenant_id, user_id) do nothing;
+	`); err != nil {
+		t.Fatalf("pool.Exec membership seed failed: %v", err)
+	}
+
+	recorder := service.NewUsageRecorder(pool)
+	record := newUsageRecord(service.UsageStatusFailed, service.UsageSourceEstimated)
+	record.RequestID = "llmreq_response_failure"
+	record.UserID = "user_member_response"
+	record.StatusCode = 422
+	record.ErrorMessage = "validation failed"
+
+	if err := recorder.Record(ctx, record); err != nil {
+		t.Fatalf("recorder.Record failed: %v", err)
+	}
+
+	var failureStage string
+	if err := pool.QueryRow(ctx, `
+		select failure_stage
+		from llm_request_failures
+		where id = $1
+	`, record.RequestID).Scan(&failureStage); err != nil {
+		t.Fatalf("QueryRow llm_request_failures failure_stage failed: %v", err)
+	}
+
+	if failureStage != string(service.UsageFailureStageResponse) {
+		t.Fatalf("expected failure_stage %q, got %q", service.UsageFailureStageResponse, failureStage)
+	}
+}
+
 func newUsageRecord(status service.UsageStatus, source service.UsageSource) service.UsageRecord {
 	startedAt := time.Date(2026, time.April, 24, 10, 0, 0, 0, time.UTC)
 	completedAt := startedAt.Add(250 * time.Millisecond)
@@ -222,6 +417,7 @@ func newUsageRecord(status service.UsageStatus, source service.UsageSource) serv
 	return service.UsageRecord{
 		RequestID:            "llmreq_test_001",
 		TenantID:             "tenant_demo",
+		UserID:               "user_demo",
 		PlatformAPIKeyID:     "pak_demo",
 		PlatformAPIKeyName:   "demo key",
 		ProviderCredentialID: "provider_openai_demo",

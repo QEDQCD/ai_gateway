@@ -87,6 +87,10 @@ func (r *stubUsageRecorder) Record(context.Context, service.UsageRecord) error {
 	return nil
 }
 
+func (r *stubUsageRecorder) RecordFailure(context.Context, service.UsageFailureInput) error {
+	return nil
+}
+
 func (r *stubUsageRecorder) RecordPublishFailure(context.Context, service.UsageRecord, error) error {
 	r.publishFailureCalls++
 	return nil

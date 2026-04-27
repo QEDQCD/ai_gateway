@@ -9,6 +9,7 @@ type ProviderTarget struct {
 
 type RequestContext struct {
 	TenantID             string
+	UserID               string
 	PlatformAPIKeyID     string
 	PlatformAPIKeyName   string
 	SelectedProviderID   string
