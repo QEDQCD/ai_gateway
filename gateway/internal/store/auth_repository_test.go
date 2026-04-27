@@ -206,6 +206,47 @@ func TestSQLAuthRepositoryResolveConsolePrincipalRejectsMultipleActiveMembership
 	}
 }
 
+func TestSQLAuthRepositoryResolveConsolePrincipalRejectsAmbiguousNormalizedEmail(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	container, dsn := startAuthRepositoryPostgresContainer(ctx, t)
+	t.Cleanup(func() {
+		_ = container.Terminate(context.Background())
+	})
+
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("pgx.Connect failed: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = conn.Close(context.Background())
+	})
+
+	for _, migration := range readAuthRepositoryMigrations(t) {
+		if _, err := conn.Exec(ctx, migration); err != nil {
+			t.Fatalf("conn.Exec migration failed: %v", err)
+		}
+	}
+
+	if _, err := conn.Exec(ctx, `
+		insert into users (id, email, name, role, status)
+		values
+			('user_alice_upper', 'Alice@example.com', 'Alice Upper', 'admin', 'active'),
+			('user_alice_lower', 'alice@example.com', 'Alice Lower', 'admin', 'active');
+	`); err != nil {
+		t.Fatalf("seed console principal failed: %v", err)
+	}
+
+	repo := NewAuthRepository(New(conn))
+	_, err = repo.ResolveConsolePrincipal(ctx, "alice@example.com")
+	if !errors.Is(err, ErrAuthScopeAmbiguous) {
+		t.Fatalf("expected error %v, got %v", ErrAuthScopeAmbiguous, err)
+	}
+}
+
 func TestSQLAuthRepositoryListActiveProviderCredentialsMapsSupportedModels(t *testing.T) {
 	t.Parallel()
 

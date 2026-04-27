@@ -250,43 +250,52 @@ func (r *SQLAuthRepository) ResolveConsolePrincipal(ctx context.Context, subject
 	}
 
 	const lookupConsolePrincipal = `
-select u.id, u.email, u.role,
-  case
-    when u.role = 'member' and coalesce(scope.membership_count, 0) = 1 then coalesce(scope.tenant_id, '')
-    else ''
-  end as tenant_id,
-  coalesce(scope.membership_count, 0) as membership_count
-from users u
-left join lateral (
-  select min(tm.tenant_id) as tenant_id, count(*) as membership_count
-  from tenant_memberships tm
-  where tm.user_id = u.id
-    and tm.status = 'active'
-) scope on true
-where lower(u.email) = $1
-  and u.status = 'active'
-  and (
-    u.role = 'admin'
-    or coalesce(scope.membership_count, 0) > 0
-  )
+with matching_principals as (
+  select u.id, u.email, u.role,
+    case
+      when u.role = 'member' and coalesce(scope.membership_count, 0) = 1 then coalesce(scope.tenant_id, '')
+      else ''
+    end as tenant_id,
+    coalesce(scope.membership_count, 0) as membership_count
+  from users u
+  left join lateral (
+    select min(tm.tenant_id) as tenant_id, count(*) as membership_count
+    from tenant_memberships tm
+    where tm.user_id = u.id
+      and tm.status = 'active'
+  ) scope on true
+  where lower(u.email) = $1
+    and u.status = 'active'
+    and (
+      u.role = 'admin'
+      or coalesce(scope.membership_count, 0) > 0
+    )
+)
+select id, email, role, tenant_id, membership_count, count(*) over () as principal_count
+from matching_principals
 limit 1
 `
 
 	subject = normalizeConsoleSubject(subject)
 	var record ConsolePrincipalRecord
 	var membershipCount int64
+	var principalCount int64
 	err := queries.db.QueryRow(ctx, lookupConsolePrincipal, subject).Scan(
 		&record.UserID,
 		&record.Email,
 		&record.Role,
 		&record.TenantID,
 		&membershipCount,
+		&principalCount,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ConsolePrincipalRecord{}, ErrAuthRecordNotFound
 		}
 		return ConsolePrincipalRecord{}, err
+	}
+	if principalCount > 1 {
+		return ConsolePrincipalRecord{}, ErrAuthScopeAmbiguous
 	}
 	if record.Role == domain.ConsoleRoleMember && membershipCount > 1 {
 		return ConsolePrincipalRecord{}, ErrAuthScopeAmbiguous
