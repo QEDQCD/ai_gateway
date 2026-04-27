@@ -72,7 +72,6 @@ mkdir -p "${HOME}/.ai_gateway_secrets"
 - `dashscope_api_key`
 - `gateway_seed_platform_api_key`
 - `provider_master_key`
-- `redis.users.acl`
 - `web_console.htpasswd`
 
 示例命令：
@@ -81,15 +80,19 @@ mkdir -p "${HOME}/.ai_gateway_secrets"
 printf 'your-dashscope-api-key\n' > "${HOME}/.ai_gateway_secrets/dashscope_api_key"
 printf 'your-seed-platform-api-key\n' > "${HOME}/.ai_gateway_secrets/gateway_seed_platform_api_key"
 openssl rand -base64 32 > "${HOME}/.ai_gateway_secrets/provider_master_key"
-cp deploy/redis/users.acl.example "${HOME}/.ai_gateway_secrets/redis.users.acl"
 printf "example-console-user:$(openssl passwd -apr1 'change-me-console-password')\n" > "${HOME}/.ai_gateway_secrets/web_console.htpasswd"
 ```
-
-如果修改了 `.env.local` 里的 Redis 用户名或密码，需要同步更新 `redis.users.acl`。
 
 ### 3. 用 Compose 启动
 
 ```bash
+docker compose --env-file deploy/compose/.env.local -f deploy/compose/compose.yml up -d --build
+```
+
+如果你调整过 `.env.local` 里的 PostgreSQL、RabbitMQ 或 Redis 账号密码，首次重启前建议清理旧数据卷后再拉起，否则旧卷会继续保留历史鉴权信息：
+
+```bash
+docker compose --env-file deploy/compose/.env.local -f deploy/compose/compose.yml down -v
 docker compose --env-file deploy/compose/.env.local -f deploy/compose/compose.yml up -d --build
 ```
 

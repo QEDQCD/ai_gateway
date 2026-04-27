@@ -14,12 +14,20 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
+    command:
+      - sh
+      - -lc
+      - |
+        umask 077
+        cat >/tmp/users.acl <<EOF
+        user default off
+        user ${REDIS_USERNAME:-example-cache-user} on >${REDIS_PASSWORD:-change-me-cache-password} ~* +@all
+        EOF
+        exec redis-server /usr/local/etc/redis/redis.conf --aclfile /tmp/users.acl
     ports:
       - "31879:6379"
     volumes:
       - ../../deploy/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
-      - ${REDIS_ACL_FILE:-../../.ai_gateway_secrets/redis.users.acl}:/usr/local/etc/redis/users.acl:ro
 
   rabbitmq:
     image: rabbitmq:3.13-management-alpine
