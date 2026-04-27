@@ -18,7 +18,7 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-func TestBootstrapAuthRepositoryFindPlatformAPIKeyByHashReturnsConfiguredScope(t *testing.T) {
+func TestFindPlatformAPIKeyByHashReturnsCreatorUserAndTenantScope(t *testing.T) {
 	t.Parallel()
 
 	repo := newSeededAuthRepository(t)
@@ -35,7 +35,7 @@ func TestBootstrapAuthRepositoryFindPlatformAPIKeyByHashReturnsConfiguredScope(t
 	}
 }
 
-func TestSQLAuthRepositoryFindPlatformAPIKeyByHashDoesNotInferUserIDFromMemberships(t *testing.T) {
+func TestSQLAuthRepositoryFindPlatformAPIKeyByHashSafelyBackfillsUniqueMembershipUserID(t *testing.T) {
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -77,11 +77,87 @@ func TestSQLAuthRepositoryFindPlatformAPIKeyByHashDoesNotInferUserIDFromMembersh
 		t.Fatalf("FindPlatformAPIKeyByHash failed: %v", err)
 	}
 
-	if record.UserID != "" {
-		t.Fatalf("expected SQL auth repository to leave user id empty without creator_user_id support, got %q", record.UserID)
+	if record.UserID != "user_demo" {
+		t.Fatalf("expected SQL auth repository to backfill the unique active membership user, got %q", record.UserID)
 	}
 	if record.TenantID != "tenant_demo" {
 		t.Fatalf("expected tenant_demo, got %q", record.TenantID)
+	}
+}
+
+func TestSQLAuthRepositoryFindPlatformAPIKeyByHashLeavesUserIDEmptyWithoutUniqueActiveMembership(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	container, dsn := startAuthRepositoryPostgresContainer(ctx, t)
+	t.Cleanup(func() {
+		_ = container.Terminate(context.Background())
+	})
+
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("pgx.Connect failed: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = conn.Close(context.Background())
+	})
+
+	for _, migration := range readAuthRepositoryMigrations(t) {
+		if _, err := conn.Exec(ctx, migration); err != nil {
+			t.Fatalf("conn.Exec migration failed: %v", err)
+		}
+	}
+
+	if _, err := conn.Exec(ctx, `
+		insert into tenants (id, name, status)
+		values
+			('tenant_none', 'Tenant None', 'active'),
+			('tenant_multi', 'Tenant Multi', 'active');
+		insert into users (id, email, name, role, status)
+		values
+			('user_a', 'user-a@example.com', 'User A', 'member', 'active'),
+			('user_b', 'user-b@example.com', 'User B', 'member', 'active');
+		insert into tenant_memberships (id, tenant_id, user_id, role, status)
+		values
+			('tm_a', 'tenant_multi', 'user_a', 'member', 'active'),
+			('tm_b', 'tenant_multi', 'user_b', 'member', 'active');
+		insert into platform_api_keys (id, tenant_id, name, key_hash, status)
+		values
+			('pak_none', 'tenant_none', 'none', 'sha256:none', 'active'),
+			('pak_multi', 'tenant_multi', 'multi', 'sha256:multi', 'active');
+	`); err != nil {
+		t.Fatalf("seed auth records failed: %v", err)
+	}
+
+	repo := NewAuthRepository(New(conn))
+
+	testCases := []struct {
+		name    string
+		keyHash string
+	}{
+		{
+			name:    "no active memberships",
+			keyHash: "sha256:none",
+		},
+		{
+			name:    "multiple active memberships",
+			keyHash: "sha256:multi",
+		},
+	}
+
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			record, err := repo.FindPlatformAPIKeyByHash(ctx, tc.keyHash)
+			if err != nil {
+				t.Fatalf("FindPlatformAPIKeyByHash failed: %v", err)
+			}
+			if record.UserID != "" {
+				t.Fatalf("expected empty user id when membership scope is not uniquely attributable, got %q", record.UserID)
+			}
+		})
 	}
 }
 

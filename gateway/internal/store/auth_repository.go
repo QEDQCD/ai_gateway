@@ -144,12 +144,38 @@ func (r *SQLAuthRepository) FindPlatformAPIKeyByHash(ctx context.Context, keyHas
 		return PlatformAPIKeyRecord{}, err
 	}
 
+	userID, err := r.findUniqueActiveMembershipUserID(ctx, row.TenantID)
+	if err != nil {
+		return PlatformAPIKeyRecord{}, err
+	}
+
 	return PlatformAPIKeyRecord{
 		ID:       row.ID,
 		TenantID: row.TenantID,
+		UserID:   userID,
 		Name:     row.Name,
 		Status:   domain.Status(row.Status),
 	}, nil
+}
+
+func (r *SQLAuthRepository) findUniqueActiveMembershipUserID(ctx context.Context, tenantID string) (string, error) {
+	queries, ok := r.queries.(*Queries)
+	if !ok {
+		return "", nil
+	}
+
+	const lookupUniqueTenantMember = `
+select case when count(*) = 1 then min(user_id) else '' end
+from tenant_memberships
+where tenant_id = $1
+  and status = 'active'
+`
+
+	var userID string
+	if err := queries.db.QueryRow(ctx, lookupUniqueTenantMember, tenantID).Scan(&userID); err != nil {
+		return "", err
+	}
+	return userID, nil
 }
 
 func (r *SQLAuthRepository) FindTenantByID(ctx context.Context, tenantID string) (TenantRecord, error) {
