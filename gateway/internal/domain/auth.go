@@ -9,3 +9,8 @@ const (
 	StatusActive   Status = "active"
 	StatusDisabled Status = "disabled"
 )
+
+const (
+	ConsoleRoleAdmin  = "admin"
+	ConsoleRoleMember = "member"
+)

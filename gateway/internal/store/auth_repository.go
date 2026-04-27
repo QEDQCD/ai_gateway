@@ -17,6 +17,7 @@ var ErrAuthRecordNotFound = errors.New("auth record not found")
 type PlatformAPIKeyRecord struct {
 	ID       string
 	TenantID string
+	UserID   string
 	Name     string
 	Status   domain.Status
 }
@@ -37,6 +38,13 @@ type ProviderCredentialRecord struct {
 	SupportedModels []string
 }
 
+type ConsolePrincipalRecord struct {
+	UserID   string
+	Email    string
+	Role     string
+	TenantID string
+}
+
 type AuthRepository interface {
 	FindPlatformAPIKeyByHash(ctx context.Context, keyHash string) (PlatformAPIKeyRecord, error)
 	FindTenantByID(ctx context.Context, tenantID string) (TenantRecord, error)
@@ -46,6 +54,7 @@ type AuthRepository interface {
 type BootstrapAuthConfig struct {
 	RawPlatformAPIKey    string
 	PlatformAPIKeyID     string
+	PlatformAPIKeyUserID string
 	PlatformAPIKeyName   string
 	TenantID             string
 	TenantName           string
@@ -55,6 +64,7 @@ type BootstrapAuthConfig struct {
 	ProviderBaseURL      string
 	ProviderAPIKey       string
 	SupportedModels      []string
+	ConsolePrincipals    []ConsolePrincipalRecord
 }
 
 type BootstrapAuthRepository struct {
@@ -62,6 +72,7 @@ type BootstrapAuthRepository struct {
 	platformAPIKeyRecord PlatformAPIKeyRecord
 	tenantRecord         TenantRecord
 	providerCredentials  []ProviderCredentialRecord
+	consolePrincipals    map[string]ConsolePrincipalRecord
 }
 
 type authQueries interface {
@@ -93,6 +104,7 @@ func NewBootstrapAuthRepository(cfg BootstrapAuthConfig) *BootstrapAuthRepositor
 	repo.platformAPIKeyRecord = PlatformAPIKeyRecord{
 		ID:       cfg.PlatformAPIKeyID,
 		TenantID: cfg.TenantID,
+		UserID:   cfg.PlatformAPIKeyUserID,
 		Name:     cfg.PlatformAPIKeyName,
 		Status:   domain.StatusActive,
 	}
@@ -112,11 +124,49 @@ func NewBootstrapAuthRepository(cfg BootstrapAuthConfig) *BootstrapAuthRepositor
 			SupportedModels: append([]string(nil), cfg.SupportedModels...),
 		},
 	}
+	if len(cfg.ConsolePrincipals) > 0 {
+		repo.consolePrincipals = make(map[string]ConsolePrincipalRecord, len(cfg.ConsolePrincipals))
+		for _, principal := range cfg.ConsolePrincipals {
+			repo.consolePrincipals[normalizeConsoleSubject(principal.Email)] = principal
+		}
+	}
 
 	return repo
 }
 
 func (r *SQLAuthRepository) FindPlatformAPIKeyByHash(ctx context.Context, keyHash string) (PlatformAPIKeyRecord, error) {
+	if queries, ok := r.queries.(*Queries); ok {
+		const lookupPlatformAPIKeyWithScope = `
+select pak.id, pak.tenant_id, pak.name, pak.status,
+  coalesce((
+    select tm.user_id
+    from tenant_memberships tm
+    where tm.tenant_id = pak.tenant_id
+      and tm.status = 'active'
+    order by tm.created_at asc, tm.id asc
+    limit 1
+  ), '') as user_id
+from platform_api_keys pak
+where pak.key_hash = $1
+`
+
+		var record PlatformAPIKeyRecord
+		err := queries.db.QueryRow(ctx, lookupPlatformAPIKeyWithScope, keyHash).Scan(
+			&record.ID,
+			&record.TenantID,
+			&record.Name,
+			&record.Status,
+			&record.UserID,
+		)
+		if err == nil {
+			return record, nil
+		}
+		if errors.Is(err, pgx.ErrNoRows) {
+			return PlatformAPIKeyRecord{}, ErrAuthRecordNotFound
+		}
+		return PlatformAPIKeyRecord{}, err
+	}
+
 	row, err := r.queries.GetPlatformAPIKeyByHash(ctx, keyHash)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -198,9 +248,73 @@ func (r *BootstrapAuthRepository) ListActiveProviderCredentials(context.Context)
 	return append([]ProviderCredentialRecord(nil), r.providerCredentials...), nil
 }
 
+func (r *SQLAuthRepository) ResolveConsolePrincipal(ctx context.Context, subject string) (ConsolePrincipalRecord, error) {
+	queries, ok := r.queries.(*Queries)
+	if !ok {
+		return ConsolePrincipalRecord{}, ErrAuthRecordNotFound
+	}
+
+	const lookupConsolePrincipal = `
+select u.id, u.email, u.role,
+  coalesce((
+    select tm.tenant_id
+    from tenant_memberships tm
+    where tm.user_id = u.id
+      and tm.status = 'active'
+    order by tm.created_at asc, tm.id asc
+    limit 1
+  ), '') as tenant_id
+from users u
+where lower(u.email) = $1
+  and u.status = 'active'
+  and (
+    u.role = 'admin'
+    or exists (
+      select 1
+      from tenant_memberships tm
+      where tm.user_id = u.id
+        and tm.status = 'active'
+    )
+  )
+limit 1
+`
+
+	subject = normalizeConsoleSubject(subject)
+	var record ConsolePrincipalRecord
+	err := queries.db.QueryRow(ctx, lookupConsolePrincipal, subject).Scan(
+		&record.UserID,
+		&record.Email,
+		&record.Role,
+		&record.TenantID,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ConsolePrincipalRecord{}, ErrAuthRecordNotFound
+		}
+		return ConsolePrincipalRecord{}, err
+	}
+	return record, nil
+}
+
+func (r *BootstrapAuthRepository) ResolveConsolePrincipal(_ context.Context, subject string) (ConsolePrincipalRecord, error) {
+	if len(r.consolePrincipals) == 0 {
+		return ConsolePrincipalRecord{}, ErrAuthRecordNotFound
+	}
+
+	principal, ok := r.consolePrincipals[normalizeConsoleSubject(subject)]
+	if !ok {
+		return ConsolePrincipalRecord{}, ErrAuthRecordNotFound
+	}
+	return principal, nil
+}
+
 func hashPlatformAPIKey(rawKey string) string {
 	sum := sha256.Sum256([]byte(rawKey))
 	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func normalizeConsoleSubject(subject string) string {
+	return strings.ToLower(strings.TrimSpace(subject))
 }
 
 var _ AuthRepository = (*SQLAuthRepository)(nil)

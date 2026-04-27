@@ -21,6 +21,19 @@ type AuthService interface {
 	Resolve(ctx context.Context, rawKey string, requestedModel string) (domain.RequestContext, error)
 }
 
+type ConsoleAuthService interface {
+	AuthService
+	ResolvePlatformAPIKey(ctx context.Context, rawKey string) (domain.RequestContext, error)
+	ResolveConsolePrincipal(ctx context.Context, subject string) (ConsolePrincipal, error)
+}
+
+type ConsolePrincipal struct {
+	UserID   string
+	Email    string
+	Role     string
+	TenantID string
+}
+
 type QuotaGuard interface {
 	CheckTenantQuota(ctx context.Context, tenantID string) error
 }
@@ -42,9 +55,13 @@ type authService struct {
 	routeService RouteService
 }
 
+type consolePrincipalRepository interface {
+	ResolveConsolePrincipal(ctx context.Context, subject string) (store.ConsolePrincipalRecord, error)
+}
+
 const redisQuotaExhaustedKeyPrefix = "tenant_quota_exhausted:"
 
-func NewAuthService(repository store.AuthRepository, quotaGuard QuotaGuard, routeService RouteService) AuthService {
+func NewAuthService(repository store.AuthRepository, quotaGuard QuotaGuard, routeService RouteService) ConsoleAuthService {
 	if quotaGuard == nil {
 		panic("service: quota guard is required")
 	}
@@ -70,7 +87,7 @@ func NewRedisQuotaGuard(client RedisQuotaClient) RedisQuotaGuard {
 	}
 }
 
-func NewUnauthorizedAuthService() AuthService {
+func NewUnauthorizedAuthService() ConsoleAuthService {
 	return unauthorizedAuthService{}
 }
 
@@ -122,6 +139,47 @@ func (s authService) Resolve(ctx context.Context, rawKey string, requestedModel 
 	}, nil
 }
 
+func (s authService) ResolvePlatformAPIKey(ctx context.Context, rawKey string) (domain.RequestContext, error) {
+	return s.Resolve(ctx, rawKey, "")
+}
+
+func (s authService) ResolveConsolePrincipal(ctx context.Context, subject string) (ConsolePrincipal, error) {
+	subject = strings.TrimSpace(subject)
+	if subject == "" {
+		return ConsolePrincipal{}, fmt.Errorf("%w: console subject is required", ErrUnauthorized)
+	}
+
+	repository, ok := s.repository.(consolePrincipalRepository)
+	if !ok {
+		return ConsolePrincipal{}, fmt.Errorf("%w: console principal resolution unavailable", ErrUnauthorized)
+	}
+
+	record, err := repository.ResolveConsolePrincipal(ctx, subject)
+	if err != nil {
+		if errors.Is(err, store.ErrAuthRecordNotFound) {
+			return ConsolePrincipal{}, fmt.Errorf("%w: console principal not found", ErrUnauthorized)
+		}
+		return ConsolePrincipal{}, err
+	}
+
+	switch record.Role {
+	case domain.ConsoleRoleAdmin:
+	case domain.ConsoleRoleMember:
+		if record.TenantID == "" {
+			return ConsolePrincipal{}, fmt.Errorf("%w: tenant-scoped membership is required", ErrUnauthorized)
+		}
+	default:
+		return ConsolePrincipal{}, fmt.Errorf("%w: console role %q is invalid", ErrUnauthorized, record.Role)
+	}
+
+	return ConsolePrincipal{
+		UserID:   record.UserID,
+		Email:    record.Email,
+		Role:     record.Role,
+		TenantID: record.TenantID,
+	}, nil
+}
+
 func (g RedisQuotaGuard) CheckTenantQuota(ctx context.Context, tenantID string) error {
 	exhausted, err := g.client.Exists(ctx, g.keyPrefix+tenantID)
 	if err != nil {
@@ -135,6 +193,14 @@ func (g RedisQuotaGuard) CheckTenantQuota(ctx context.Context, tenantID string) 
 
 func (unauthorizedAuthService) Resolve(context.Context, string, string) (domain.RequestContext, error) {
 	return domain.RequestContext{}, fmt.Errorf("%w: auth service not configured", ErrUnauthorized)
+}
+
+func (unauthorizedAuthService) ResolvePlatformAPIKey(context.Context, string) (domain.RequestContext, error) {
+	return domain.RequestContext{}, fmt.Errorf("%w: auth service not configured", ErrUnauthorized)
+}
+
+func (unauthorizedAuthService) ResolveConsolePrincipal(context.Context, string) (ConsolePrincipal, error) {
+	return ConsolePrincipal{}, fmt.Errorf("%w: auth service not configured", ErrUnauthorized)
 }
 
 func hashPlatformAPIKey(rawKey string) string {

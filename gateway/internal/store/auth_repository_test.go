@@ -8,6 +8,23 @@ import (
 	"github.com/example/ai_gateway/gateway/internal/secret"
 )
 
+func TestFindPlatformAPIKeyByHashReturnsCreatorUserAndTenantScope(t *testing.T) {
+	t.Parallel()
+
+	repo := newSeededAuthRepository(t)
+	record, err := repo.FindPlatformAPIKeyByHash(context.Background(), hashPlatformAPIKey("agw_demo_key"))
+	if err != nil {
+		t.Fatalf("FindPlatformAPIKeyByHash failed: %v", err)
+	}
+
+	if record.UserID == "" {
+		t.Fatal("expected user id on auth record")
+	}
+	if record.TenantID != "tenant_demo" {
+		t.Fatalf("expected tenant_demo, got %q", record.TenantID)
+	}
+}
+
 func TestSQLAuthRepositoryListActiveProviderCredentialsMapsSupportedModels(t *testing.T) {
 	t.Parallel()
 
@@ -126,4 +143,17 @@ func (f fakeAuthQueries) GetTenantByID(context.Context, string) (GetTenantByIDRo
 
 func (f fakeAuthQueries) ListActiveProviderCredentials(context.Context) ([]ListActiveProviderCredentialsRow, error) {
 	return f.providerCredentials, nil
+}
+
+func newSeededAuthRepository(t *testing.T) *BootstrapAuthRepository {
+	t.Helper()
+
+	return NewBootstrapAuthRepository(BootstrapAuthConfig{
+		RawPlatformAPIKey:    "agw_demo_key",
+		PlatformAPIKeyID:     "pak_demo",
+		PlatformAPIKeyUserID: "user_demo",
+		PlatformAPIKeyName:   "demo",
+		TenantID:             "tenant_demo",
+		TenantName:           "Demo Tenant",
+	})
 }

@@ -12,6 +12,22 @@ import (
 	"github.com/example/ai_gateway/gateway/internal/store"
 )
 
+func TestResolveConsolePrincipalAllowsAdminAndMemberScopes(t *testing.T) {
+	t.Parallel()
+
+	authService := newSeededAuthService(t)
+
+	admin, err := authService.ResolveConsolePrincipal(context.Background(), "admin@example.com")
+	if err != nil || admin.Role != "admin" {
+		t.Fatalf("expected admin principal, got %#v err=%v", admin, err)
+	}
+
+	member, err := authService.ResolveConsolePrincipal(context.Background(), "member-a@example.com")
+	if err != nil || member.Role != "member" || member.TenantID != "tenant_demo" {
+		t.Fatalf("expected tenant-scoped member, got %#v err=%v", member, err)
+	}
+}
+
 func TestResolveRequestContextUsesPlatformKeyAndProviderCredential(t *testing.T) {
 	t.Parallel()
 
@@ -508,4 +524,32 @@ type testContextKey struct{}
 func hashPlatformAPIKey(raw string) string {
 	sum := sha256.Sum256([]byte(raw))
 	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func newSeededAuthService(t *testing.T) service.ConsoleAuthService {
+	t.Helper()
+
+	repo := store.NewBootstrapAuthRepository(store.BootstrapAuthConfig{
+		RawPlatformAPIKey:    "agw_demo_key",
+		PlatformAPIKeyID:     "pak_demo",
+		PlatformAPIKeyUserID: "user_demo",
+		PlatformAPIKeyName:   "demo",
+		TenantID:             "tenant_demo",
+		TenantName:           "Demo Tenant",
+		ConsolePrincipals: []store.ConsolePrincipalRecord{
+			{
+				UserID: "user_admin",
+				Email:  "admin@example.com",
+				Role:   "admin",
+			},
+			{
+				UserID:   "user_member_a",
+				Email:    "member-a@example.com",
+				Role:     "member",
+				TenantID: "tenant_demo",
+			},
+		},
+	})
+
+	return service.NewAuthService(repo, &fakeQuotaGuard{}, service.NewRouteService(repo))
 }

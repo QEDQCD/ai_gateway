@@ -11,6 +11,11 @@ import (
 	"github.com/gofiber/fiber/v2"
 )
 
+const (
+	requestContextLocalKey   = "requestContext"
+	consolePrincipalLocalKey = "console_principal"
+)
+
 func RequirePlatformAPIKey(authService service.AuthService) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		raw := strings.TrimSpace(strings.TrimPrefix(c.Get("Authorization"), "Bearer "))
@@ -19,7 +24,7 @@ func RequirePlatformAPIKey(authService service.AuthService) fiber.Handler {
 		if err != nil {
 			return authError(err)
 		}
-		c.Locals("requestContext", ctx)
+		c.Locals(requestContextLocalKey, ctx)
 		return c.Next()
 	}
 }
