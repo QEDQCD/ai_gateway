@@ -67,6 +67,16 @@ func MemberDeactivateAPIKey(member service.MemberConsoleService) fiber.Handler {
 	}
 }
 
+func MemberRevealAPIKeySecret(member service.MemberConsoleService) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		payload, err := member.RevealAPIKeySecret(c.UserContext(), c.Params("id"))
+		if err != nil {
+			return consoleError(err)
+		}
+		return c.JSON(payload)
+	}
+}
+
 func MemberUsageOverview(member service.MemberConsoleService) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		query, err := parseUsageQuery(c)

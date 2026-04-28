@@ -37,12 +37,12 @@ type ConsoleSystemStatus struct {
 }
 
 type APIKeyItem struct {
-	ID                 string   `json:"id"`
-	Name               string   `json:"name"`
-	Tenant             string   `json:"tenant"`
-	Status             string   `json:"status"`
-	Scopes             []string `json:"scopes"`
-	LastUsedAt         string   `json:"last_used_at"`
+	ID                  string   `json:"id"`
+	Name                string   `json:"name"`
+	Tenant              string   `json:"tenant"`
+	Status              string   `json:"status"`
+	Scopes              []string `json:"scopes"`
+	LastUsedAt          string   `json:"last_used_at"`
 	CreatedByUserID     string   `json:"created_by_user_id,omitempty"`
 	ExpiresAt           string   `json:"expires_at,omitempty"`
 	Revealable          bool     `json:"revealable,omitempty"`
@@ -272,6 +272,7 @@ type ConsoleService interface {
 	RotateAPIKey(ctx context.Context, id string, req RotateAPIKeyRequest) (APIKeyMutationResult, error)
 	DeactivateAPIKey(ctx context.Context, id string) (APIKeyMutationResult, error)
 	DeleteAPIKey(ctx context.Context, id string) (APIKeyMutationResult, error)
+	RevealAPIKeySecret(ctx context.Context, id string) (APIKeySecretView, error)
 	Routes(ctx context.Context) (RoutesPageData, error)
 	Playground(ctx context.Context) (PlaygroundPageData, error)
 	RunPlayground(ctx context.Context, req PlaygroundRunRequest) (PlaygroundRunResponse, error)
@@ -323,6 +324,10 @@ func (unavailableConsoleService) DeactivateAPIKey(context.Context, string) (APIK
 
 func (unavailableConsoleService) DeleteAPIKey(context.Context, string) (APIKeyMutationResult, error) {
 	return APIKeyMutationResult{}, ErrConsoleServiceUnavailable
+}
+
+func (unavailableConsoleService) RevealAPIKeySecret(context.Context, string) (APIKeySecretView, error) {
+	return APIKeySecretView{}, ErrConsoleServiceUnavailable
 }
 
 func (unavailableConsoleService) Routes(context.Context) (RoutesPageData, error) {

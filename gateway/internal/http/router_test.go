@@ -382,6 +382,45 @@ func TestAdminCreateAPIKeyRouteReturnsConsoleData(t *testing.T) {
 	}
 }
 
+func TestAdminRevealAPIKeySecretRouteReturnsConsoleData(t *testing.T) {
+	t.Parallel()
+
+	app := apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+		ServiceAuthUsername: "test-console-user",
+		ServiceAuthPassword: "test-console-password",
+		ConsoleService: stubConsoleService{
+			apiKeySecretView: service.APIKeySecretView{
+				APIKeyID:            "pak_demo",
+				MaskedKey:           "agw_****demo",
+				FullKey:             "agw_secret_demo",
+				Revealable:          true,
+				LegacyUnrecoverable: false,
+				ExpiresAt:           "2026-05-01T12:00:00Z",
+			},
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/api-keys/pak_demo/secret", nil)
+	req.SetBasicAuth("test-console-user", "test-console-password")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("io.ReadAll failed: %v", err)
+	}
+	expected := `{"api_key_id":"pak_demo","masked_key":"agw_****demo","full_key":"agw_secret_demo","revealable":true,"legacy_unrecoverable":false,"expires_at":"2026-05-01T12:00:00Z"}`
+	if string(body) != expected {
+		t.Fatalf("expected body %q, got %q", expected, string(body))
+	}
+}
+
 func TestAdminRotateAPIKeyRouteReturnsConsoleData(t *testing.T) {
 	t.Parallel()
 
@@ -713,6 +752,59 @@ func TestMemberOverviewRouteRejectsAdminPrincipal(t *testing.T) {
 	}
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("expected 403, got %d", resp.StatusCode)
+	}
+}
+
+func TestMemberRevealAPIKeySecretRouteReturnsConsoleData(t *testing.T) {
+	t.Parallel()
+
+	captured := service.ConsolePrincipal{}
+	app := apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+		ServiceAuthUsername: "test-console-user",
+		ServiceAuthPassword: "test-console-password",
+		AuthService: stubConsoleAuthService{
+			principal: service.ConsolePrincipal{
+				UserID:   "user_member_a",
+				Email:    "member-a@example.com",
+				Role:     "member",
+				TenantID: "tenant_demo",
+			},
+		},
+		MemberConsoleService: stubMemberConsoleService{
+			apiKeySecretView: service.APIKeySecretView{
+				APIKeyID:            "pak_demo",
+				MaskedKey:           "agw_****demo",
+				FullKey:             "agw_secret_demo",
+				Revealable:          true,
+				LegacyUnrecoverable: false,
+				ExpiresAt:           "2026-05-01T12:00:00Z",
+			},
+			principalRef: &captured,
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/me/api-keys/pak_demo/secret", nil)
+	req.SetBasicAuth("test-console-user", "test-console-password")
+	req.Header.Set("X-Console-Subject", "member-a@example.com")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("io.ReadAll failed: %v", err)
+	}
+	expected := `{"api_key_id":"pak_demo","masked_key":"agw_****demo","full_key":"agw_secret_demo","revealable":true,"legacy_unrecoverable":false,"expires_at":"2026-05-01T12:00:00Z"}`
+	if string(body) != expected {
+		t.Fatalf("expected body %q, got %q", expected, string(body))
+	}
+	if captured.UserID != "user_member_a" {
+		t.Fatalf("expected captured principal user_id %q, got %q", "user_member_a", captured.UserID)
 	}
 }
 
@@ -1259,6 +1351,7 @@ type stubConsoleService struct {
 	systemStatus             service.ConsoleSystemStatus
 	apiKeys                  service.APIKeysPageData
 	apiKeyMutationResult     service.APIKeyMutationResult
+	apiKeySecretView         service.APIKeySecretView
 	applications             service.ApplicationsPageData
 	applicationMutation      service.ApplicationMutationResult
 	approveApplicationIDRef  *string
@@ -1272,14 +1365,15 @@ type stubConsoleService struct {
 }
 
 type stubMemberConsoleService struct {
-	overview      service.MemberOverviewPageData
-	apiKeys       service.MemberAPIKeysPageData
-	apiKeyResult  service.APIKeyMutationResult
-	usageOverview service.UsageOverviewData
-	usageRequests service.UsageRequestsPageData
-	failures      service.MemberFailurePageData
-	auditEvents   service.MemberAuditPageData
-	principalRef  *service.ConsolePrincipal
+	overview         service.MemberOverviewPageData
+	apiKeys          service.MemberAPIKeysPageData
+	apiKeyResult     service.APIKeyMutationResult
+	apiKeySecretView service.APIKeySecretView
+	usageOverview    service.UsageOverviewData
+	usageRequests    service.UsageRequestsPageData
+	failures         service.MemberFailurePageData
+	auditEvents      service.MemberAuditPageData
+	principalRef     *service.ConsolePrincipal
 }
 
 func (s stubMemberConsoleService) capturePrincipal(ctx context.Context) {
@@ -1314,6 +1408,11 @@ func (s stubMemberConsoleService) RotateAPIKey(ctx context.Context, _ string, _ 
 func (s stubMemberConsoleService) DeactivateAPIKey(ctx context.Context, _ string) (service.APIKeyMutationResult, error) {
 	s.capturePrincipal(ctx)
 	return s.apiKeyResult, nil
+}
+
+func (s stubMemberConsoleService) RevealAPIKeySecret(ctx context.Context, _ string) (service.APIKeySecretView, error) {
+	s.capturePrincipal(ctx)
+	return s.apiKeySecretView, nil
 }
 
 func (s stubMemberConsoleService) UsageOverview(ctx context.Context, _ service.UsageQuery) (service.UsageOverviewData, error) {
@@ -1376,6 +1475,10 @@ func (s stubConsoleService) DeactivateAPIKey(context.Context, string) (service.A
 
 func (s stubConsoleService) DeleteAPIKey(context.Context, string) (service.APIKeyMutationResult, error) {
 	return s.apiKeyMutationResult, nil
+}
+
+func (s stubConsoleService) RevealAPIKeySecret(context.Context, string) (service.APIKeySecretView, error) {
+	return s.apiKeySecretView, nil
 }
 
 func (s stubConsoleService) Routes(context.Context) (service.RoutesPageData, error) {

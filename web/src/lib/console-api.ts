@@ -50,6 +50,15 @@ export type APIKeyMutationResult = {
   raw_key?: string;
 };
 
+export type APIKeySecretView = {
+  api_key_id: string;
+  masked_key: string;
+  full_key?: string;
+  revealable: boolean;
+  legacy_unrecoverable: boolean;
+  expires_at?: string;
+};
+
 export type ApplicationItem = {
   id: string;
   email: string;
@@ -392,6 +401,10 @@ export function deleteAPIKey(id: string) {
   });
 }
 
+export function revealAPIKeySecret(id: string) {
+  return requestJson<APIKeySecretView>(`/api/admin/api-keys/${id}/secret`);
+}
+
 export type CreateMemberAPIKeyPayload = {
   name: string;
   scopes: APIKeyScope[];
@@ -425,6 +438,10 @@ export function deactivateMemberAPIKey(id: string) {
   return requestJson<APIKeyMutationResult>(`/api/me/api-keys/${id}/deactivate`, {
     method: "POST",
   });
+}
+
+export function revealMemberAPIKeySecret(id: string) {
+  return requestJson<APIKeySecretView>(`/api/me/api-keys/${id}/secret`);
 }
 
 export function getRoutes() {

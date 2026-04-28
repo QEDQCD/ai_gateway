@@ -13,12 +13,12 @@ type MemberOverviewPageData struct {
 }
 
 type MemberAPIKeyItem struct {
-	ID                 string   `json:"id"`
-	Name               string   `json:"name"`
-	Tenant             string   `json:"tenant"`
-	Status             string   `json:"status"`
-	Scopes             []string `json:"scopes"`
-	LastUsedAt         string   `json:"last_used_at"`
+	ID                  string   `json:"id"`
+	Name                string   `json:"name"`
+	Tenant              string   `json:"tenant"`
+	Status              string   `json:"status"`
+	Scopes              []string `json:"scopes"`
+	LastUsedAt          string   `json:"last_used_at"`
 	OwnerUserID         string   `json:"owner_user_id"`
 	CreatedByUserID     string   `json:"created_by_user_id,omitempty"`
 	ExpiresAt           string   `json:"expires_at,omitempty"`
@@ -53,6 +53,7 @@ type MemberConsoleService interface {
 	CreateAPIKey(ctx context.Context, req CreateAPIKeyRequest) (APIKeyMutationResult, error)
 	RotateAPIKey(ctx context.Context, id string, req RotateAPIKeyRequest) (APIKeyMutationResult, error)
 	DeactivateAPIKey(ctx context.Context, id string) (APIKeyMutationResult, error)
+	RevealAPIKeySecret(ctx context.Context, id string) (APIKeySecretView, error)
 	UsageOverview(ctx context.Context, query UsageQuery) (UsageOverviewData, error)
 	UsageRequests(ctx context.Context, query UsageQuery) (UsageRequestsPageData, error)
 	Failures(ctx context.Context, query UsageQuery) (MemberFailurePageData, error)
@@ -101,6 +102,10 @@ func (unavailableMemberConsoleService) RotateAPIKey(context.Context, string, Rot
 
 func (unavailableMemberConsoleService) DeactivateAPIKey(context.Context, string) (APIKeyMutationResult, error) {
 	return APIKeyMutationResult{}, ErrConsoleServiceUnavailable
+}
+
+func (unavailableMemberConsoleService) RevealAPIKeySecret(context.Context, string) (APIKeySecretView, error) {
+	return APIKeySecretView{}, ErrConsoleServiceUnavailable
 }
 
 func (unavailableMemberConsoleService) UsageOverview(context.Context, UsageQuery) (UsageOverviewData, error) {
