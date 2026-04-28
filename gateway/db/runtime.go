@@ -809,6 +809,7 @@ func governanceSeedStatements(cfg governanceSeedConfig) []string {
 		insert into account_applications (
 			id,
 			email,
+			email_normalized,
 			name,
 			company_name,
 			use_case,
@@ -818,10 +819,11 @@ func governanceSeedStatements(cfg governanceSeedConfig) []string {
 			reviewed_at
 		)
 		values
-			('%s', '%s', '%s', 'Demo Co', '内部知识问答', 'approved', '%s', 'seed approve', timestamptz '2026-04-24T09:44:00Z'),
-			('%s', '%s', '%s', 'Demo Co', '压测脚本', 'rejected', '%s', 'seed reject', timestamptz '2026-04-24T09:43:00Z')
+			('%s', '%s', '%s', '%s', 'Demo Co', '内部知识问答', 'approved', '%s', 'seed approve', timestamptz '2026-04-24T09:44:00Z'),
+			('%s', '%s', '%s', '%s', 'Demo Co', '压测脚本', 'rejected', '%s', 'seed reject', timestamptz '2026-04-24T09:43:00Z')
 		on conflict (id) do update set
 			email = excluded.email,
+			email_normalized = excluded.email_normalized,
 			name = excluded.name,
 			company_name = excluded.company_name,
 			use_case = excluded.use_case,
@@ -830,8 +832,8 @@ func governanceSeedStatements(cfg governanceSeedConfig) []string {
 			review_comment = excluded.review_comment,
 			reviewed_at = excluded.reviewed_at;
 		`,
-			cfg.ApprovedApplicationID, escapeLiteral(cfg.ApprovedApplicationEmail), escapeLiteral(cfg.ApprovedApplicationName), cfg.AdminUserID,
-			cfg.RejectedApplicationID, escapeLiteral(cfg.RejectedApplicationEmail), escapeLiteral(cfg.RejectedApplicationName), cfg.AdminUserID,
+			cfg.ApprovedApplicationID, escapeLiteral(cfg.ApprovedApplicationEmail), escapeLiteral(strings.ToLower(strings.TrimSpace(cfg.ApprovedApplicationEmail))), escapeLiteral(cfg.ApprovedApplicationName), cfg.AdminUserID,
+			cfg.RejectedApplicationID, escapeLiteral(cfg.RejectedApplicationEmail), escapeLiteral(strings.ToLower(strings.TrimSpace(cfg.RejectedApplicationEmail))), escapeLiteral(cfg.RejectedApplicationName), cfg.AdminUserID,
 		),
 		fmt.Sprintf(`
 		insert into audit_events (

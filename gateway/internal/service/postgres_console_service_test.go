@@ -3,6 +3,7 @@ package service_test
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -508,6 +509,34 @@ func TestPostgresConsoleServiceCreateApplicationPersistsPendingRow(t *testing.T)
 	}
 	if reviewedAt != nil {
 		t.Fatal("expected reviewed_at to be null")
+	}
+}
+
+func TestPostgresConsoleServiceCreateApplicationRequiresPasswordAndCaptchaToken(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, _ := newUsageConsoleService(t, ctx)
+
+	_, err := console.CreateApplication(ctx, service.CreateApplicationRequest{
+		Email:       "new-user@example.com",
+		Name:        "新用户",
+		CompanyName: "New Co",
+		UseCase:     "测试接入",
+		Password:    "",
+	})
+	if err == nil {
+		t.Fatal("expected CreateApplication to require password and captcha_pass_token")
+	}
+
+	var statusErr service.StatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("expected StatusError, got %T", err)
+	}
+	if statusErr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", statusErr.Code)
 	}
 }
 

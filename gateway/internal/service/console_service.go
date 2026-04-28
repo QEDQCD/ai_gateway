@@ -102,16 +102,34 @@ type ApplicationsPageData struct {
 }
 
 type CreateApplicationRequest struct {
-	Email       string `json:"email"`
-	Name        string `json:"name"`
-	CompanyName string `json:"company_name"`
-	UseCase     string `json:"use_case"`
+	Email            string `json:"email"`
+	Name             string `json:"name"`
+	CompanyName      string `json:"company_name"`
+	UseCase          string `json:"use_case"`
+	Password         string `json:"password"`
+	CaptchaPassToken string `json:"captcha_pass_token"`
 }
 
 type ApproveApplicationRequest struct {
 	ActorID  string `json:"actor_id"`
 	Comment  string `json:"comment"`
 	TenantID string `json:"tenant_id"`
+}
+
+type CaptchaChallenge struct {
+	CaptchaID string `json:"captcha_id"`
+	ImageData string `json:"image_data"`
+	ExpiresAt string `json:"expires_at"`
+}
+
+type VerifyCaptchaRequest struct {
+	CaptchaID   string `json:"captcha_id"`
+	CaptchaCode string `json:"captcha_code"`
+}
+
+type CaptchaPassResult struct {
+	CaptchaPassToken string `json:"captcha_pass_token"`
+	ExpiresAt        string `json:"expires_at"`
 }
 
 type RejectApplicationRequest struct {

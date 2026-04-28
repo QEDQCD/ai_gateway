@@ -251,6 +251,8 @@ func (s postgresConsoleService) CreateApplication(ctx context.Context, req Creat
 	name := strings.TrimSpace(req.Name)
 	companyName := strings.TrimSpace(req.CompanyName)
 	useCase := strings.TrimSpace(req.UseCase)
+	password := strings.TrimSpace(req.Password)
+	captchaPassToken := strings.TrimSpace(req.CaptchaPassToken)
 
 	if email == "" {
 		return ApplicationMutationResult{}, StatusError{
@@ -274,6 +276,18 @@ func (s postgresConsoleService) CreateApplication(ctx context.Context, req Creat
 		return ApplicationMutationResult{}, StatusError{
 			Code:    http.StatusBadRequest,
 			Message: "use_case is required",
+		}
+	}
+	if password == "" {
+		return ApplicationMutationResult{}, StatusError{
+			Code:    http.StatusBadRequest,
+			Message: "password is required",
+		}
+	}
+	if captchaPassToken == "" {
+		return ApplicationMutationResult{}, StatusError{
+			Code:    http.StatusBadRequest,
+			Message: "captcha_pass_token is required",
 		}
 	}
 
