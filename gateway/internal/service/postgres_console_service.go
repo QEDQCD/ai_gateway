@@ -408,25 +408,50 @@ func (s postgresConsoleService) ApproveApplication(ctx context.Context, id strin
 	}
 
 	row := s.db.QueryRow(ctx, `
-		with updated_application as (
+		with selected_application as (
+			select
+				id,
+				email,
+				name,
+				company_name,
+				use_case,
+				password_hash,
+				created_at
+			from account_applications
+			where id = $1
+			  and status = 'pending'
+			  and password_hash is not null
+			for update
+		),
+		updated_application as (
 			update account_applications
 			set
 				status = 'approved',
 				reviewer_id = $2,
 				review_comment = $3,
-				reviewed_at = now()
-			where id = $1
-			  and status = 'pending'
-			returning id, email, name, company_name, use_case, status, created_at
+				reviewed_at = now(),
+				password_hash = null
+			from selected_application
+			where account_applications.id = selected_application.id
+			returning
+				account_applications.id,
+				selected_application.email,
+				selected_application.name,
+				selected_application.company_name,
+				selected_application.use_case,
+				selected_application.password_hash,
+				account_applications.status,
+				selected_application.created_at
 		),
 		upserted_user as (
-			insert into users (id, email, name, role, status)
-			select $4, email, name, 'member', 'active'
+			insert into users (id, email, name, role, status, password_hash)
+			select $4, email, name, 'member', 'active', password_hash
 			from updated_application
 			on conflict (email) do update
 			set
 				name = excluded.name,
-				status = 'active'
+				status = 'active',
+				password_hash = excluded.password_hash
 			returning id
 		),
 		upserted_membership as (
@@ -499,7 +524,8 @@ func (s postgresConsoleService) RejectApplication(ctx context.Context, id string
 				status = 'rejected',
 				reviewer_id = $2,
 				review_comment = $3,
-				reviewed_at = now()
+				reviewed_at = now(),
+				password_hash = null
 			where id = $1
 			  and status = 'pending'
 			returning id, email, name, company_name, use_case, status, created_at

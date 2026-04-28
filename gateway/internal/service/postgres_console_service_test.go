@@ -636,7 +636,6 @@ func TestPostgresConsoleServiceCreateApplicationRejectsExistingActiveUserEmail(t
 	}
 }
 
-
 func TestPostgresConsoleServiceApproveApplicationRequiresTenantID(t *testing.T) {
 	t.Parallel()
 
@@ -649,12 +648,14 @@ func TestPostgresConsoleServiceApproveApplicationRequiresTenantID(t *testing.T) 
 		insert into account_applications (
 			id,
 			email,
+			email_normalized,
 			name,
 			company_name,
 			use_case,
 			status
 		) values (
 			'app_pending_missing_tenant',
+			'missing-tenant@example.com',
 			'missing-tenant@example.com',
 			'缺少租户用户',
 			'Missing Tenant Co',
@@ -705,6 +706,11 @@ func TestPostgresConsoleServiceApproveApplicationCreatesUserMembershipAndAudit(t
 
 	console, conn := newUsageConsoleService(t, ctx)
 
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte("Example1234"), bcrypt.DefaultCost)
+	if err != nil {
+		t.Fatalf("GenerateFromPassword failed: %v", err)
+	}
+
 	if _, err := conn.Exec(ctx, `
 		insert into users (id, email, name, role, status)
 		values (
@@ -713,8 +719,11 @@ func TestPostgresConsoleServiceApproveApplicationCreatesUserMembershipAndAudit(t
 			'旧名字',
 			'member',
 			'disabled'
-		);
-
+		)
+	`); err != nil {
+		t.Fatalf("seed existing user failed: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `
 		insert into tenant_memberships (id, tenant_id, user_id, role, status)
 		values (
 			'tm_pending_existing',
@@ -722,27 +731,34 @@ func TestPostgresConsoleServiceApproveApplicationCreatesUserMembershipAndAudit(t
 			'user_pending_existing',
 			'member',
 			'disabled'
-		);
-
+		)
+	`); err != nil {
+		t.Fatalf("seed existing membership failed: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `
 		insert into account_applications (
 			id,
 			email,
+			email_normalized,
 			name,
 			company_name,
 			use_case,
+			password_hash,
 			status,
 			created_at
 		) values (
 			'app_service_pending',
 			'service-pending@example.com',
+			'service-pending@example.com',
 			'服务层待审批用户',
 			'Service Co',
 			'租户接入',
+			$1,
 			'pending',
 			timestamptz '2026-04-25T01:02:03Z'
-		);
-	`); err != nil {
-		t.Fatalf("seed approve application scenario failed: %v", err)
+		)
+	`, string(passwordHash)); err != nil {
+		t.Fatalf("seed approve application failed: %v", err)
 	}
 
 	result, err := console.ApproveApplication(ctx, "app_service_pending", service.ApproveApplicationRequest{
@@ -777,18 +793,22 @@ func TestPostgresConsoleServiceApproveApplicationCreatesUserMembershipAndAudit(t
 	}
 
 	var applicationStatus string
+	var applicationPasswordHash *string
 	var reviewerID string
 	var reviewComment string
 	var reviewedAt time.Time
 	if err := conn.QueryRow(ctx, `
-		select status, reviewer_id, review_comment, reviewed_at
+		select status, password_hash, reviewer_id, review_comment, reviewed_at
 		from account_applications
 		where id = 'app_service_pending'
-	`).Scan(&applicationStatus, &reviewerID, &reviewComment, &reviewedAt); err != nil {
+	`).Scan(&applicationStatus, &applicationPasswordHash, &reviewerID, &reviewComment, &reviewedAt); err != nil {
 		t.Fatalf("select approved application failed: %v", err)
 	}
 	if applicationStatus != "approved" {
 		t.Fatalf("expected application status %q, got %q", "approved", applicationStatus)
+	}
+	if applicationPasswordHash != nil {
+		t.Fatal("expected approved application password_hash to be cleared")
 	}
 	if reviewerID != "user_admin_demo" {
 		t.Fatalf("expected reviewer_id %q, got %q", "user_admin_demo", reviewerID)
@@ -804,11 +824,12 @@ func TestPostgresConsoleServiceApproveApplicationCreatesUserMembershipAndAudit(t
 	var userName string
 	var userRole string
 	var userStatus string
+	var userPasswordHash string
 	if err := conn.QueryRow(ctx, `
-		select id, name, role, status
+		select id, name, role, status, password_hash
 		from users
 		where email = 'service-pending@example.com'
-	`).Scan(&userID, &userName, &userRole, &userStatus); err != nil {
+	`).Scan(&userID, &userName, &userRole, &userStatus, &userPasswordHash); err != nil {
 		t.Fatalf("select approved user failed: %v", err)
 	}
 	if userID != "user_pending_existing" {
@@ -822,6 +843,9 @@ func TestPostgresConsoleServiceApproveApplicationCreatesUserMembershipAndAudit(t
 	}
 	if userStatus != "active" {
 		t.Fatalf("expected user status %q, got %q", "active", userStatus)
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(userPasswordHash), []byte("Example1234")); err != nil {
+		t.Fatalf("expected approved user password hash to match Example1234: %v", err)
 	}
 
 	var membershipCount int
@@ -866,25 +890,34 @@ func TestPostgresConsoleServiceRejectApplicationUpdatesStatusAndAudit(t *testing
 
 	console, conn := newUsageConsoleService(t, ctx)
 
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte("Example1234"), bcrypt.DefaultCost)
+	if err != nil {
+		t.Fatalf("GenerateFromPassword failed: %v", err)
+	}
+
 	if _, err := conn.Exec(ctx, `
 		insert into account_applications (
 			id,
 			email,
+			email_normalized,
 			name,
 			company_name,
 			use_case,
+			password_hash,
 			status,
 			created_at
 		) values (
 			'app_service_reject',
 			'reject@example.com',
+			'reject@example.com',
 			'待拒绝用户',
 			'Reject Co',
 			'测试接入',
+			$1,
 			'pending',
 			timestamptz '2026-04-25T01:02:03Z'
 		);
-	`); err != nil {
+	`, string(passwordHash)); err != nil {
 		t.Fatalf("seed reject application scenario failed: %v", err)
 	}
 
@@ -901,18 +934,22 @@ func TestPostgresConsoleServiceRejectApplicationUpdatesStatusAndAudit(t *testing
 	}
 
 	var applicationStatus string
+	var applicationPasswordHash *string
 	var reviewerID string
 	var reviewComment string
 	var reviewedAt time.Time
 	if err := conn.QueryRow(ctx, `
-		select status, reviewer_id, review_comment, reviewed_at
+		select status, password_hash, reviewer_id, review_comment, reviewed_at
 		from account_applications
 		where id = 'app_service_reject'
-	`).Scan(&applicationStatus, &reviewerID, &reviewComment, &reviewedAt); err != nil {
+	`).Scan(&applicationStatus, &applicationPasswordHash, &reviewerID, &reviewComment, &reviewedAt); err != nil {
 		t.Fatalf("select rejected application failed: %v", err)
 	}
 	if applicationStatus != "rejected" {
 		t.Fatalf("expected application status %q, got %q", "rejected", applicationStatus)
+	}
+	if applicationPasswordHash != nil {
+		t.Fatal("expected rejected application password_hash to be cleared")
 	}
 	if reviewerID != "user_admin_demo" {
 		t.Fatalf("expected reviewer_id %q, got %q", "user_admin_demo", reviewerID)
