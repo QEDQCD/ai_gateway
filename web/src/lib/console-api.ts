@@ -1,3 +1,5 @@
+import { clearConsoleSession, getConsoleSession, type ConsoleSession } from "./session";
+
 export type KeyMetric = {
   label: string;
   value: string;
@@ -237,6 +239,11 @@ export type MemberAuditPageData = {
   items: MemberAuditItem[];
 };
 
+export type ConsoleLoginRequest = {
+  email: string;
+  password: string;
+};
+
 type JsonRecord = Record<string, unknown>;
 
 function asRecord(value: unknown): JsonRecord {
@@ -283,7 +290,15 @@ function toPlaygroundRun(value: unknown): PlaygroundRunResponse {
 }
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = init ? await fetch(path, init) : await fetch(path);
+  const session = getConsoleSession();
+  const headers = new Headers(init?.headers);
+
+  if (session?.token) {
+    headers.set("X-Console-Session", session.token);
+  }
+
+  const requestInit = headers.size > 0 ? { ...(init ?? {}), headers: Object.fromEntries(headers.entries()) } : init;
+  const response = requestInit ? await fetch(path, requestInit) : await fetch(path);
 
   if (!response.ok) {
     let detail = "";
@@ -292,6 +307,13 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
       detail = await response.text();
     } catch {
       detail = "";
+    }
+
+    if (response.status === 401 && path !== "/api/console/session/login") {
+      clearConsoleSession();
+      if (typeof window !== "undefined") {
+        window.location.assign("/login");
+      }
     }
 
     const suffix = detail ? `：${detail}` : "";
@@ -370,15 +392,15 @@ export type CreateMemberAPIKeyPayload = {
 };
 
 export function getMemberOverview() {
-  return requestJson<MemberOverviewPageData>("/me/overview");
+  return requestJson<MemberOverviewPageData>("/api/me/overview");
 }
 
 export function getMemberAPIKeys() {
-  return requestJson<APIKeysPageData>("/me/api-keys");
+  return requestJson<APIKeysPageData>("/api/me/api-keys");
 }
 
 export function createMemberAPIKey(payload: CreateMemberAPIKeyPayload) {
-  return requestJson<APIKeyMutationResult>("/me/api-keys", {
+  return requestJson<APIKeyMutationResult>("/api/me/api-keys", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -386,7 +408,7 @@ export function createMemberAPIKey(payload: CreateMemberAPIKeyPayload) {
 }
 
 export function rotateMemberAPIKey(id: string, payload: RotateAPIKeyPayload) {
-  return requestJson<APIKeyMutationResult>(`/me/api-keys/${id}/rotate`, {
+  return requestJson<APIKeyMutationResult>(`/api/me/api-keys/${id}/rotate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -394,7 +416,7 @@ export function rotateMemberAPIKey(id: string, payload: RotateAPIKeyPayload) {
 }
 
 export function deactivateMemberAPIKey(id: string) {
-  return requestJson<APIKeyMutationResult>(`/me/api-keys/${id}/deactivate`, {
+  return requestJson<APIKeyMutationResult>(`/api/me/api-keys/${id}/deactivate`, {
     method: "POST",
   });
 }
@@ -501,17 +523,25 @@ export function getUsageRequests(query: UsageRequestsQuery) {
 }
 
 export function getMemberUsageOverview() {
-  return requestJson<UsageOverviewData>("/me/usage/overview");
+  return requestJson<UsageOverviewData>("/api/me/usage/overview");
 }
 
 export function getMemberUsageRequests(query: UsageRequestsQuery) {
-  return requestJson<UsageRequestsPageData>(`/me/usage/requests?${createUsageRequestsSearch(query)}`);
+  return requestJson<UsageRequestsPageData>(`/api/me/usage/requests?${createUsageRequestsSearch(query)}`);
 }
 
 export function getMemberFailures() {
-  return requestJson<UsageFailureData>("/me/failures");
+  return requestJson<UsageFailureData>("/api/me/failures");
 }
 
 export function getMemberAuditEvents() {
-  return requestJson<MemberAuditPageData>("/me/audit-events");
+  return requestJson<MemberAuditPageData>("/api/me/audit-events");
+}
+
+export function loginConsole(payload: ConsoleLoginRequest) {
+  return requestJson<ConsoleSession>("/api/console/session/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
 }

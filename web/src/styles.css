@@ -1,7 +1,7 @@
 :root {
   color: #172033;
-  background: #f4f6f8;
-  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  background: #edf2f7;
+  font-family: "Avenir Next", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
   line-height: 1.5;
   font-weight: 400;
 }
@@ -14,7 +14,9 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
-  background: #f4f6f8;
+  background:
+    radial-gradient(circle at top left, rgba(61, 163, 255, 0.14), transparent 28%),
+    linear-gradient(180deg, #f6fbff 0%, #edf2f7 48%, #e9eef4 100%);
 }
 
 a {
@@ -29,17 +31,20 @@ a {
 }
 
 .sidebar {
-  background: #152132;
+  background:
+    linear-gradient(180deg, rgba(12, 23, 40, 0.98) 0%, rgba(18, 33, 54, 0.96) 100%),
+    #122139;
   color: #eef3f8;
-  padding: 24px 20px;
+  padding: 24px 20px 18px;
   display: flex;
   flex-direction: column;
   gap: 24px;
+  border-right: 1px solid rgba(142, 170, 201, 0.14);
 }
 
 .sidebar__brand {
-  font-size: 20px;
-  font-weight: 700;
+  display: flex;
+  align-items: center;
 }
 
 .sidebar__nav {
@@ -51,11 +56,19 @@ a {
   padding: 10px 12px;
   border-radius: 10px;
   color: #c5d0dd;
+  border: 1px solid transparent;
+  transition:
+    background 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease,
+    transform 160ms ease;
 }
 
 .sidebar__link--active {
-  background: #243247;
+  background: rgba(68, 102, 146, 0.26);
   color: #ffffff;
+  border-color: rgba(122, 180, 255, 0.26);
+  transform: translateX(2px);
 }
 
 .shell-main {
@@ -91,6 +104,12 @@ a {
   min-width: 0;
 }
 
+.topbar__actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
 .status-badge {
   padding: 8px 12px;
   border-radius: 999px;
@@ -110,6 +129,72 @@ a {
 
 .page-content {
   padding: 28px;
+}
+
+.brand-mark {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.brand-mark--compact .brand-mark__title {
+  font-size: 18px;
+}
+
+.brand-mark__icon {
+  width: 58px;
+  height: 58px;
+  border-radius: 18px;
+  box-shadow:
+    0 12px 32px rgba(18, 49, 91, 0.34),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.brand-mark__icon svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.brand-mark__copy {
+  display: grid;
+}
+
+.brand-mark__eyebrow {
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #8bb8ff;
+}
+
+.brand-mark__title {
+  font-size: 24px;
+  line-height: 1.1;
+  color: #f8fbff;
+}
+
+.session-chip {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px 8px 14px;
+  border-radius: 999px;
+  background: #f6f9fc;
+  border: 1px solid #dde6ef;
+}
+
+.session-chip strong,
+.session-chip span {
+  display: block;
+}
+
+.session-chip strong {
+  font-size: 14px;
+}
+
+.session-chip span {
+  font-size: 12px;
+  color: #637387;
 }
 
 .page-grid {
@@ -257,6 +342,199 @@ a {
   border-color: #d88585;
   color: #9f2f2f;
   background: #fff4f4;
+}
+
+.login-page {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(360px, 430px);
+  align-items: center;
+  gap: 48px;
+  min-height: 100vh;
+  padding: 48px;
+  overflow: hidden;
+}
+
+.login-page__backdrop {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 18% 16%, rgba(62, 132, 255, 0.22), transparent 24%),
+    radial-gradient(circle at 76% 78%, rgba(125, 249, 208, 0.2), transparent 22%),
+    linear-gradient(135deg, rgba(8, 18, 32, 0.96), rgba(16, 27, 47, 0.9));
+}
+
+.login-page__hero,
+.login-card {
+  position: relative;
+  z-index: 1;
+}
+
+.login-page__hero {
+  color: #f8fbff;
+  padding: 32px 12px 32px 8px;
+}
+
+.login-page__headline {
+  max-width: 620px;
+  margin-top: 28px;
+}
+
+.login-page__kicker {
+  margin: 0 0 12px;
+  font-size: 13px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #8edbff;
+}
+
+.login-page__headline h1 {
+  margin: 0;
+  font-size: 56px;
+  line-height: 1.02;
+}
+
+.login-page__headline p:last-child {
+  margin-top: 18px;
+  max-width: 540px;
+  font-size: 17px;
+  color: rgba(232, 241, 250, 0.84);
+}
+
+.login-page__signal {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 26px;
+}
+
+.login-page__signal span {
+  padding: 10px 14px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(159, 205, 255, 0.18);
+  color: #dbeafe;
+}
+
+.login-card {
+  padding: 28px;
+  border-radius: 28px;
+  background: rgba(249, 252, 255, 0.96);
+  border: 1px solid rgba(204, 220, 235, 0.82);
+  box-shadow:
+    0 30px 80px rgba(12, 27, 49, 0.22),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(20px);
+}
+
+.login-card__header h2 {
+  margin: 8px 0 6px;
+  font-size: 30px;
+}
+
+.login-card__header p {
+  margin: 0;
+  color: #5f6f83;
+}
+
+.login-card__eyebrow {
+  font-size: 12px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #2666d1;
+}
+
+.login-form {
+  display: grid;
+  gap: 16px;
+  margin-top: 24px;
+}
+
+.field-shell {
+  display: grid;
+  gap: 8px;
+}
+
+.field-shell span {
+  font-weight: 600;
+  color: #28364a;
+}
+
+.field-shell input {
+  height: 48px;
+  border-radius: 14px;
+  border: 1px solid #ccd8e4;
+  background: #ffffff;
+  padding: 0 14px;
+  font-size: 15px;
+  color: #172033;
+  outline: none;
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease;
+}
+
+.field-shell input:focus {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.15);
+  transform: translateY(-1px);
+}
+
+.login-form__error {
+  margin: 0;
+  color: #b42318;
+  font-size: 14px;
+}
+
+.login-form__submit {
+  height: 48px;
+  border-radius: 14px;
+}
+
+@media (max-width: 1100px) {
+  .login-page {
+    grid-template-columns: 1fr;
+    gap: 24px;
+    padding: 32px 20px;
+  }
+
+  .login-page__headline h1 {
+    font-size: 40px;
+  }
+
+  .app-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    gap: 18px;
+  }
+}
+
+@media (max-width: 760px) {
+  .topbar {
+    padding: 18px 20px;
+  }
+
+  .page-content {
+    padding: 20px;
+  }
+
+  .stats-grid,
+  .stats-grid--five,
+  .stats-grid--four,
+  .two-column-grid,
+  .three-column-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .topbar__actions,
+  .session-chip {
+    width: 100%;
+    align-items: stretch;
+    flex-direction: column;
+  }
 }
 
 .button-shell--table {

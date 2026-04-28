@@ -7,19 +7,31 @@ import (
 	"github.com/gofiber/fiber/v2"
 )
 
-func ResolveConsolePrincipal(authService service.AuthService) fiber.Handler {
+func ResolveConsolePrincipal(authService service.AuthService, sessionEnabled bool) fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		subject := strings.TrimSpace(c.Get("X-Console-Subject"))
-		if subject == "" {
-			return fiber.NewError(fiber.StatusUnauthorized, "console subject is required")
-		}
-
 		consoleAuthService, ok := authService.(service.ConsoleAuthService)
 		if !ok {
 			return fiber.NewError(fiber.StatusUnauthorized, "console principal resolution unavailable")
 		}
 
-		principal, err := consoleAuthService.ResolveConsolePrincipal(scopedRequestContext(c), subject)
+		var (
+			principal service.ConsolePrincipal
+			err       error
+		)
+
+		if sessionEnabled {
+			token := strings.TrimSpace(c.Get("X-Console-Session"))
+			if token == "" {
+				return fiber.NewError(fiber.StatusUnauthorized, "console session is required")
+			}
+			principal, err = consoleAuthService.ResolveConsoleSession(scopedRequestContext(c), token)
+		} else {
+			subject := strings.TrimSpace(c.Get("X-Console-Subject"))
+			if subject == "" {
+				return fiber.NewError(fiber.StatusUnauthorized, "console subject is required")
+			}
+			principal, err = consoleAuthService.ResolveConsolePrincipal(scopedRequestContext(c), subject)
+		}
 		if err != nil {
 			return authError(err)
 		}

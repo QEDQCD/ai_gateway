@@ -72,7 +72,6 @@ mkdir -p "${HOME}/.ai_gateway_secrets"
 - `dashscope_api_key`
 - `gateway_seed_platform_api_key`
 - `provider_master_key`
-- `web_console.htpasswd`
 
 示例命令：
 
@@ -80,7 +79,6 @@ mkdir -p "${HOME}/.ai_gateway_secrets"
 printf 'your-dashscope-api-key\n' > "${HOME}/.ai_gateway_secrets/dashscope_api_key"
 printf 'your-seed-platform-api-key\n' > "${HOME}/.ai_gateway_secrets/gateway_seed_platform_api_key"
 openssl rand -base64 32 > "${HOME}/.ai_gateway_secrets/provider_master_key"
-printf "example-console-user:$(openssl passwd -apr1 'change-me-console-password')\n" > "${HOME}/.ai_gateway_secrets/web_console.htpasswd"
 ```
 
 ### 3. 用 Compose 启动
@@ -130,15 +128,34 @@ docker compose --env-file deploy/compose/.env.local -f deploy/compose/compose.ym
 
 ### 管理接口检查
 
-管理接口使用 Basic Auth，用户名和密码来自 `deploy/compose/.env.local`：
+管理接口现在同时要求：
+
+- 网关 Basic Auth：`GATEWAY_SERVICE_AUTH_USERNAME` / `GATEWAY_SERVICE_AUTH_PASSWORD`
+- 控制台会话：先用控制台账号密码调用登录接口拿到 `token`
+
+示例：
 
 ```bash
+SESSION_TOKEN=$(curl -s -X POST http://127.0.0.1:32658/console/session/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"admin@example.com","password":"<GATEWAY_CONSOLE_ADMIN_PASSWORD>"}' | jq -r '.token')
+
 curl -u <GATEWAY_SERVICE_AUTH_USERNAME>:<GATEWAY_SERVICE_AUTH_PASSWORD> \
+  -H "X-Console-Session: ${SESSION_TOKEN}" \
   http://127.0.0.1:32658/admin/system/status
 
 curl -u <GATEWAY_SERVICE_AUTH_USERNAME>:<GATEWAY_SERVICE_AUTH_PASSWORD> \
+  -H "X-Console-Session: ${SESSION_TOKEN}" \
   http://127.0.0.1:32658/admin/api-keys
 ```
+
+### 前端登录
+
+前端 `31873` 不再使用浏览器 Basic Auth，而是直接打开应用内登录页。登录账号密码同样来自 `deploy/compose/.env.local`：
+
+- 管理员账号：固定使用 `admin@example.com`
+- 普通用户账号：固定使用 `member-a@example.com`
+- 对应密码：`GATEWAY_CONSOLE_ADMIN_PASSWORD`、`GATEWAY_CONSOLE_MEMBER_PASSWORD`
 
 ## 质量命令
 
@@ -155,7 +172,7 @@ docker compose --env-file deploy/compose/.env.example -f deploy/compose/compose.
 
 ## 安全说明
 
-- 仓库中不应提交真实 API Key、真实控制台账号密码、真实数据库密码、真实 Redis ACL 和真实 htpasswd 文件
+- 仓库中不应提交真实 API Key、真实控制台账号密码、真实数据库密码、真实 Redis ACL 文件
 - `deploy/compose/.env.example` 只提供占位符，不提供真实值
 - 平台只向租户用户暴露平台 API Key，不向前台返回真实上游凭据
 - 真实上游密钥通过文件挂载或环境变量注入，由平台内部统一管理

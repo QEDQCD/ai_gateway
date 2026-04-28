@@ -1,18 +1,35 @@
 export type ConsoleSession = {
+  token: string;
   role: "admin" | "member";
-  tenant_id?: string;
   user_id: string;
+  email: string;
+  name: string;
+  tenant_id?: string;
+  expires_at: string;
 };
 
-const defaultSession: ConsoleSession = {
-  role: "admin",
-  user_id: "user_admin_demo",
-};
+const sessionStorageKey = "ai_gateway_console_session";
 
 type ConsoleSessionSnapshot = Partial<ConsoleSession> | undefined;
 
 function isConsoleRole(role: ConsoleSessionSnapshot["role"]): role is ConsoleSession["role"] {
   return role === "admin" || role === "member";
+}
+
+function isConsoleSession(value: unknown): value is ConsoleSession {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const session = value as Partial<ConsoleSession>;
+  return (
+    typeof session.token === "string" &&
+    isConsoleRole(session.role) &&
+    typeof session.user_id === "string" &&
+    typeof session.email === "string" &&
+    typeof session.name === "string" &&
+    typeof session.expires_at === "string"
+  );
 }
 
 function readGlobalSession(): ConsoleSessionSnapshot {
@@ -21,22 +38,51 @@ function readGlobalSession(): ConsoleSessionSnapshot {
   }).__AI_GATEWAY_CONSOLE_SESSION__;
 }
 
-export function getDefaultSession(): ConsoleSession {
-  return { ...defaultSession };
-}
-
-export function getConsoleSession(): ConsoleSession {
-  const snapshot = readGlobalSession();
-
-  if (!snapshot || !isConsoleRole(snapshot.role) || typeof snapshot.user_id !== "string") {
-    return getDefaultSession();
+function readStoredSession(): ConsoleSession | null {
+  if (typeof localStorage === "undefined") {
+    return null;
   }
 
-  return {
-    role: snapshot.role,
-    user_id: snapshot.user_id,
-    tenant_id: snapshot.tenant_id,
-  };
+  try {
+    const raw = localStorage.getItem(sessionStorageKey);
+    if (!raw) {
+      return null;
+    }
+    const parsed = JSON.parse(raw);
+    return isConsoleSession(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+export function getDefaultSession() {
+  return null;
+}
+
+export function getConsoleSession(): ConsoleSession | null {
+  const stored = readStoredSession();
+  if (stored) {
+    return stored;
+  }
+
+  const snapshot = readGlobalSession();
+  return isConsoleSession(snapshot) ? snapshot : null;
+}
+
+export function saveConsoleSession(session: ConsoleSession) {
+  if (typeof localStorage === "undefined") {
+    return;
+  }
+
+  localStorage.setItem(sessionStorageKey, JSON.stringify(session));
+}
+
+export function clearConsoleSession() {
+  if (typeof localStorage === "undefined") {
+    return;
+  }
+
+  localStorage.removeItem(sessionStorageKey);
 }
 
 export function useConsoleSession() {

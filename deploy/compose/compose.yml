@@ -93,6 +93,9 @@ services:
       GATEWAY_SEED_PROVIDER_BASE_URL: "https://dashscope.aliyuncs.com/compatible-mode/v1"
       GATEWAY_SEED_PROVIDER_API_KEY_FILE: "/run/secrets/dashscope_api_key"
       GATEWAY_PROVIDER_SECRET_KEY_FILE: "/run/secrets/provider_master_key"
+      GATEWAY_CONSOLE_SESSION_SECRET: "${GATEWAY_CONSOLE_SESSION_SECRET:-change-me-console-session-secret}"
+      GATEWAY_CONSOLE_ADMIN_PASSWORD: "${GATEWAY_CONSOLE_ADMIN_PASSWORD:-change-me-admin-password}"
+      GATEWAY_CONSOLE_MEMBER_PASSWORD: "${GATEWAY_CONSOLE_MEMBER_PASSWORD:-change-me-member-password}"
     ports:
       - "32658:8080"
     volumes:
@@ -107,8 +110,9 @@ services:
     restart: unless-stopped
     depends_on:
       - gateway
-    volumes:
-      - ${WEB_HTPASSWD_FILE:-../../.ai_gateway_secrets/web_console.htpasswd}:/run/secrets/web_console.htpasswd:ro
+    environment:
+      GATEWAY_SERVICE_AUTH_USERNAME: "${GATEWAY_SERVICE_AUTH_USERNAME:-example-console-user}"
+      GATEWAY_SERVICE_AUTH_PASSWORD: "${GATEWAY_SERVICE_AUTH_PASSWORD:-change-me-console-password}"
     ports:
       - "31873:8080"
 

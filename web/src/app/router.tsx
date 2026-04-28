@@ -6,6 +6,7 @@ import { AdminApplicationsPage } from "../pages/admin-applications";
 import { AdminTenantsPage } from "../pages/admin-tenants";
 import { AuditPage } from "../pages/audit";
 import { DashboardPage } from "../pages/dashboard";
+import { LoginPage } from "../pages/login";
 import { MemberFailuresPage } from "../pages/member-failures";
 import { MemberOverviewPage } from "../pages/member-overview";
 import { MemberUsagePage } from "../pages/member-usage";
@@ -146,7 +147,7 @@ function createChildRoute(route: ConsoleRouteDefinition) {
   };
 }
 
-function createRouteTree(session: ConsoleSession) {
+function createAuthenticatedRouteTree(session: ConsoleSession) {
   const navigation = getNavigationForRole(session.role);
   const children =
     session.role === "member"
@@ -159,10 +160,35 @@ function createRouteTree(session: ConsoleSession) {
       element: <AppLayout navigation={navigation} session={session} />,
       children,
     },
+    {
+      path: "/login",
+      element: <Navigate to={session.role === "member" ? "/me" : "/"} replace />,
+    },
+    {
+      path: "*",
+      element: <Navigate to={session.role === "member" ? "/me" : "/"} replace />,
+    },
   ];
 }
 
-export function createAppRouter(session: ConsoleSession = getConsoleSession()) {
+function createRouteTree(session: ConsoleSession | null) {
+  if (!session) {
+    return [
+      {
+        path: "/login",
+        element: <LoginPage />,
+      },
+      {
+        path: "*",
+        element: <Navigate to="/login" replace />,
+      },
+    ];
+  }
+
+  return createAuthenticatedRouteTree(session);
+}
+
+export function createAppRouter(session: ConsoleSession | null = getConsoleSession()) {
   return createBrowserRouter(createRouteTree(session), {
     future: {
       v7_startTransition: true,
@@ -172,7 +198,7 @@ export function createAppRouter(session: ConsoleSession = getConsoleSession()) {
 
 export function createTestRouter(
   initialEntries: string[] = ["/"],
-  session: ConsoleSession = getConsoleSession(),
+  session: ConsoleSession | null = getConsoleSession(),
 ) {
   return createMemoryRouter(createRouteTree(session), {
     initialEntries,

@@ -9,9 +9,13 @@ import type { ConsoleSession } from "../lib/session";
 const defaultConsoleSession: ConsoleSession = {
   role: "admin",
   user_id: "user_admin_demo",
+  email: "admin@example.com",
+  name: "平台管理员",
+  token: "",
+  expires_at: "2026-05-01T00:00:00Z",
 };
 
-const useConsoleSessionMock = vi.fn<() => ConsoleSession>(() => defaultConsoleSession);
+const useConsoleSessionMock = vi.fn<() => ConsoleSession | null>(() => defaultConsoleSession);
 
 vi.mock("../lib/session", () => ({
   getDefaultSession: () => defaultConsoleSession,
@@ -42,6 +46,10 @@ function mockSession(session: Partial<ConsoleSession> = {}) {
     ...defaultConsoleSession,
     ...session,
   });
+}
+
+function mockAnonymousSession() {
+  useConsoleSessionMock.mockReturnValue(null);
 }
 
 function renderRoute(path: string = "/") {
@@ -86,6 +94,18 @@ afterEach(() => {
 });
 
 describe("控制台路由", () => {
+  test("未登录时渲染应用内登录页", async () => {
+    mockAnonymousSession();
+
+    render(
+      <RouterProvider router={createTestRouter(["/"])} future={{ v7_startTransition: true }} />,
+    );
+
+    expect(await screen.findByRole("heading", { level: 1, name: "登录 AI Gateway 控制台" })).toBeInTheDocument();
+    expect(screen.getByLabelText("账号")).toBeInTheDocument();
+    expect(screen.getByLabelText("密码")).toBeInTheDocument();
+  });
+
   test("admin session 渲染 admin navigation", async () => {
     mockSession({ role: "admin" });
     mockFetch({
@@ -124,7 +144,7 @@ describe("控制台路由", () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input.toString();
 
-      if (url === "/me/overview") {
+      if (url === "/api/me/overview") {
         return new Response(
           JSON.stringify({
             tenant_id: "tenant_demo",
@@ -148,14 +168,14 @@ describe("控制台路由", () => {
 
     expect(await screen.findByRole("heading", { level: 1, name: "我的总览" })).toBeInTheDocument();
     await waitFor(() => {
-      expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual(["/me/overview"]);
+      expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual(["/api/me/overview"]);
     });
   });
 
   test("member session 访问根路径时会跳转到 /me", async () => {
     mockSession({ role: "member", tenant_id: "tenant_demo", user_id: "user_member_a" });
     mockFetch({
-      "/me/overview": {
+      "/api/me/overview": {
         tenant_id: "tenant_demo",
         tenant_name: "Demo Tenant",
         active_api_keys: 1,
@@ -998,7 +1018,7 @@ describe("控制台路由", () => {
   test("member 总览页使用 /me/overview 数据", async () => {
     mockSession({ role: "member", tenant_id: "tenant_demo", user_id: "user_member_a" });
     const fetchMock = mockFetch({
-      "/me/overview": {
+      "/api/me/overview": {
         tenant_id: "tenant_demo",
         tenant_name: "Demo Tenant",
         active_api_keys: 3,
@@ -1010,7 +1030,7 @@ describe("控制台路由", () => {
     expect((await screen.findAllByText("Demo Tenant")).length).toBeGreaterThan(0);
     expect((await screen.findAllByText("tenant_demo")).length).toBeGreaterThan(0);
     expect(screen.getByText("3")).toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledWith("/me/overview");
+    expect(fetchMock).toHaveBeenCalledWith("/api/me/overview");
   });
 
   test("member API 密钥页走 /me 接口且不显示租户输入或删除操作", async () => {
@@ -1018,7 +1038,7 @@ describe("控制台路由", () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.toString();
 
-      if (url === "/me/api-keys" && !init?.method) {
+      if (url === "/api/me/api-keys" && !init?.method) {
         return new Response(
           JSON.stringify({
             items: [
@@ -1039,7 +1059,7 @@ describe("控制台路由", () => {
           },
         );
       }
-      if (url === "/me/api-keys" && init?.method === "POST") {
+      if (url === "/api/me/api-keys" && init?.method === "POST") {
         expect(JSON.parse(String(init.body))).toEqual({
           name: "member-key",
           scopes: ["chat"],
@@ -1080,7 +1100,7 @@ describe("控制台路由", () => {
     fireEvent.click(screen.getByRole("button", { name: "确认创建" }));
 
     expect(await screen.findByText("新建密钥已完成")).toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledWith("/me/api-keys");
+    expect(fetchMock).toHaveBeenCalledWith("/api/me/api-keys");
   });
 
   test("member API 密钥页在 rotate 和 deactivate 时命中 /me 分支并更新本地状态", async () => {
@@ -1088,7 +1108,7 @@ describe("控制台路由", () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.toString();
 
-      if (url === "/me/api-keys" && !init?.method) {
+      if (url === "/api/me/api-keys" && !init?.method) {
         return new Response(
           JSON.stringify({
             items: [
@@ -1109,7 +1129,7 @@ describe("控制台路由", () => {
           },
         );
       }
-      if (url === "/me/api-keys/mk_live/rotate" && init?.method === "POST") {
+      if (url === "/api/me/api-keys/mk_live/rotate" && init?.method === "POST") {
         expect(JSON.parse(String(init.body))).toEqual({
           name: "member-rotated-key",
           scopes: ["chat", "rag"],
@@ -1134,7 +1154,7 @@ describe("控制台路由", () => {
           },
         );
       }
-      if (url === "/me/api-keys/mk_rotated/deactivate" && init?.method === "POST") {
+      if (url === "/api/me/api-keys/mk_rotated/deactivate" && init?.method === "POST") {
         return new Response(
           JSON.stringify({
             item: {
@@ -1168,7 +1188,7 @@ describe("控制台路由", () => {
 
     expect(await screen.findByText("轮换操作已完成")).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(
-      "/me/api-keys/mk_live/rotate",
+      "/api/me/api-keys/mk_live/rotate",
       expect.objectContaining({ method: "POST" }),
     );
     expect(screen.getByText("member-rotated-key")).toBeInTheDocument();
@@ -1180,7 +1200,7 @@ describe("控制台路由", () => {
 
     expect(await screen.findByText("停用操作已完成")).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(
-      "/me/api-keys/mk_rotated/deactivate",
+      "/api/me/api-keys/mk_rotated/deactivate",
       expect.objectContaining({ method: "POST" }),
     );
     expect(screen.getByText("状态：停用")).toBeInTheDocument();
@@ -1189,14 +1209,14 @@ describe("控制台路由", () => {
   test("member 调用观测页使用 /me usage overview 和 requests 数据", async () => {
     mockSession({ role: "member", tenant_id: "tenant_demo", user_id: "user_member_a" });
     const fetchMock = mockFetch({
-      "/me/usage/overview": {
+      "/api/me/usage/overview": {
         total_requests: 120,
         success_rate: "98.40%",
         total_tokens: "12 万",
         average_latency: "228 ms",
         estimated_share: "14%",
       },
-      "/me/usage/requests?limit=20&offset=0": {
+      "/api/me/usage/requests?limit=20&offset=0": {
         items: [
           {
             request_id: "req_1",
@@ -1219,14 +1239,14 @@ describe("控制台路由", () => {
 
     expect(await screen.findByText("98.40%")).toBeInTheDocument();
     expect(screen.getByText("req_1")).toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledWith("/me/usage/overview");
-    expect(fetchMock).toHaveBeenCalledWith("/me/usage/requests?limit=20&offset=0");
+    expect(fetchMock).toHaveBeenCalledWith("/api/me/usage/overview");
+    expect(fetchMock).toHaveBeenCalledWith("/api/me/usage/requests?limit=20&offset=0");
   });
 
   test("member 失败分析页使用 /me/failures 数据", async () => {
     mockSession({ role: "member", tenant_id: "tenant_demo", user_id: "user_member_a" });
     const fetchMock = mockFetch({
-      "/me/failures": {
+      "/api/me/failures": {
         breakdown: [
           { label: "上游超时", value: "8 次" },
           { label: "配额限制", value: "2 次" },
@@ -1239,13 +1259,13 @@ describe("控制台路由", () => {
 
     expect(await screen.findByText("上游超时")).toBeInTheDocument();
     expect(screen.getByText("10:02 上游超时 /v1/chat/completions req_42")).toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledWith("/me/failures");
+    expect(fetchMock).toHaveBeenCalledWith("/api/me/failures");
   });
 
   test("member 审计页使用 /me/audit-events 数据而不是 admin audit", async () => {
     mockSession({ role: "member", tenant_id: "tenant_demo", user_id: "user_member_a" });
     const fetchMock = mockFetch({
-      "/me/audit-events": {
+      "/api/me/audit-events": {
         items: [
           {
             time: "2026-04-28 10:03",
@@ -1262,7 +1282,7 @@ describe("控制台路由", () => {
 
     expect(await screen.findByText("api_key.rotate")).toBeInTheDocument();
     expect(screen.getByText("轮换 member key")).toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledWith("/me/audit-events");
+    expect(fetchMock).toHaveBeenCalledWith("/api/me/audit-events");
     expect(fetchMock).not.toHaveBeenCalledWith("/api/admin/audit");
   });
 

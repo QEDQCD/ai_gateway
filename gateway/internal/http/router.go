@@ -8,14 +8,15 @@ import (
 )
 
 type RouterDependencies struct {
-	ServiceAuthUsername  string
-	ServiceAuthPassword  string
-	AuthService          service.AuthService
-	ChatProxy            service.ChatProxyService
-	EmbeddingProxy       service.EmbeddingProxyService
-	RAGProxy             service.RAGProxyService
-	ConsoleService       service.ConsoleService
-	MemberConsoleService service.MemberConsoleService
+	ServiceAuthUsername   string
+	ServiceAuthPassword   string
+	ConsoleSessionEnabled bool
+	AuthService           service.AuthService
+	ChatProxy             service.ChatProxyService
+	EmbeddingProxy        service.EmbeddingProxyService
+	RAGProxy              service.RAGProxyService
+	ConsoleService        service.ConsoleService
+	MemberConsoleService  service.MemberConsoleService
 }
 
 func NewRouter() *fiber.App {
@@ -78,8 +79,15 @@ func NewRouterWithDependencies(deps RouterDependencies) *fiber.App {
 	if deps.MemberConsoleService == nil {
 		deps.MemberConsoleService = service.NewUnavailableMemberConsoleService()
 	}
+	if consoleAuthService, ok := deps.AuthService.(service.ConsoleAuthService); ok {
+		app.Post("/console/session/login", handlers.ConsoleLogin(consoleAuthService))
+	}
 
 	admin := app.Group("/admin", middleware.RequireServiceBasicAuth(deps.ServiceAuthUsername, deps.ServiceAuthPassword))
+	if deps.ConsoleSessionEnabled {
+		admin.Use(middleware.ResolveConsolePrincipal(deps.AuthService, true))
+		admin.Use(middleware.RequireConsoleRole("admin"))
+	}
 	admin.Get("/overview", handlers.ConsoleOverview(deps.ConsoleService))
 	admin.Get("/system/status", handlers.ConsoleSystemStatus(deps.ConsoleService))
 	admin.Get("/applications", handlers.ConsoleApplications(deps.ConsoleService))
@@ -102,9 +110,14 @@ func NewRouterWithDependencies(deps RouterDependencies) *fiber.App {
 	member := app.Group(
 		"/me",
 		middleware.RequireServiceBasicAuth(deps.ServiceAuthUsername, deps.ServiceAuthPassword),
-		middleware.ResolveConsolePrincipal(deps.AuthService),
-		middleware.RequireConsoleRole("member"),
 	)
+	if deps.ConsoleSessionEnabled {
+		member.Use(middleware.ResolveConsolePrincipal(deps.AuthService, true))
+		member.Use(middleware.RequireConsoleRole("member"))
+	} else {
+		member.Use(middleware.ResolveConsolePrincipal(deps.AuthService, false))
+		member.Use(middleware.RequireConsoleRole("member"))
+	}
 	member.Get("/overview", handlers.MemberOverview(deps.MemberConsoleService))
 	member.Get("/api-keys", handlers.MemberAPIKeys(deps.MemberConsoleService))
 	member.Post("/api-keys", handlers.MemberCreateAPIKey(deps.MemberConsoleService))

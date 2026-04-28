@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/crypto/bcrypt"
 )
 
 //go:embed migrations/*.sql
@@ -29,6 +30,8 @@ type SeedConfig struct {
 	Provider            string
 	ProviderDisplayName string
 	SecretCodec         *secret.Codec
+	AdminPassword       string
+	MemberPassword      string
 }
 
 type governanceSeedConfig struct {
@@ -49,6 +52,9 @@ type governanceSeedConfig struct {
 	RejectedApplicationID    string
 	RejectedApplicationEmail string
 	RejectedApplicationName  string
+	AdminPasswordHash        string
+	MemberAPasswordHash      string
+	MemberBPasswordHash      string
 }
 
 type seedDB interface {
@@ -257,13 +263,13 @@ func SeedDemoData(ctx context.Context, db seedDB, cfg SeedConfig) error {
 	statements = append(statements, governanceSeedStatements(governanceSeedConfig{
 		TenantID:                 "tenant_alpha",
 		AdminUserID:              "user_admin_alpha",
-		AdminEmail:               "admin-alpha@example.com",
+		AdminEmail:               "admin@example.com",
 		AdminName:                "平台管理员 Alpha",
 		MemberAUserID:            "user_member_alpha_a",
-		MemberAEmail:             "member-alpha-a@example.com",
+		MemberAEmail:             "member-a@example.com",
 		MemberAName:              "租户用户 Alpha A",
 		MemberBUserID:            "user_member_alpha_b",
-		MemberBEmail:             "member-alpha-b@example.com",
+		MemberBEmail:             "member-b@example.com",
 		MemberBName:              "租户用户 Alpha B",
 		PlatformAPIKeyID:         "pak_live_console",
 		ApprovedApplicationID:    "app_alpha_approved",
@@ -272,6 +278,9 @@ func SeedDemoData(ctx context.Context, db seedDB, cfg SeedConfig) error {
 		RejectedApplicationID:    "app_alpha_rejected",
 		RejectedApplicationEmail: "rejected-alpha@example.com",
 		RejectedApplicationName:  "被拒绝用户 Alpha",
+		AdminPasswordHash:        mustHashConsolePassword(cfg.AdminPassword),
+		MemberAPasswordHash:      mustHashConsolePassword(cfg.MemberPassword),
+		MemberBPasswordHash:      mustHashConsolePassword(cfg.MemberPassword),
 	})...)
 
 	for _, statement := range statements {
@@ -626,20 +635,21 @@ func RuntimeSeedStatements() []string {
 func governanceSeedStatements(cfg governanceSeedConfig) []string {
 	return []string{
 		fmt.Sprintf(`
-		insert into users (id, email, name, role, status)
+		insert into users (id, email, name, role, status, password_hash)
 		values
-			('%s', '%s', '%s', 'admin', 'active'),
-			('%s', '%s', '%s', 'member', 'active'),
-			('%s', '%s', '%s', 'member', 'active')
+			('%s', '%s', '%s', 'admin', 'active', '%s'),
+			('%s', '%s', '%s', 'member', 'active', '%s'),
+			('%s', '%s', '%s', 'member', 'active', '%s')
 		on conflict (id) do update set
 			email = excluded.email,
 			name = excluded.name,
 			role = excluded.role,
-			status = excluded.status;
+			status = excluded.status,
+			password_hash = excluded.password_hash;
 		`,
-			cfg.AdminUserID, escapeLiteral(cfg.AdminEmail), escapeLiteral(cfg.AdminName),
-			cfg.MemberAUserID, escapeLiteral(cfg.MemberAEmail), escapeLiteral(cfg.MemberAName),
-			cfg.MemberBUserID, escapeLiteral(cfg.MemberBEmail), escapeLiteral(cfg.MemberBName),
+			cfg.AdminUserID, escapeLiteral(cfg.AdminEmail), escapeLiteral(cfg.AdminName), escapeLiteral(cfg.AdminPasswordHash),
+			cfg.MemberAUserID, escapeLiteral(cfg.MemberAEmail), escapeLiteral(cfg.MemberAName), escapeLiteral(cfg.MemberAPasswordHash),
+			cfg.MemberBUserID, escapeLiteral(cfg.MemberBEmail), escapeLiteral(cfg.MemberBName), escapeLiteral(cfg.MemberBPasswordHash),
 		),
 		fmt.Sprintf(`
 		insert into tenant_memberships (id, tenant_id, user_id, role, status)
@@ -712,4 +722,17 @@ func governanceSeedStatements(cfg governanceSeedConfig) []string {
 			escapeLiteral(cfg.TenantID), escapeLiteral(cfg.TenantID), escapeLiteral(cfg.TenantID),
 		),
 	}
+}
+
+func mustHashConsolePassword(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(raw), bcrypt.DefaultCost)
+	if err != nil {
+		panic(fmt.Errorf("hash console password: %w", err))
+	}
+	return string(hash)
 }

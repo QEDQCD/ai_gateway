@@ -1,8 +1,8 @@
 import { NavLink, Outlet, useMatches } from "react-router-dom";
 
+import { BrandMark } from "../components/brand-mark";
 import { getSystemStatus } from "../lib/console-api";
-import type { ConsoleSession } from "../lib/session";
-import { useConsoleSession } from "../lib/session";
+import { clearConsoleSession, type ConsoleSession, useConsoleSession } from "../lib/session";
 import { useRemoteData } from "../lib/use-remote-data";
 
 export type ConsoleRouteMeta = {
@@ -47,6 +47,9 @@ export function AppLayout({
 }) {
   const matches = useMatches();
   const resolvedSession = session ?? useConsoleSession();
+  if (!resolvedSession) {
+    return null;
+  }
   const isAdminConsole = resolvedSession.role === "admin";
   const { data: systemStatus, error: systemStatusError } = useRemoteData(
     () => (isAdminConsole ? getSystemStatus() : Promise.resolve(null)),
@@ -63,11 +66,16 @@ export function AppLayout({
   const quotaProtection = systemStatus?.quota_protection ?? statusPlaceholder;
   const isGatewayHealthy = gatewayHealth === "健康";
 
+  function handleLogout() {
+    clearConsoleSession();
+    window.location.assign("/login");
+  }
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
         <div className="sidebar__brand">
-          {resolvedSession.role === "admin" ? "AI 接入平台" : "租户控制台"}
+          <BrandMark compact />
         </div>
         <nav className="sidebar__nav">
           {navigation.map((item) => (
@@ -90,12 +98,23 @@ export function AppLayout({
             <h1>{current.title}</h1>
             <p>{current.description}</p>
           </div>
-          {isAdminConsole ? (
-            <div className="topbar__badges">
-              <span className={getBadgeClassName(isGatewayHealthy)}>{gatewayHealth}</span>
-              <span className="status-badge status-badge--neutral">配额保护 {quotaProtection}</span>
+          <div className="topbar__actions">
+            {isAdminConsole ? (
+              <div className="topbar__badges">
+                <span className={getBadgeClassName(isGatewayHealthy)}>{gatewayHealth}</span>
+                <span className="status-badge status-badge--neutral">配额保护 {quotaProtection}</span>
+              </div>
+            ) : null}
+            <div className="session-chip">
+              <div>
+                <strong>{resolvedSession.name}</strong>
+                <span>{resolvedSession.role === "admin" ? "管理员" : "普通用户"}</span>
+              </div>
+              <button className="button-shell" onClick={handleLogout} type="button">
+                退出登录
+              </button>
             </div>
-          ) : null}
+          </div>
         </header>
         <main className="page-content">
           <Outlet />

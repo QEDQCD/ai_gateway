@@ -42,13 +42,14 @@ func newServerApp(cfg config.Config) *fiber.App {
 	)
 
 	return apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
-		ServiceAuthUsername: cfg.ServiceAuthUsername,
-		ServiceAuthPassword: cfg.ServiceAuthPassword,
-		AuthService:         newBootstrapAuthService(cfg),
-		ChatProxy:           service.NewChatProxyService(chatClient, usagePublisher),
-		EmbeddingProxy:      service.NewEmbeddingProxyService(embeddingClient, usagePublisher),
-		RAGProxy:            service.NewRAGProxyService(cfg.RAGServiceBaseURL, cfg.RAGServiceUsername, cfg.RAGServicePassword, nil),
-		ConsoleService:      service.NewUnavailableConsoleService(),
+		ServiceAuthUsername:   cfg.ServiceAuthUsername,
+		ServiceAuthPassword:   cfg.ServiceAuthPassword,
+		ConsoleSessionEnabled: strings.TrimSpace(cfg.ConsoleSessionSecret) != "",
+		AuthService:           newBootstrapAuthService(cfg),
+		ChatProxy:             service.NewChatProxyService(chatClient, usagePublisher),
+		EmbeddingProxy:        service.NewEmbeddingProxyService(embeddingClient, usagePublisher),
+		RAGProxy:              service.NewRAGProxyService(cfg.RAGServiceBaseURL, cfg.RAGServiceUsername, cfg.RAGServicePassword, nil),
+		ConsoleService:        service.NewUnavailableConsoleService(),
 	})
 }
 
@@ -70,6 +71,8 @@ func newDatabaseBackedServerApp(cfg config.Config) *fiber.App {
 		Provider:            cfg.SeedProvider,
 		ProviderDisplayName: cfg.SeedProviderDisplayName,
 		SecretCodec:         providerSecretCodec,
+		AdminPassword:       cfg.SeedAdminPassword,
+		MemberPassword:      cfg.SeedMemberPassword,
 	}); err != nil {
 		panic(err)
 	}
@@ -77,7 +80,7 @@ func newDatabaseBackedServerApp(cfg config.Config) *fiber.App {
 	queries := store.New(pool)
 	repository := store.NewAuthRepository(queries, providerSecretCodec)
 	routeService := service.NewRouteService(repository)
-	authService := service.NewAuthService(repository, newQuotaGuard(cfg), routeService)
+	authService := service.NewAuthServiceWithConsoleSessions(repository, newQuotaGuard(cfg), routeService, cfg.ConsoleSessionSecret)
 	usageRecorder := service.NewUsageRecorder(pool)
 	usagePublisher := queue.NewUsagePublisherWithConsumers(
 		newUsagePublisher(cfg),
@@ -90,14 +93,15 @@ func newDatabaseBackedServerApp(cfg config.Config) *fiber.App {
 	memberConsoleService := service.NewPostgresMemberConsoleService(pool, service.ConsolePrincipal{})
 
 	return apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
-		ServiceAuthUsername:  cfg.ServiceAuthUsername,
-		ServiceAuthPassword:  cfg.ServiceAuthPassword,
-		AuthService:          authService,
-		ChatProxy:            chatProxy,
-		EmbeddingProxy:       embeddingProxy,
-		RAGProxy:             ragProxy,
-		ConsoleService:       consoleService,
-		MemberConsoleService: memberConsoleService,
+		ServiceAuthUsername:   cfg.ServiceAuthUsername,
+		ServiceAuthPassword:   cfg.ServiceAuthPassword,
+		ConsoleSessionEnabled: strings.TrimSpace(cfg.ConsoleSessionSecret) != "",
+		AuthService:           authService,
+		ChatProxy:             chatProxy,
+		EmbeddingProxy:        embeddingProxy,
+		RAGProxy:              ragProxy,
+		ConsoleService:        consoleService,
+		MemberConsoleService:  memberConsoleService,
 	})
 }
 

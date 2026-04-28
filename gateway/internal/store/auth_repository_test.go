@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
+	"golang.org/x/crypto/bcrypt"
 )
 
 func TestFindPlatformAPIKeyByHashReturnsCreatorUserAndTenantScope(t *testing.T) {
@@ -244,6 +245,68 @@ func TestSQLAuthRepositoryResolveConsolePrincipalRejectsAmbiguousNormalizedEmail
 	_, err = repo.ResolveConsolePrincipal(ctx, "alice@example.com")
 	if !errors.Is(err, ErrAuthScopeAmbiguous) {
 		t.Fatalf("expected error %v, got %v", ErrAuthScopeAmbiguous, err)
+	}
+}
+
+func TestSQLAuthRepositoryAuthenticateConsoleUserValidatesPasswordHash(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	container, dsn := startAuthRepositoryPostgresContainer(ctx, t)
+	t.Cleanup(func() {
+		_ = container.Terminate(context.Background())
+	})
+
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("pgx.Connect failed: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = conn.Close(context.Background())
+	})
+
+	for _, migration := range readAuthRepositoryMigrations(t) {
+		if _, err := conn.Exec(ctx, migration); err != nil {
+			t.Fatalf("conn.Exec migration failed: %v", err)
+		}
+	}
+
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte("secret"), bcrypt.DefaultCost)
+	if err != nil {
+		t.Fatalf("GenerateFromPassword failed: %v", err)
+	}
+
+	if _, err := conn.Exec(ctx, `insert into tenants (id, name, status) values ('tenant_demo', 'Demo Tenant', 'active');`); err != nil {
+		t.Fatalf("seed tenant failed: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `
+		insert into users (id, email, name, role, status, password_hash)
+		values ('user_member', 'member@example.com', 'Demo Member', 'member', 'active', $1);
+	`, string(passwordHash)); err != nil {
+		t.Fatalf("seed user failed: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `
+		insert into tenant_memberships (id, tenant_id, user_id, role, status)
+		values ('tm_demo', 'tenant_demo', 'user_member', 'member', 'active');
+	`); err != nil {
+		t.Fatalf("seed membership failed: %v", err)
+	}
+
+	repo := NewAuthRepository(New(conn))
+
+	record, err := repo.AuthenticateConsoleUser(ctx, "member@example.com", "secret")
+	if err != nil {
+		t.Fatalf("AuthenticateConsoleUser failed: %v", err)
+	}
+	if record.UserID != "user_member" || record.TenantID != "tenant_demo" {
+		t.Fatalf("unexpected authenticated principal: %#v", record)
+	}
+
+	_, err = repo.AuthenticateConsoleUser(ctx, "member@example.com", "wrong-secret")
+	if !errors.Is(err, ErrAuthRecordNotFound) {
+		t.Fatalf("expected error %v, got %v", ErrAuthRecordNotFound, err)
 	}
 }
 

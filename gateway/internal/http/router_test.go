@@ -114,6 +114,93 @@ func TestServiceBasicAuthProtectsAdminRoutes(t *testing.T) {
 	}
 }
 
+func TestConsoleLoginRouteReturnsSessionPayload(t *testing.T) {
+	t.Parallel()
+
+	app := apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+		AuthService: stubConsoleAuthService{
+			loginResult: service.ConsoleLoginResult{
+				Token:     "console_session_token",
+				UserID:    "user_member_a",
+				Email:     "member-a@example.com",
+				Name:      "租户用户 A",
+				Role:      "member",
+				TenantID:  "tenant_demo",
+				ExpiresAt: "2026-04-29T00:00:00Z",
+			},
+		},
+	})
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/console/session/login",
+		strings.NewReader(`{"email":"member-a@example.com","password":"secret"}`),
+	)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("io.ReadAll failed: %v", err)
+	}
+	expected := `{"token":"console_session_token","user_id":"user_member_a","email":"member-a@example.com","name":"租户用户 A","role":"member","tenant_id":"tenant_demo","expires_at":"2026-04-29T00:00:00Z"}`
+	if string(body) != expected {
+		t.Fatalf("expected body %q, got %q", expected, string(body))
+	}
+}
+
+func TestAdminRoutesRequireConsoleSessionWhenEnabled(t *testing.T) {
+	t.Parallel()
+
+	app := apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+		ServiceAuthUsername:   "test-console-user",
+		ServiceAuthPassword:   "test-console-password",
+		ConsoleSessionEnabled: true,
+		AuthService: stubConsoleAuthService{
+			sessionPrincipal: service.ConsolePrincipal{
+				UserID: "user_admin",
+				Email:  "admin@example.com",
+				Role:   "admin",
+			},
+		},
+		ConsoleService: stubConsoleService{
+			systemStatus: service.ConsoleSystemStatus{
+				ConsoleStage: "控制台预览版",
+			},
+		},
+	})
+
+	missingSessionReq := httptest.NewRequest(http.MethodGet, "/admin/system/status", nil)
+	missingSessionReq.SetBasicAuth("test-console-user", "test-console-password")
+
+	missingSessionResp, err := app.Test(missingSessionReq)
+	if err != nil {
+		t.Fatalf("app.Test missing session failed: %v", err)
+	}
+	if missingSessionResp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected missing session status %d, got %d", http.StatusUnauthorized, missingSessionResp.StatusCode)
+	}
+
+	authorizedReq := httptest.NewRequest(http.MethodGet, "/admin/system/status", nil)
+	authorizedReq.SetBasicAuth("test-console-user", "test-console-password")
+	authorizedReq.Header.Set("X-Console-Session", "console_session_token")
+
+	authorizedResp, err := app.Test(authorizedReq)
+	if err != nil {
+		t.Fatalf("app.Test authorized failed: %v", err)
+	}
+	if authorizedResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected authorized status %d, got %d", http.StatusOK, authorizedResp.StatusCode)
+	}
+}
+
 func TestAdminSystemStatusRouteReturnsConsoleData(t *testing.T) {
 	t.Parallel()
 
@@ -1139,8 +1226,10 @@ func (s *capturingAuthService) Resolve(ctx context.Context, rawKey string, reque
 }
 
 type stubConsoleAuthService struct {
-	principal service.ConsolePrincipal
-	err       error
+	principal        service.ConsolePrincipal
+	sessionPrincipal service.ConsolePrincipal
+	loginResult      service.ConsoleLoginResult
+	err              error
 }
 
 func (s stubConsoleAuthService) Resolve(context.Context, string, string) (domain.RequestContext, error) {
@@ -1152,6 +1241,17 @@ func (s stubConsoleAuthService) ResolvePlatformAPIKey(context.Context, string) (
 }
 
 func (s stubConsoleAuthService) ResolveConsolePrincipal(context.Context, string) (service.ConsolePrincipal, error) {
+	return s.principal, s.err
+}
+
+func (s stubConsoleAuthService) AuthenticateConsoleSession(context.Context, string, string) (service.ConsoleLoginResult, error) {
+	return s.loginResult, s.err
+}
+
+func (s stubConsoleAuthService) ResolveConsoleSession(context.Context, string) (service.ConsolePrincipal, error) {
+	if s.sessionPrincipal.UserID != "" || s.sessionPrincipal.Email != "" || s.sessionPrincipal.Role != "" {
+		return s.sessionPrincipal, s.err
+	}
 	return s.principal, s.err
 }
 

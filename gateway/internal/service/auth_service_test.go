@@ -40,6 +40,69 @@ func TestResolveConsolePrincipalRejectsAmbiguousMemberTenantScope(t *testing.T) 
 	}
 }
 
+func TestAuthenticateConsoleSessionReturnsSignedLoginResult(t *testing.T) {
+	t.Parallel()
+
+	repo := &fakeAuthRepository{
+		authenticatedPrincipal: store.ConsolePrincipalRecord{
+			UserID:   "user_member_a",
+			Email:    "member-a@example.com",
+			Name:     "租户用户 A",
+			Role:     "member",
+			TenantID: "tenant_demo",
+		},
+		consolePrincipal: store.ConsolePrincipalRecord{
+			UserID:   "user_member_a",
+			Email:    "member-a@example.com",
+			Name:     "租户用户 A",
+			Role:     "member",
+			TenantID: "tenant_demo",
+		},
+	}
+	authService := service.NewAuthServiceWithConsoleSessions(
+		repo,
+		&fakeQuotaGuard{},
+		service.NewRouteService(repo),
+		"console-session-secret",
+	)
+
+	result, err := authService.AuthenticateConsoleSession(context.Background(), "member-a@example.com", "secret")
+	if err != nil {
+		t.Fatalf("AuthenticateConsoleSession failed: %v", err)
+	}
+	if result.Token == "" {
+		t.Fatal("expected signed console session token")
+	}
+	if result.Email != "member-a@example.com" || result.Role != "member" || result.TenantID != "tenant_demo" {
+		t.Fatalf("unexpected login result: %#v", result)
+	}
+
+	principal, err := authService.ResolveConsoleSession(context.Background(), result.Token)
+	if err != nil {
+		t.Fatalf("ResolveConsoleSession failed: %v", err)
+	}
+	if principal.UserID != "user_member_a" || principal.Role != "member" {
+		t.Fatalf("unexpected resolved principal: %#v", principal)
+	}
+}
+
+func TestResolveConsoleSessionRejectsInvalidToken(t *testing.T) {
+	t.Parallel()
+
+	repo := &fakeAuthRepository{}
+	authService := service.NewAuthServiceWithConsoleSessions(
+		repo,
+		&fakeQuotaGuard{},
+		service.NewRouteService(repo),
+		"console-session-secret",
+	)
+
+	_, err := authService.ResolveConsoleSession(context.Background(), "invalid.token.payload")
+	if !errors.Is(err, service.ErrUnauthorized) {
+		t.Fatalf("expected error %v, got %v", service.ErrUnauthorized, err)
+	}
+}
+
 func TestResolveRequestContextUsesPlatformKeyAndProviderCredential(t *testing.T) {
 	t.Parallel()
 
@@ -474,6 +537,7 @@ type fakeAuthRepository struct {
 	tenant                      store.TenantRecord
 	providerCredentials         []store.ProviderCredentialRecord
 	consolePrincipal            store.ConsolePrincipalRecord
+	authenticatedPrincipal      store.ConsolePrincipalRecord
 	consolePrincipalErr         error
 	gotKeyHash                  string
 	platformKeyCtx              context.Context
@@ -482,6 +546,9 @@ type fakeAuthRepository struct {
 	providerCredentialsCtx      context.Context
 	consolePrincipalCtx         context.Context
 	consolePrincipalSubject     string
+	authenticatedPrincipalCtx   context.Context
+	authenticatedPrincipalEmail string
+	authenticatedPassword       string
 }
 
 func (f *fakeAuthRepository) FindPlatformAPIKeyByHash(ctx context.Context, keyHash string) (store.PlatformAPIKeyRecord, error) {
@@ -508,6 +575,16 @@ func (f *fakeAuthRepository) ResolveConsolePrincipal(ctx context.Context, subjec
 		return store.ConsolePrincipalRecord{}, f.consolePrincipalErr
 	}
 	return f.consolePrincipal, nil
+}
+
+func (f *fakeAuthRepository) AuthenticateConsoleUser(ctx context.Context, subject string, password string) (store.ConsolePrincipalRecord, error) {
+	f.authenticatedPrincipalCtx = ctx
+	f.authenticatedPrincipalEmail = subject
+	f.authenticatedPassword = password
+	if f.consolePrincipalErr != nil {
+		return store.ConsolePrincipalRecord{}, f.consolePrincipalErr
+	}
+	return f.authenticatedPrincipal, nil
 }
 
 type fakeQuotaGuard struct {
@@ -566,12 +643,14 @@ func newSeededAuthService(t *testing.T) service.ConsoleAuthService {
 				UserID: "user_admin",
 				Email:  "admin@example.com",
 				Role:   "admin",
+				Name:   "平台管理员",
 			},
 			{
 				UserID:   "user_member_a",
 				Email:    "member-a@example.com",
 				Role:     "member",
 				TenantID: "tenant_demo",
+				Name:     "租户用户 A",
 			},
 		},
 	})

@@ -15,8 +15,9 @@ type Config struct {
 	RedisURL          string
 	RabbitMQURL       string
 
-	ServiceAuthUsername string
-	ServiceAuthPassword string
+	ServiceAuthUsername  string
+	ServiceAuthPassword  string
+	ConsoleSessionSecret string
 
 	RAGServiceUsername string
 	RAGServicePassword string
@@ -27,6 +28,8 @@ type Config struct {
 	SeedProvider            string
 	SeedProviderDisplayName string
 	ProviderSecretKey       string
+	SeedAdminPassword       string
+	SeedMemberPassword      string
 
 	BootstrapPlatformAPIKey          string
 	BootstrapPlatformAPIKeyID        string
@@ -65,6 +68,7 @@ func Load() Config {
 		RabbitMQURL:                      lookupEnv("GATEWAY_RABBITMQ_URL"),
 		ServiceAuthUsername:              lookupEnv("GATEWAY_SERVICE_AUTH_USERNAME"),
 		ServiceAuthPassword:              lookupEnv("GATEWAY_SERVICE_AUTH_PASSWORD"),
+		ConsoleSessionSecret:             lookupEnv("GATEWAY_CONSOLE_SESSION_SECRET"),
 		RAGServiceUsername:               lookupEnv("GATEWAY_RAG_SERVICE_USERNAME"),
 		RAGServicePassword:               lookupEnv("GATEWAY_RAG_SERVICE_PASSWORD"),
 		SeedPlatformAPIKey:               defaultString(lookupEnv("GATEWAY_SEED_PLATFORM_API_KEY"), lookupEnv("GATEWAY_BOOTSTRAP_PLATFORM_API_KEY")),
@@ -73,6 +77,8 @@ func Load() Config {
 		SeedProvider:                     defaultString(lookupEnv("GATEWAY_SEED_PROVIDER"), bootstrapProvider),
 		SeedProviderDisplayName:          defaultString(lookupEnv("GATEWAY_SEED_PROVIDER_DISPLAY_NAME"), bootstrapProviderDisplayName),
 		ProviderSecretKey:                lookupEnv("GATEWAY_PROVIDER_SECRET_KEY"),
+		SeedAdminPassword:                lookupEnv("GATEWAY_CONSOLE_ADMIN_PASSWORD"),
+		SeedMemberPassword:               lookupEnv("GATEWAY_CONSOLE_MEMBER_PASSWORD"),
 		BootstrapPlatformAPIKey:          lookupEnv("GATEWAY_BOOTSTRAP_PLATFORM_API_KEY"),
 		BootstrapPlatformAPIKeyID:        defaultString(os.Getenv("GATEWAY_BOOTSTRAP_PLATFORM_API_KEY_ID"), "pak_bootstrap"),
 		BootstrapPlatformAPIKeyName:      defaultString(os.Getenv("GATEWAY_BOOTSTRAP_PLATFORM_API_KEY_NAME"), "bootstrap platform key"),

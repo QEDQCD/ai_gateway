@@ -274,7 +274,7 @@ func TestNewServerAppDatabaseModeWiresMemberOverview(t *testing.T) {
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/me/overview", nil)
-	req.Header.Set("X-Console-Subject", "member-alpha-a@example.com")
+	req.Header.Set("X-Console-Subject", "member-a@example.com")
 
 	resp, err := app.Test(req)
 	if err != nil {

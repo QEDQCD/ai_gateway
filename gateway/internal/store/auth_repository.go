@@ -10,6 +10,7 @@ import (
 	"github.com/example/ai_gateway/gateway/internal/domain"
 	"github.com/example/ai_gateway/gateway/internal/secret"
 	"github.com/jackc/pgx/v5"
+	"golang.org/x/crypto/bcrypt"
 )
 
 var ErrAuthRecordNotFound = errors.New("auth record not found")
@@ -42,6 +43,7 @@ type ProviderCredentialRecord struct {
 type ConsolePrincipalRecord struct {
 	UserID   string
 	Email    string
+	Name     string
 	Role     string
 	TenantID string
 }
@@ -251,7 +253,7 @@ func (r *SQLAuthRepository) ResolveConsolePrincipal(ctx context.Context, subject
 
 	const lookupConsolePrincipal = `
 with matching_principals as (
-  select u.id, u.email, u.role,
+  select u.id, u.email, u.name, u.role,
     case
       when u.role = 'member' and coalesce(scope.membership_count, 0) = 1 then coalesce(scope.tenant_id, '')
       else ''
@@ -271,7 +273,7 @@ with matching_principals as (
       or coalesce(scope.membership_count, 0) > 0
     )
 )
-select id, email, role, tenant_id, membership_count, count(*) over () as principal_count
+select id, email, name, role, tenant_id, membership_count, count(*) over () as principal_count
 from matching_principals
 limit 1
 `
@@ -283,6 +285,7 @@ limit 1
 	err := queries.db.QueryRow(ctx, lookupConsolePrincipal, subject).Scan(
 		&record.UserID,
 		&record.Email,
+		&record.Name,
 		&record.Role,
 		&record.TenantID,
 		&membershipCount,
@@ -303,6 +306,80 @@ limit 1
 	return record, nil
 }
 
+func (r *SQLAuthRepository) AuthenticateConsoleUser(ctx context.Context, subject string, password string) (ConsolePrincipalRecord, error) {
+	queries, ok := r.queries.(*Queries)
+	if !ok {
+		return ConsolePrincipalRecord{}, ErrAuthRecordNotFound
+	}
+
+	const lookupConsoleLogin = `
+with matching_principals as (
+  select u.id, u.email, u.name, u.role, u.password_hash,
+    case
+      when u.role = 'member' and coalesce(scope.membership_count, 0) = 1 then coalesce(scope.tenant_id, '')
+      else ''
+    end as tenant_id,
+    coalesce(scope.membership_count, 0) as membership_count
+  from users u
+  left join lateral (
+    select min(tm.tenant_id) as tenant_id, count(*) as membership_count
+    from tenant_memberships tm
+    where tm.user_id = u.id
+      and tm.status = 'active'
+  ) scope on true
+  where lower(u.email) = $1
+    and u.status = 'active'
+    and (
+      u.role = 'admin'
+      or coalesce(scope.membership_count, 0) > 0
+    )
+)
+select id, email, name, role, password_hash, tenant_id, membership_count, count(*) over () as principal_count
+from matching_principals
+limit 1
+`
+
+	subject = normalizeConsoleSubject(subject)
+	password = strings.TrimSpace(password)
+	if subject == "" || password == "" {
+		return ConsolePrincipalRecord{}, ErrAuthRecordNotFound
+	}
+
+	var record ConsolePrincipalRecord
+	var passwordHash string
+	var membershipCount int64
+	var principalCount int64
+	err := queries.db.QueryRow(ctx, lookupConsoleLogin, subject).Scan(
+		&record.UserID,
+		&record.Email,
+		&record.Name,
+		&record.Role,
+		&passwordHash,
+		&record.TenantID,
+		&membershipCount,
+		&principalCount,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ConsolePrincipalRecord{}, ErrAuthRecordNotFound
+		}
+		return ConsolePrincipalRecord{}, err
+	}
+	if principalCount > 1 {
+		return ConsolePrincipalRecord{}, ErrAuthScopeAmbiguous
+	}
+	if record.Role == domain.ConsoleRoleMember && membershipCount > 1 {
+		return ConsolePrincipalRecord{}, ErrAuthScopeAmbiguous
+	}
+	if strings.TrimSpace(passwordHash) == "" {
+		return ConsolePrincipalRecord{}, ErrAuthRecordNotFound
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(password)); err != nil {
+		return ConsolePrincipalRecord{}, ErrAuthRecordNotFound
+	}
+	return record, nil
+}
+
 func (r *BootstrapAuthRepository) ResolveConsolePrincipal(_ context.Context, subject string) (ConsolePrincipalRecord, error) {
 	if len(r.consolePrincipals) == 0 {
 		return ConsolePrincipalRecord{}, ErrAuthRecordNotFound
@@ -313,6 +390,10 @@ func (r *BootstrapAuthRepository) ResolveConsolePrincipal(_ context.Context, sub
 		return ConsolePrincipalRecord{}, ErrAuthRecordNotFound
 	}
 	return principal, nil
+}
+
+func (r *BootstrapAuthRepository) AuthenticateConsoleUser(_ context.Context, subject string, _ string) (ConsolePrincipalRecord, error) {
+	return ConsolePrincipalRecord{}, ErrAuthRecordNotFound
 }
 
 func hashPlatformAPIKey(rawKey string) string {
