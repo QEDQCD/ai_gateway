@@ -60,7 +60,6 @@ func NewPostgresConsoleService(
 func (s postgresConsoleService) Overview(ctx context.Context) (OverviewPageData, error) {
 	var requests24h int
 	var successRate float64
-	var quotaUsage float64
 	var activeAPIKeys int
 
 	if err := s.db.QueryRow(ctx, `
@@ -68,22 +67,22 @@ func (s postgresConsoleService) Overview(ctx context.Context) (OverviewPageData,
 			select status_code
 			from audit_logs
 			where created_at >= now() - interval '24 hours'
-		),
-		quota as (
-			select coalesce(sum(request_quota_per_day), 0) as total_quota
-			from tenants
-			where status = 'active'
 		)
 		select
 			(select count(*) from recent),
 			coalesce((select avg(case when status_code between 200 and 399 then 100.0 else 0 end) from recent), 0),
-			case
-				when (select total_quota from quota) = 0 then 0
-				else least(100, ((select count(*) from recent) * 100.0) / (select total_quota from quota))
-			end,
 			(select count(*) from platform_api_keys where status = 'active');
-	`).Scan(&requests24h, &successRate, &quotaUsage, &activeAPIKeys); err != nil {
+	`).Scan(&requests24h, &successRate, &activeAPIKeys); err != nil {
 		return OverviewPageData{}, err
+	}
+
+	quotaSummary, err := loadAggregateTenantQuotaSummary(ctx, s.db, time.Now())
+	if err != nil {
+		return OverviewPageData{}, err
+	}
+	quotaUsage := 0.0
+	if quotaSummary.Configured && quotaSummary.RequestLimit > 0 {
+		quotaUsage = math.Min(100, (float64(quotaSummary.RequestsUsed)*100.0)/float64(quotaSummary.RequestLimit))
 	}
 
 	routeHealthRows, err := s.collectTableRows(ctx, `
@@ -171,6 +170,7 @@ func (s postgresConsoleService) Overview(ctx context.Context) (OverviewPageData,
 		TopModels:     topModelsRows,
 		RecentAlerts:  recentAlertRows,
 		AuditSnapshot: auditSnapshotRows,
+		QuotaSummary:  quotaSummary,
 	}, nil
 }
 
@@ -180,7 +180,7 @@ func (s postgresConsoleService) SystemStatus(ctx context.Context) (ConsoleSystem
 	if err := s.db.QueryRow(ctx, `
 		select
 			(select count(*) from route_catalog where health_status <> 'healthy'),
-			(select count(*) from tenants where request_quota_per_day > 0 and status = 'active');
+			(select count(*) from tenant_quota_policies);
 	`).Scan(&unhealthyRoutes, &quotaEnabledTenants); err != nil {
 		return ConsoleSystemStatus{}, err
 	}

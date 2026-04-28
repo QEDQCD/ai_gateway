@@ -7,9 +7,10 @@ import (
 type memberConsolePrincipalContextKey struct{}
 
 type MemberOverviewPageData struct {
-	TenantID      string `json:"tenant_id"`
-	TenantName    string `json:"tenant_name"`
-	ActiveAPIKeys int    `json:"active_api_keys"`
+	TenantID      string             `json:"tenant_id"`
+	TenantName    string             `json:"tenant_name"`
+	ActiveAPIKeys int                `json:"active_api_keys"`
+	Quota         TenantQuotaSummary `json:"quota"`
 }
 
 type MemberAPIKeyItem struct {

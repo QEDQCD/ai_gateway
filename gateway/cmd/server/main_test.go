@@ -18,14 +18,15 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-func TestNewQuotaGuardPanicsInDatabaseModeWithoutRedisURL(t *testing.T) {
+func TestNewQuotaGuardFallsBackToStaticWhenRedisURLMissing(t *testing.T) {
 	t.Parallel()
 
-	assertPanicContains(t, "database mode requires GATEWAY_REDIS_URL", func() {
-		_ = newQuotaGuard(config.Config{
-			DatabaseURL: "postgres://gateway.example/db",
-		})
+	guard := newQuotaGuard(config.Config{
+		DatabaseURL: "postgres://gateway.example/db",
 	})
+	if guard == nil {
+		t.Fatal("expected quota guard")
+	}
 }
 
 func TestNewQuotaGuardPanicsInDatabaseModeWithInvalidRedisURL(t *testing.T) {
@@ -284,13 +285,33 @@ func TestNewServerAppDatabaseModeWiresMemberOverview(t *testing.T) {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("io.ReadAll failed: %v", err)
+	var payload struct {
+		TenantID      string `json:"tenant_id"`
+		TenantName    string `json:"tenant_name"`
+		ActiveAPIKeys int    `json:"active_api_keys"`
+		Quota         struct {
+			Configured   bool  `json:"configured"`
+			RequestLimit int64 `json:"request_limit"`
+			TokenLimit   int64 `json:"token_limit"`
+		} `json:"quota"`
 	}
-	expected := `{"tenant_id":"tenant_alpha","tenant_name":"Alpha 租户","active_api_keys":1}`
-	if string(body) != expected {
-		t.Fatalf("expected body %q, got %q", expected, string(body))
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatalf("json.NewDecoder failed: %v", err)
+	}
+	if payload.TenantID != "tenant_alpha" {
+		t.Fatalf("expected tenant_id %q, got %q", "tenant_alpha", payload.TenantID)
+	}
+	if payload.TenantName != "Alpha 租户" {
+		t.Fatalf("expected tenant_name %q, got %q", "Alpha 租户", payload.TenantName)
+	}
+	if payload.ActiveAPIKeys != 1 {
+		t.Fatalf("expected active_api_keys %d, got %d", 1, payload.ActiveAPIKeys)
+	}
+	if !payload.Quota.Configured {
+		t.Fatal("expected quota to be configured")
+	}
+	if payload.Quota.RequestLimit == 0 || payload.Quota.TokenLimit == 0 {
+		t.Fatalf("expected quota limits to be populated, got %+v", payload.Quota)
 	}
 }
 

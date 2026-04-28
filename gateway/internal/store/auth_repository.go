@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/example/ai_gateway/gateway/internal/domain"
 	"github.com/example/ai_gateway/gateway/internal/secret"
@@ -17,11 +18,12 @@ var ErrAuthRecordNotFound = errors.New("auth record not found")
 var ErrAuthScopeAmbiguous = errors.New("auth scope ambiguous")
 
 type PlatformAPIKeyRecord struct {
-	ID       string
-	TenantID string
-	UserID   string
-	Name     string
-	Status   domain.Status
+	ID        string
+	TenantID  string
+	UserID    string
+	Name      string
+	Status    domain.Status
+	ExpiresAt time.Time
 }
 
 type TenantRecord struct {
@@ -152,11 +154,12 @@ func (r *SQLAuthRepository) FindPlatformAPIKeyByHash(ctx context.Context, keyHas
 	}
 
 	return PlatformAPIKeyRecord{
-		ID:       row.ID,
-		TenantID: row.TenantID,
-		UserID:   userID,
-		Name:     row.Name,
-		Status:   domain.Status(row.Status),
+		ID:        row.ID,
+		TenantID:  row.TenantID,
+		UserID:    userID,
+		Name:      row.Name,
+		Status:    domain.Status(row.Status),
+		ExpiresAt: row.ExpiresAt.Time,
 	}, nil
 }
 
@@ -217,7 +220,7 @@ func (r *SQLAuthRepository) ListActiveProviderCredentials(ctx context.Context) (
 			ID:              row.ID,
 			Provider:        row.Provider,
 			DisplayName:     row.DisplayName,
-			BaseURL:         row.BaseURL,
+			BaseURL:         row.BaseUrl,
 			APIKey:          apiKey,
 			Status:          domain.Status(row.Status),
 			SupportedModels: append([]string(nil), row.SupportedModels...),

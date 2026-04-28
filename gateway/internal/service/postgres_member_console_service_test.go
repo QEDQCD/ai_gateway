@@ -54,6 +54,12 @@ func TestPostgresMemberConsoleServiceOverviewIsTenantScoped(t *testing.T) {
 	if payload.ActiveAPIKeys != 1 {
 		t.Fatalf("expected tenant-scoped active api keys %d, got %d", 1, payload.ActiveAPIKeys)
 	}
+	if payload.Quota.RequestLimit == 0 {
+		t.Fatal("expected request limit to be populated")
+	}
+	if payload.Quota.TokenLimit == 0 {
+		t.Fatal("expected token limit to be populated")
+	}
 }
 
 func TestPostgresMemberConsoleServiceAPIKeysOnlyReturnsCreatorsKeys(t *testing.T) {

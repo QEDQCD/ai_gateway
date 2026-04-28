@@ -183,6 +183,46 @@ func SeedDemoData(ctx context.Context, db seedDB, cfg SeedConfig) error {
 			name = excluded.name,
 			status = excluded.status,
 			request_quota_per_day = excluded.request_quota_per_day;`,
+		`insert into tenant_quota_policies (tenant_id, period_type, request_limit, token_limit, effective_from) values
+			('tenant_alpha', 'monthly', 1800000, 24000000, now()),
+			('tenant_beta', 'monthly', 1200000, 16000000, now()),
+			('tenant_gamma', 'monthly', 900000, 12000000, now())
+		on conflict (tenant_id) do update set
+			period_type = excluded.period_type,
+			request_limit = excluded.request_limit,
+			token_limit = excluded.token_limit,
+			effective_from = excluded.effective_from,
+			updated_at = now();`,
+		`insert into tenant_quota_usage_periods (tenant_id, period_start, period_end, requests_used, tokens_used, last_aggregated_at) values
+			(
+				'tenant_alpha',
+				(date_trunc('month', now() at time zone 'Asia/Shanghai') at time zone 'Asia/Shanghai'),
+				((date_trunc('month', now() at time zone 'Asia/Shanghai') + interval '1 month') at time zone 'Asia/Shanghai'),
+				286420,
+				5821040,
+				now()
+			),
+			(
+				'tenant_beta',
+				(date_trunc('month', now() at time zone 'Asia/Shanghai') at time zone 'Asia/Shanghai'),
+				((date_trunc('month', now() at time zone 'Asia/Shanghai') + interval '1 month') at time zone 'Asia/Shanghai'),
+				164220,
+				3294000,
+				now()
+			),
+			(
+				'tenant_gamma',
+				(date_trunc('month', now() at time zone 'Asia/Shanghai') at time zone 'Asia/Shanghai'),
+				((date_trunc('month', now() at time zone 'Asia/Shanghai') + interval '1 month') at time zone 'Asia/Shanghai'),
+				95420,
+				1916000,
+				now()
+			)
+		on conflict (tenant_id, period_start) do update set
+			period_end = excluded.period_end,
+			requests_used = excluded.requests_used,
+			tokens_used = excluded.tokens_used,
+			last_aggregated_at = excluded.last_aggregated_at;`,
 		fmt.Sprintf(`insert into platform_api_keys (id, tenant_id, name, key_hash, key_ciphertext, key_kek_version, secret_recoverable, status, scopes, last_used_at, expires_at) values
 			('pak_live_console', 'tenant_alpha', 'prod-gateway', '%s', '%s', 'v1', true, 'active', '{"chat","rag","embeddings"}', now(), now() + interval '30 days'),
 			('pak_batch_worker', 'tenant_beta', 'batch-worker', 'sha256:batch-worker', '', 'v1', false, 'active', '{"embeddings"}', now() - interval '14 minutes', null)
@@ -411,8 +451,41 @@ func RuntimeSeedStatements() []string {
 		on conflict (id) do nothing;
 		`,
 		`
-		insert into platform_api_keys (id, tenant_id, name, key_hash, status, created_at)
-		values ('pak_demo', 'tenant_demo', 'demo key', 'sha256:demo', 'active', timestamptz '2026-04-24T09:46:00Z')
+		insert into tenant_quota_policies (tenant_id, period_type, request_limit, token_limit, effective_from)
+		values ('tenant_demo', 'monthly', 500000, 10000000, now())
+		on conflict (tenant_id) do update set
+			period_type = excluded.period_type,
+			request_limit = excluded.request_limit,
+			token_limit = excluded.token_limit,
+			effective_from = excluded.effective_from,
+			updated_at = now();
+		`,
+		`
+		insert into tenant_quota_usage_periods (
+			tenant_id,
+			period_start,
+			period_end,
+			requests_used,
+			tokens_used,
+			last_aggregated_at
+		)
+		values (
+			'tenant_demo',
+			(date_trunc('month', now() at time zone 'Asia/Shanghai') at time zone 'Asia/Shanghai'),
+			((date_trunc('month', now() at time zone 'Asia/Shanghai') + interval '1 month') at time zone 'Asia/Shanghai'),
+			120000,
+			2400000,
+			now()
+		)
+		on conflict (tenant_id, period_start) do update set
+			period_end = excluded.period_end,
+			requests_used = excluded.requests_used,
+			tokens_used = excluded.tokens_used,
+			last_aggregated_at = excluded.last_aggregated_at;
+		`,
+		`
+		insert into platform_api_keys (id, tenant_id, name, key_hash, status, created_at, expires_at)
+		values ('pak_demo', 'tenant_demo', 'demo key', 'sha256:demo', 'active', timestamptz '2026-04-24T09:46:00Z', timestamptz '2026-05-24T09:46:00Z')
 		on conflict (id) do nothing;
 		`,
 		`

@@ -7,20 +7,23 @@ package store
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const getPlatformAPIKeyByHash = `-- name: GetPlatformAPIKeyByHash :one
-select id, tenant_id, name, key_hash, status
+select id, tenant_id, name, key_hash, status, coalesce(expires_at, created_at + interval '30 days') as expires_at
 from platform_api_keys
 where key_hash = $1
 `
 
 type GetPlatformAPIKeyByHashRow struct {
-	ID       string `json:"id"`
-	TenantID string `json:"tenant_id"`
-	Name     string `json:"name"`
-	KeyHash  string `json:"key_hash"`
-	Status   string `json:"status"`
+	ID        string             `json:"id"`
+	TenantID  string             `json:"tenant_id"`
+	Name      string             `json:"name"`
+	KeyHash   string             `json:"key_hash"`
+	Status    string             `json:"status"`
+	ExpiresAt pgtype.Timestamptz `json:"expires_at"`
 }
 
 func (q *Queries) GetPlatformAPIKeyByHash(ctx context.Context, keyHash string) (GetPlatformAPIKeyByHashRow, error) {
@@ -32,6 +35,7 @@ func (q *Queries) GetPlatformAPIKeyByHash(ctx context.Context, keyHash string) (
 		&i.Name,
 		&i.KeyHash,
 		&i.Status,
+		&i.ExpiresAt,
 	)
 	return i, err
 }

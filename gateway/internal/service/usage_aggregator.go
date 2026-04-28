@@ -41,6 +41,23 @@ on conflict (
 	total_tokens = llm_usage_agg_hourly.total_tokens + excluded.total_tokens
 `
 
+const upsertTenantQuotaUsagePeriodSQL = `
+insert into tenant_quota_usage_periods (
+	tenant_id,
+	period_start,
+	period_end,
+	requests_used,
+	tokens_used,
+	last_aggregated_at
+) values (
+	$1, $2, $3, $4, $5, now()
+)
+on conflict (tenant_id, period_start) do update set
+	requests_used = tenant_quota_usage_periods.requests_used + excluded.requests_used,
+	tokens_used = tenant_quota_usage_periods.tokens_used + excluded.tokens_used,
+	last_aggregated_at = now()
+`
+
 type sqlUsageAggregator struct {
 	db store.DBTX
 }
@@ -111,6 +128,23 @@ func (a sqlUsageAggregator) Consume(ctx context.Context, event queue.UsageEvent)
 		max(0, event.TotalTokens),
 	)
 	if err != nil {
+		return err
+	}
+	occurredAt := event.OccurredAt
+	if occurredAt.IsZero() {
+		occurredAt = time.Now()
+	}
+	periodStart, periodEnd, err := currentMonthlyPeriod(occurredAt, shanghaiLocation())
+	if err != nil {
+		return err
+	}
+	if _, err := a.db.Exec(ctx, upsertTenantQuotaUsagePeriodSQL,
+		event.TenantID,
+		periodStart,
+		periodEnd,
+		1,
+		max(0, event.TotalTokens),
+	); err != nil {
 		return err
 	}
 	return a.AggregateHour(ctx, bucketStart)

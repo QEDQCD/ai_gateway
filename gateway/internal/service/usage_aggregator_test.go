@@ -59,6 +59,18 @@ func TestUsageAggregatorUpsertsHourlyUsage(t *testing.T) {
 
 	aggregator := service.NewUsageAggregator(conn)
 	eventTime := time.Date(2026, time.April, 24, 11, 15, 0, 0, time.UTC)
+	periodStart, periodEnd := currentShanghaiMonthWindow(t, eventTime)
+	var beforeMonthlyRequests int
+	var beforeMonthlyTokens int
+	if err := conn.QueryRow(ctx, `
+		select requests_used, tokens_used
+		from tenant_quota_usage_periods
+		where tenant_id = 'tenant_demo'
+		  and period_start = $1
+		  and period_end = $2
+	`, periodStart, periodEnd).Scan(&beforeMonthlyRequests, &beforeMonthlyTokens); err != nil {
+		t.Fatalf("QueryRow tenant_quota_usage_periods failed: %v", err)
+	}
 
 	for _, totalTokens := range []int{24, 6} {
 		if err := aggregator.Consume(ctx, queue.UsageEvent{
@@ -109,6 +121,104 @@ func TestUsageAggregatorUpsertsHourlyUsage(t *testing.T) {
 	}
 	if totalTokens != 30 {
 		t.Fatalf("expected total_tokens 30, got %d", totalTokens)
+	}
+
+	var monthlyRequests int
+	var monthlyTokens int
+	if err := conn.QueryRow(ctx, `
+		select requests_used, tokens_used
+		from tenant_quota_usage_periods
+		where tenant_id = 'tenant_demo'
+		  and period_start = $1
+		  and period_end = $2
+	`, periodStart, periodEnd).Scan(&monthlyRequests, &monthlyTokens); err != nil {
+		t.Fatalf("QueryRow tenant_quota_usage_periods failed: %v", err)
+	}
+	if monthlyRequests != beforeMonthlyRequests+2 {
+		t.Fatalf("expected requests_used %d, got %d", beforeMonthlyRequests+2, monthlyRequests)
+	}
+	if monthlyTokens != beforeMonthlyTokens+30 {
+		t.Fatalf("expected tokens_used %d, got %d", beforeMonthlyTokens+30, monthlyTokens)
+	}
+}
+
+func TestUsageAggregatorUpdatesTenantQuotaUsagePeriod(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	container, dsn := startPostgresContainer(ctx, t)
+	t.Cleanup(func() {
+		_ = container.Terminate(context.Background())
+	})
+
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("pgx.Connect failed: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = conn.Close(context.Background())
+	})
+
+	pool, err := gatewaydb.OpenPostgres(ctx, dsn)
+	if err != nil {
+		t.Fatalf("OpenPostgres failed: %v", err)
+	}
+	t.Cleanup(pool.Close)
+
+	if err := gatewaydb.ApplyMigrations(ctx, pool); err != nil {
+		t.Fatalf("ApplyMigrations failed: %v", err)
+	}
+	for _, statement := range gatewaydb.RuntimeSeedStatements() {
+		if _, err := conn.Exec(ctx, statement); err != nil {
+			t.Fatalf("conn.Exec seed failed: %v", err)
+		}
+	}
+
+	aggregator := service.NewUsageAggregator(conn)
+	eventTime := time.Date(2026, time.April, 28, 10, 0, 0, 0, mustLoadShanghaiLocation(t))
+	periodStart, periodEnd := currentShanghaiMonthWindow(t, eventTime)
+	var beforeRequests int64
+	var beforeTokens int64
+	if err := conn.QueryRow(ctx, `
+		select requests_used, tokens_used
+		from tenant_quota_usage_periods
+		where tenant_id = 'tenant_demo'
+		  and period_start = $1
+		  and period_end = $2
+	`, periodStart, periodEnd).Scan(&beforeRequests, &beforeTokens); err != nil {
+		t.Fatalf("QueryRow before tenant_quota_usage_periods failed: %v", err)
+	}
+	if err := aggregator.Consume(ctx, queue.UsageEvent{
+		TenantID:             "tenant_demo",
+		PlatformAPIKeyID:     "pak_demo",
+		ProviderCredentialID: "provider_openai_demo",
+		RouteID:              service.RouteIDForCredential("provider_openai_demo", []string{"gpt-4o-mini", "text-embedding-3-small"}, "gpt-4o-mini"),
+		Endpoint:             "/v1/chat/completions",
+		Status:               "success",
+		UsageSource:          "upstream",
+		PromptTokens:         120,
+		CompletionTokens:     80,
+		TotalTokens:          200,
+		OccurredAt:           eventTime,
+	}); err != nil {
+		t.Fatalf("Consume failed: %v", err)
+	}
+
+	var requestsUsed int64
+	var tokensUsed int64
+	if err := conn.QueryRow(ctx, `
+		select requests_used, tokens_used
+		from tenant_quota_usage_periods
+		where tenant_id = 'tenant_demo'
+		  and period_start = $1
+		  and period_end = $2
+	`, periodStart, periodEnd).Scan(&requestsUsed, &tokensUsed); err != nil {
+		t.Fatalf("QueryRow tenant_quota_usage_periods failed: %v", err)
+	}
+	if requestsUsed != beforeRequests+1 || tokensUsed != beforeTokens+200 {
+		t.Fatalf("expected usage (%d, %d), got (%d, %d)", beforeRequests+1, beforeTokens+200, requestsUsed, tokensUsed)
 	}
 }
 
@@ -526,4 +636,14 @@ func startPostgresContainer(ctx context.Context, t *testing.T) (testcontainers.C
 
 	dsn := fmt.Sprintf("postgres://postgres:postgres@%s:%s/gateway_test?sslmode=disable", host, port.Port())
 	return container, dsn
+}
+
+func mustLoadShanghaiLocation(t *testing.T) *time.Location {
+	t.Helper()
+
+	location, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		t.Fatalf("time.LoadLocation failed: %v", err)
+	}
+	return location
 }

@@ -66,8 +66,8 @@ func TestSQLAuthRepositoryFindPlatformAPIKeyByHashSafelyBackfillsUniqueMembershi
 		insert into users (id, email, name, role, status) values ('user_demo', 'member@example.com', 'Demo Member', 'member', 'active');
 		insert into tenant_memberships (id, tenant_id, user_id, role, status)
 		values ('tm_demo', 'tenant_demo', 'user_demo', 'member', 'active');
-		insert into platform_api_keys (id, tenant_id, name, key_hash, status)
-		values ('pak_demo', 'tenant_demo', 'demo', 'sha256:demo', 'active');
+		insert into platform_api_keys (id, tenant_id, name, key_hash, status, expires_at)
+		values ('pak_demo', 'tenant_demo', 'demo', 'sha256:demo', 'active', timestamptz '2026-05-24T09:46:00Z');
 	`); err != nil {
 		t.Fatalf("seed auth records failed: %v", err)
 	}
@@ -83,6 +83,9 @@ func TestSQLAuthRepositoryFindPlatformAPIKeyByHashSafelyBackfillsUniqueMembershi
 	}
 	if record.TenantID != "tenant_demo" {
 		t.Fatalf("expected tenant_demo, got %q", record.TenantID)
+	}
+	if record.ExpiresAt.IsZero() {
+		t.Fatal("expected expires_at to be populated")
 	}
 }
 
@@ -329,7 +332,7 @@ func TestSQLAuthRepositoryListActiveProviderCredentialsMapsSupportedModels(t *te
 				Provider:        "dashscope",
 				DisplayName:     "DashScope Primary",
 				SupportedModels: []string{"qwen-flash"},
-				BaseURL:         "https://dashscope.aliyuncs.com/compatible-mode/v1",
+				BaseUrl:         "https://dashscope.aliyuncs.com/compatible-mode/v1",
 				EncryptedSecret: encryptedSecret,
 				Status:          string(domain.StatusActive),
 			},

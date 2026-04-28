@@ -59,6 +59,12 @@ func (s postgresMemberConsoleService) Overview(ctx context.Context) (MemberOverv
 		return MemberOverviewPageData{}, err
 	}
 
+	quota, err := loadTenantQuotaSummary(ctx, s.db, payload.TenantID, time.Now())
+	if err != nil {
+		return MemberOverviewPageData{}, err
+	}
+	payload.Quota = quota
+
 	return payload, nil
 }
 

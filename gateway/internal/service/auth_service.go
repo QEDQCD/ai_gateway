@@ -136,6 +136,9 @@ func (s authService) Resolve(ctx context.Context, rawKey string, requestedModel 
 	if platformKey.Status != domain.StatusActive {
 		return domain.RequestContext{}, fmt.Errorf("%w: platform API key is %s", ErrUnauthorized, platformKey.Status)
 	}
+	if !platformKey.ExpiresAt.IsZero() && !platformKey.ExpiresAt.After(time.Now()) {
+		return domain.RequestContext{}, fmt.Errorf("%w: platform API key expired", ErrUnauthorized)
+	}
 
 	tenant, err := s.repository.FindTenantByID(ctx, platformKey.TenantID)
 	if err != nil {

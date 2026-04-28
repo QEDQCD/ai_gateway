@@ -25,11 +25,12 @@ type TableRow struct {
 }
 
 type OverviewPageData struct {
-	Stats         []KeyMetric `json:"stats"`
-	RouteHealth   []TableRow  `json:"route_health"`
-	TopModels     []TableRow  `json:"top_models"`
-	RecentAlerts  []TableRow  `json:"recent_alerts"`
-	AuditSnapshot []TableRow  `json:"audit_snapshot"`
+	Stats         []KeyMetric        `json:"stats"`
+	RouteHealth   []TableRow         `json:"route_health"`
+	TopModels     []TableRow         `json:"top_models"`
+	RecentAlerts  []TableRow         `json:"recent_alerts"`
+	AuditSnapshot []TableRow         `json:"audit_snapshot"`
+	QuotaSummary  TenantQuotaSummary `json:"quota_summary"`
 }
 
 type ConsoleSystemStatus struct {

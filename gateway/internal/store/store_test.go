@@ -116,14 +116,14 @@ func TestListActiveProviderCredentialsReturnsSupportedModelsInDeterministicOrder
 	if got := strings.Join(credentials[0].SupportedModels, ","); got != "gpt-4o-mini,text-embedding-3-small" {
 		t.Fatalf("expected supported models to round-trip, got %q", got)
 	}
-	if credentials[0].BaseURL != "https://primary.example/v1" {
-		t.Fatalf("expected base URL %q, got %q", "https://primary.example/v1", credentials[0].BaseURL)
+	if credentials[0].BaseUrl != "https://primary.example/v1" {
+		t.Fatalf("expected base URL %q, got %q", "https://primary.example/v1", credentials[0].BaseUrl)
 	}
 	if got := strings.Join(credentials[1].SupportedModels, ","); got != "gpt-4o" {
 		t.Fatalf("expected supported models to round-trip, got %q", got)
 	}
-	if credentials[1].BaseURL != "https://secondary.example/v1" {
-		t.Fatalf("expected base URL %q, got %q", "https://secondary.example/v1", credentials[1].BaseURL)
+	if credentials[1].BaseUrl != "https://secondary.example/v1" {
+		t.Fatalf("expected base URL %q, got %q", "https://secondary.example/v1", credentials[1].BaseUrl)
 	}
 }
 

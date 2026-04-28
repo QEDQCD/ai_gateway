@@ -8,6 +8,57 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type AccountApplication struct {
+	ID            string             `json:"id"`
+	Email         string             `json:"email"`
+	Name          string             `json:"name"`
+	CompanyName   string             `json:"company_name"`
+	UseCase       string             `json:"use_case"`
+	Status        string             `json:"status"`
+	ReviewerID    pgtype.Text        `json:"reviewer_id"`
+	ReviewComment string             `json:"review_comment"`
+	ReviewedAt    pgtype.Timestamptz `json:"reviewed_at"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+}
+
+type ApiKeySecretAccessLog struct {
+	ID           string             `json:"id"`
+	ApiKeyID     string             `json:"api_key_id"`
+	TenantID     string             `json:"tenant_id"`
+	ActorUserID  pgtype.Text        `json:"actor_user_id"`
+	ActorRole    string             `json:"actor_role"`
+	Action       string             `json:"action"`
+	AccessResult string             `json:"access_result"`
+	IpAddress    string             `json:"ip_address"`
+	UserAgent    string             `json:"user_agent"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
+type AuditEvent struct {
+	ID          string             `json:"id"`
+	ActorType   string             `json:"actor_type"`
+	ActorUserID pgtype.Text        `json:"actor_user_id"`
+	TenantID    pgtype.Text        `json:"tenant_id"`
+	EventType   string             `json:"event_type"`
+	TargetType  string             `json:"target_type"`
+	TargetID    string             `json:"target_id"`
+	Detail      string             `json:"detail"`
+	IpDigest    string             `json:"ip_digest"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+type AuditLog struct {
+	ID                  int64              `json:"id"`
+	TenantID            string             `json:"tenant_id"`
+	PlatformApiKeyID    string             `json:"platform_api_key_id"`
+	RequestedModel      string             `json:"requested_model"`
+	Endpoint            string             `json:"endpoint"`
+	StatusCode          int32              `json:"status_code"`
+	ProviderDisplayName string             `json:"provider_display_name"`
+	LatencyMs           int32              `json:"latency_ms"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+}
+
 type ByokCredential struct {
 	ID              string             `json:"id"`
 	TenantID        string             `json:"tenant_id"`
@@ -17,29 +68,235 @@ type ByokCredential struct {
 	CreatedAt       pgtype.Timestamptz `json:"created_at"`
 }
 
-type PlatformApiKey struct {
-	ID        string             `json:"id"`
-	TenantID  string             `json:"tenant_id"`
-	Name      string             `json:"name"`
-	KeyHash   string             `json:"key_hash"`
-	Status    string             `json:"status"`
+type Document struct {
+	ID              string             `json:"id"`
+	TenantID        string             `json:"tenant_id"`
+	KnowledgeBaseID string             `json:"knowledge_base_id"`
+	Name            string             `json:"name"`
+	Content         string             `json:"content"`
+	Status          string             `json:"status"`
+	ChunkCount      int32              `json:"chunk_count"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+}
+
+type DocumentChunk struct {
+	ChunkID         string             `json:"chunk_id"`
+	TenantID        string             `json:"tenant_id"`
+	KnowledgeBaseID string             `json:"knowledge_base_id"`
+	DocumentID      string             `json:"document_id"`
+	DocumentName    string             `json:"document_name"`
+	ChunkIndex      int32              `json:"chunk_index"`
+	Content         string             `json:"content"`
+	EmbeddingJson   []byte             `json:"embedding_json"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+}
+
+type KnowledgeBasis struct {
+	ID            string             `json:"id"`
+	TenantID      string             `json:"tenant_id"`
+	Name          string             `json:"name"`
+	Status        string             `json:"status"`
+	DocumentCount int32              `json:"document_count"`
+	ChunkCount    int32              `json:"chunk_count"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+}
+
+type LlmRequestEvent struct {
+	ID           string             `json:"id"`
+	RequestLogID string             `json:"request_log_id"`
+	TenantID     string             `json:"tenant_id"`
+	EventType    string             `json:"event_type"`
+	UsageSource  string             `json:"usage_source"`
+	UsageStatus  string             `json:"usage_status"`
+	StatusCode   int32              `json:"status_code"`
+	Detail       string             `json:"detail"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
+type LlmRequestFailure struct {
+	ID                    string             `json:"id"`
+	RequestLogID          string             `json:"request_log_id"`
+	TenantID              string             `json:"tenant_id"`
+	UserID                pgtype.Text        `json:"user_id"`
+	PlatformApiKeyID      string             `json:"platform_api_key_id"`
+	FailureStage          string             `json:"failure_stage"`
+	ErrorCategory         string             `json:"error_category"`
+	StatusCode            int32              `json:"status_code"`
+	Retryable             bool               `json:"retryable"`
+	UserMessage           string             `json:"user_message"`
+	InternalMessageDigest string             `json:"internal_message_digest"`
+	CreatedAt             pgtype.Timestamptz `json:"created_at"`
+}
+
+type LlmRequestLog struct {
+	ID                   string             `json:"id"`
+	TenantID             string             `json:"tenant_id"`
+	PlatformApiKeyID     string             `json:"platform_api_key_id"`
+	PlatformApiKeyName   string             `json:"platform_api_key_name"`
+	ProviderCredentialID string             `json:"provider_credential_id"`
+	RouteID              string             `json:"route_id"`
+	RequestPath          string             `json:"request_path"`
+	RequestModel         string             `json:"request_model"`
+	UpstreamModel        string             `json:"upstream_model"`
+	UsageSource          string             `json:"usage_source"`
+	UsageStatus          string             `json:"usage_status"`
+	StatusCode           int32              `json:"status_code"`
+	LatencyMs            int32              `json:"latency_ms"`
+	PromptTokens         int32              `json:"prompt_tokens"`
+	CompletionTokens     int32              `json:"completion_tokens"`
+	TotalTokens          int32              `json:"total_tokens"`
+	ErrorCode            string             `json:"error_code"`
+	ErrorMessage         string             `json:"error_message"`
+	RequestStartedAt     pgtype.Timestamptz `json:"request_started_at"`
+	RequestCompletedAt   pgtype.Timestamptz `json:"request_completed_at"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+}
+
+type LlmUsageAggHourly struct {
+	BucketStart          pgtype.Timestamptz `json:"bucket_start"`
+	TenantID             string             `json:"tenant_id"`
+	PlatformApiKeyID     string             `json:"platform_api_key_id"`
+	ProviderCredentialID string             `json:"provider_credential_id"`
+	RouteID              string             `json:"route_id"`
+	RequestPath          string             `json:"request_path"`
+	UsageSource          string             `json:"usage_source"`
+	UsageStatus          string             `json:"usage_status"`
+	RequestCount         int32              `json:"request_count"`
+	PromptTokens         int32              `json:"prompt_tokens"`
+	CompletionTokens     int32              `json:"completion_tokens"`
+	TotalTokens          int32              `json:"total_tokens"`
+}
+
+type OperationalAlert struct {
+	ID        int64              `json:"id"`
+	AlertType string             `json:"alert_type"`
+	Scope     string             `json:"scope"`
+	Severity  string             `json:"severity"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+type PlatformApiKey struct {
+	ID                string             `json:"id"`
+	TenantID          string             `json:"tenant_id"`
+	Name              string             `json:"name"`
+	KeyHash           string             `json:"key_hash"`
+	Status            string             `json:"status"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	Scopes            []string           `json:"scopes"`
+	LastUsedAt        pgtype.Timestamptz `json:"last_used_at"`
+	KeyCiphertext     string             `json:"key_ciphertext"`
+	KeyKekVersion     string             `json:"key_kek_version"`
+	CreatedByUserID   pgtype.Text        `json:"created_by_user_id"`
+	ExpiresAt         pgtype.Timestamptz `json:"expires_at"`
+	RotatedFromKeyID  pgtype.Text        `json:"rotated_from_key_id"`
+	DisabledAt        pgtype.Timestamptz `json:"disabled_at"`
+	DisabledReason    string             `json:"disabled_reason"`
+	SecretRecoverable bool               `json:"secret_recoverable"`
+}
+
+type PlaygroundRun struct {
+	ID               int64              `json:"id"`
+	TenantID         string             `json:"tenant_id"`
+	PlatformApiKeyID string             `json:"platform_api_key_id"`
+	RequestedModel   string             `json:"requested_model"`
+	Prompt           string             `json:"prompt"`
+	ResponseExcerpt  string             `json:"response_excerpt"`
+	Endpoint         string             `json:"endpoint"`
+	ResolvedProvider string             `json:"resolved_provider"`
+	StatusCode       int32              `json:"status_code"`
+	LatencyMs        int32              `json:"latency_ms"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
 }
 
 type ProviderCredential struct {
 	ID              string             `json:"id"`
 	Provider        string             `json:"provider"`
 	DisplayName     string             `json:"display_name"`
-	SupportedModels []string           `json:"supported_models"`
-	BaseURL         string             `json:"base_url"`
 	EncryptedSecret string             `json:"encrypted_secret"`
 	Status          string             `json:"status"`
 	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	SupportedModels []string           `json:"supported_models"`
+	BaseUrl         string             `json:"base_url"`
+}
+
+type RouteCatalog struct {
+	ID                   string             `json:"id"`
+	RequestedModel       string             `json:"requested_model"`
+	ResolvedProvider     string             `json:"resolved_provider"`
+	ProviderCredentialID string             `json:"provider_credential_id"`
+	Endpoint             string             `json:"endpoint"`
+	LatencyMs            int32              `json:"latency_ms"`
+	HealthStatus         string             `json:"health_status"`
+	RequestMode          string             `json:"request_mode"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
+}
+
+type SystemSetting struct {
+	Key       string             `json:"key"`
+	Value     string             `json:"value"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
 }
 
 type Tenant struct {
+	ID                 string             `json:"id"`
+	Name               string             `json:"name"`
+	Status             string             `json:"status"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	RequestQuotaPerDay int32              `json:"request_quota_per_day"`
+}
+
+type TenantMembership struct {
 	ID        string             `json:"id"`
-	Name      string             `json:"name"`
+	TenantID  string             `json:"tenant_id"`
+	UserID    string             `json:"user_id"`
+	Role      string             `json:"role"`
 	Status    string             `json:"status"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+type TenantQuotaPolicy struct {
+	TenantID      string             `json:"tenant_id"`
+	PeriodType    string             `json:"period_type"`
+	RequestLimit  int64              `json:"request_limit"`
+	TokenLimit    int64              `json:"token_limit"`
+	EffectiveFrom pgtype.Timestamptz `json:"effective_from"`
+	CreatedBy     pgtype.Text        `json:"created_by"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+}
+
+type TenantQuotaUsagePeriod struct {
+	TenantID         string             `json:"tenant_id"`
+	PeriodStart      pgtype.Timestamptz `json:"period_start"`
+	PeriodEnd        pgtype.Timestamptz `json:"period_end"`
+	RequestsUsed     int64              `json:"requests_used"`
+	TokensUsed       int64              `json:"tokens_used"`
+	LastAggregatedAt pgtype.Timestamptz `json:"last_aggregated_at"`
+}
+
+type TenantUsageLedger struct {
+	BucketStart    pgtype.Timestamptz `json:"bucket_start"`
+	TenantID       string             `json:"tenant_id"`
+	InputTokens    int32              `json:"input_tokens"`
+	OutputTokens   int32              `json:"output_tokens"`
+	TotalTokens    int32              `json:"total_tokens"`
+	RequestCount   int32              `json:"request_count"`
+	SuccessCount   int32              `json:"success_count"`
+	FailureCount   int32              `json:"failure_count"`
+	EstimatedCount int32              `json:"estimated_count"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
+type User struct {
+	ID           string             `json:"id"`
+	Email        string             `json:"email"`
+	Name         string             `json:"name"`
+	Role         string             `json:"role"`
+	Status       string             `json:"status"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	PasswordHash string             `json:"password_hash"`
 }

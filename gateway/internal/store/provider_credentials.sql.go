@@ -21,7 +21,7 @@ type ListActiveProviderCredentialsRow struct {
 	Provider        string   `json:"provider"`
 	DisplayName     string   `json:"display_name"`
 	SupportedModels []string `json:"supported_models"`
-	BaseURL         string   `json:"base_url"`
+	BaseUrl         string   `json:"base_url"`
 	EncryptedSecret string   `json:"encrypted_secret"`
 	Status          string   `json:"status"`
 }
@@ -40,7 +40,7 @@ func (q *Queries) ListActiveProviderCredentials(ctx context.Context) ([]ListActi
 			&i.Provider,
 			&i.DisplayName,
 			&i.SupportedModels,
-			&i.BaseURL,
+			&i.BaseUrl,
 			&i.EncryptedSecret,
 			&i.Status,
 		); err != nil {

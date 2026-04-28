@@ -82,7 +82,7 @@ func newDatabaseBackedServerApp(cfg config.Config) *fiber.App {
 	queries := store.New(pool)
 	repository := store.NewAuthRepository(queries, providerSecretCodec)
 	routeService := service.NewRouteService(repository)
-	authService := service.NewAuthServiceWithConsoleSessions(repository, newQuotaGuard(cfg), routeService, cfg.ConsoleSessionSecret)
+	authService := service.NewAuthServiceWithConsoleSessions(repository, newDatabaseQuotaGuard(cfg, pool), routeService, cfg.ConsoleSessionSecret)
 	usageRecorder := service.NewUsageRecorder(pool)
 	usagePublisher := queue.NewUsagePublisherWithConsumers(
 		newUsagePublisher(cfg),
@@ -166,9 +166,6 @@ func (c staticQuotaClient) Exists(ctx context.Context, key string) (bool, error)
 func newQuotaGuard(cfg config.Config) service.QuotaGuard {
 	redisURL := strings.TrimSpace(cfg.RedisURL)
 	if redisURL == "" {
-		if strings.TrimSpace(cfg.DatabaseURL) != "" {
-			panic("gateway: database mode requires GATEWAY_REDIS_URL")
-		}
 		return service.NewRedisQuotaGuard(newStaticQuotaClient(cfg.BootstrapQuotaExhaustedTenantIDs))
 	}
 
@@ -187,6 +184,15 @@ func newQuotaGuard(cfg config.Config) service.QuotaGuard {
 		panic(err)
 	}
 	return service.NewRedisQuotaGuard(redisQuotaClient{client: client})
+}
+
+func newDatabaseQuotaGuard(cfg config.Config, db store.DBTX) service.QuotaGuard {
+	guards := []service.QuotaGuard{service.NewDatabaseQuotaGuard(db)}
+	redisURL := strings.TrimSpace(cfg.RedisURL)
+	if redisURL != "" || len(cfg.BootstrapQuotaExhaustedTenantIDs) > 0 {
+		guards = append(guards, newQuotaGuard(cfg))
+	}
+	return service.NewCompositeQuotaGuard(guards...)
 }
 
 func newUsagePublisher(cfg config.Config) queue.UsagePublisher {

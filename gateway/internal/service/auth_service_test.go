@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/example/ai_gateway/gateway/internal/domain"
 	"github.com/example/ai_gateway/gateway/internal/service"
@@ -342,6 +343,31 @@ func TestResolveRequestContextUsesPlatformKeyAndProviderCredential(t *testing.T)
 			wantCredentialLookups: 0,
 		},
 		{
+			name: "expired platform key returns unauthorized",
+			platformKey: store.PlatformAPIKeyRecord{
+				ID:        "pak_expired",
+				TenantID:  "tenant_123",
+				Name:      "expired key",
+				Status:    domain.StatusActive,
+				ExpiresAt: time.Now().Add(-time.Hour),
+			},
+			tenant: store.TenantRecord{
+				ID:     "tenant_123",
+				Name:   "demo tenant",
+				Status: domain.StatusActive,
+			},
+			providerCredentials: []store.ProviderCredentialRecord{
+				{
+					ID:          "pc_expired",
+					Provider:    "openai",
+					DisplayName: "OpenAI Primary",
+					Status:      domain.StatusActive,
+				},
+			},
+			wantErr:               service.ErrUnauthorized,
+			wantCredentialLookups: 0,
+		},
+		{
 			name:           "requested model without matching active provider returns route not found",
 			requestedModel: "gpt-4o-mini",
 			platformKey: store.PlatformAPIKeyRecord{
@@ -420,13 +446,15 @@ func TestResolveRequestContextUsesPlatformKeyAndProviderCredential(t *testing.T)
 			if repo.platformKeyCtx != requestContext {
 				t.Fatal("expected platform key lookup to use the request context")
 			}
-			if tc.platformKey.Status == domain.StatusActive && repo.tenantCtx != requestContext {
+			platformKeyUsable := tc.platformKey.Status == domain.StatusActive &&
+				(tc.platformKey.ExpiresAt.IsZero() || tc.platformKey.ExpiresAt.After(time.Now()))
+			if platformKeyUsable && repo.tenantCtx != requestContext {
 				t.Fatal("expected tenant lookup to use the request context")
 			}
 			if repo.listProviderCredentialCalls != tc.wantCredentialLookups {
 				t.Fatalf("expected %d provider credential lookups, got %d", tc.wantCredentialLookups, repo.listProviderCredentialCalls)
 			}
-			if tc.platformKey.Status == domain.StatusActive && tc.tenant.Status == domain.StatusActive {
+			if platformKeyUsable && tc.tenant.Status == domain.StatusActive {
 				if quotaGuard.ctx != requestContext {
 					t.Fatal("expected quota check to use the request context")
 				}
@@ -461,6 +489,43 @@ func TestResolveRequestContextUsesPlatformKeyAndProviderCredential(t *testing.T)
 				t.Fatalf("expected context %+v, got %+v", tc.wantContext, gotContext)
 			}
 		})
+	}
+}
+
+func TestResolveRejectsExpiredPlatformAPIKey(t *testing.T) {
+	t.Parallel()
+
+	repo := &fakeAuthRepository{
+		platformKey: store.PlatformAPIKeyRecord{
+			ID:        "pak_expired",
+			TenantID:  "tenant_123",
+			Name:      "expired key",
+			Status:    domain.StatusActive,
+			ExpiresAt: time.Now().Add(-time.Hour),
+		},
+		tenant: store.TenantRecord{
+			ID:     "tenant_123",
+			Name:   "demo tenant",
+			Status: domain.StatusActive,
+		},
+		providerCredentials: []store.ProviderCredentialRecord{
+			{
+				ID:          "pc_456",
+				Provider:    "openai",
+				DisplayName: "OpenAI Primary",
+				Status:      domain.StatusActive,
+			},
+		},
+	}
+	quotaGuard := &fakeQuotaGuard{}
+	authService := service.NewAuthService(repo, quotaGuard, service.NewRouteService(repo))
+
+	_, err := authService.Resolve(context.Background(), "platform-live-key", "gpt-4o-mini")
+	if !errors.Is(err, service.ErrUnauthorized) {
+		t.Fatalf("expected error %v, got %v", service.ErrUnauthorized, err)
+	}
+	if quotaGuard.tenantID != "" {
+		t.Fatalf("expected quota guard to be skipped for expired key, got tenant %q", quotaGuard.tenantID)
 	}
 }
 
