@@ -242,6 +242,24 @@ func TestPostgresConsoleServiceRevealLegacyKeyMarksUnrecoverable(t *testing.T) {
 	if !secretView.LegacyUnrecoverable {
 		t.Fatal("expected LegacyUnrecoverable to be true")
 	}
+
+	var action string
+	var accessResult string
+	if err := conn.QueryRow(ctx, `
+		select action, access_result
+		from api_key_secret_access_logs
+		where api_key_id = 'pak_legacy_only_hash'
+		order by created_at desc, id desc
+		limit 1;
+	`).Scan(&action, &accessResult); err != nil {
+		t.Fatalf("QueryRow reveal api_key_secret_access_logs failed: %v", err)
+	}
+	if action != "reveal" {
+		t.Fatalf("expected action %q, got %q", "reveal", action)
+	}
+	if accessResult != "allowed" {
+		t.Fatalf("expected access_result %q, got %q", "allowed", accessResult)
+	}
 }
 
 func TestPostgresConsoleServiceCopyAPIKeySecretWritesAllowedAuditLog(t *testing.T) {

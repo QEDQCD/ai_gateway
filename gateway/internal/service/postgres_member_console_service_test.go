@@ -119,7 +119,7 @@ func TestPostgresMemberConsoleServiceRevealAPIKeySecretReturnsOwnedSecret(t *tes
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	member, _ := newUsageMemberConsoleService(t, ctx, service.ConsolePrincipal{
+	member, conn := newUsageMemberConsoleService(t, ctx, service.ConsolePrincipal{
 		UserID:   "user_member_a",
 		Email:    "member-a@example.com",
 		Role:     "member",
@@ -153,6 +153,32 @@ func TestPostgresMemberConsoleServiceRevealAPIKeySecretReturnsOwnedSecret(t *tes
 	}
 	if secretView.MaskedKey == secretView.FullKey {
 		t.Fatal("expected masked key to differ from full key")
+	}
+
+	var actorUserID string
+	var actorRole string
+	var action string
+	var accessResult string
+	if err := conn.QueryRow(ctx, `
+		select actor_user_id, actor_role, action, access_result
+		from api_key_secret_access_logs
+		where api_key_id = $1
+		order by created_at desc, id desc
+		limit 1;
+	`, created.Item.ID).Scan(&actorUserID, &actorRole, &action, &accessResult); err != nil {
+		t.Fatalf("QueryRow reveal api_key_secret_access_logs failed: %v", err)
+	}
+	if actorUserID != "user_member_a" {
+		t.Fatalf("expected actor_user_id %q, got %q", "user_member_a", actorUserID)
+	}
+	if actorRole != "member" {
+		t.Fatalf("expected actor_role %q, got %q", "member", actorRole)
+	}
+	if action != "reveal" {
+		t.Fatalf("expected action %q, got %q", "reveal", action)
+	}
+	if accessResult != "allowed" {
+		t.Fatalf("expected access_result %q, got %q", "allowed", accessResult)
 	}
 }
 

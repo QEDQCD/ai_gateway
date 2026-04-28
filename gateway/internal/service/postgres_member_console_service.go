@@ -401,16 +401,23 @@ func (s postgresMemberConsoleService) RevealAPIKeySecret(ctx context.Context, id
 	if err != nil {
 		return APIKeySecretView{}, err
 	}
+	metadata := RequestAuditMetadataFromContext(ctx)
 
 	record, owned, err := s.loadOwnedManagedAPIKeySecretRecord(ctx, id, principal)
 	if err != nil {
 		return APIKeySecretView{}, err
 	}
 	if !owned {
+		if err := insertAPIKeySecretAccessLog(ctx, s.db, record.ID, record.TenantID, principal.UserID, "member", "reveal", "denied", metadata.IPAddress, metadata.UserAgent); err != nil {
+			return APIKeySecretView{}, err
+		}
 		return APIKeySecretView{}, StatusError{
 			Code:    http.StatusNotFound,
 			Message: "api key not found",
 		}
+	}
+	if err := insertAPIKeySecretAccessLog(ctx, s.db, record.ID, record.TenantID, principal.UserID, "member", "reveal", "allowed", metadata.IPAddress, metadata.UserAgent); err != nil {
+		return APIKeySecretView{}, err
 	}
 	return buildAPIKeySecretView(record.ID, record.FullKey, record.Recoverable, record.ExpiresAt), nil
 }

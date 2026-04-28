@@ -575,8 +575,16 @@ type managedAPIKeySecretRecord struct {
 }
 
 func (s postgresConsoleService) RevealAPIKeySecret(ctx context.Context, id string) (APIKeySecretView, error) {
+	metadata := RequestAuditMetadataFromContext(ctx)
 	record, err := s.loadManagedAPIKeySecretRecord(ctx, id)
 	if err != nil {
+		return APIKeySecretView{}, err
+	}
+	actorUserID := ""
+	if principal, ok := ConsolePrincipalFromContext(ctx); ok && principal.Role == "admin" {
+		actorUserID = principal.UserID
+	}
+	if err := insertAPIKeySecretAccessLog(ctx, s.db, record.ID, record.TenantID, actorUserID, "admin", "reveal", "allowed", metadata.IPAddress, metadata.UserAgent); err != nil {
 		return APIKeySecretView{}, err
 	}
 	return buildAPIKeySecretView(record.ID, record.FullKey, record.Recoverable, record.ExpiresAt), nil
