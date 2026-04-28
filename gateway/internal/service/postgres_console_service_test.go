@@ -450,6 +450,67 @@ func TestPostgresConsoleServiceApplicationsReturnsPendingRows(t *testing.T) {
 	}
 }
 
+func TestPostgresConsoleServiceCreateApplicationPersistsPendingRow(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	result, err := console.CreateApplication(ctx, service.CreateApplicationRequest{
+		Email:       "new-user@example.com",
+		Name:        "新用户",
+		CompanyName: "New Co",
+		UseCase:     "测试接入",
+	})
+	if err != nil {
+		t.Fatalf("CreateApplication failed: %v", err)
+	}
+
+	if result.Item.ID == "" {
+		t.Fatal("expected application id to be generated")
+	}
+	if result.Item.Status != "pending" {
+		t.Fatalf("expected status %q, got %q", "pending", result.Item.Status)
+	}
+	if result.Item.Email != "new-user@example.com" {
+		t.Fatalf("expected email %q, got %q", "new-user@example.com", result.Item.Email)
+	}
+	if result.Item.Name != "新用户" {
+		t.Fatalf("expected name %q, got %q", "新用户", result.Item.Name)
+	}
+	if result.Item.CompanyName != "New Co" {
+		t.Fatalf("expected company_name %q, got %q", "New Co", result.Item.CompanyName)
+	}
+	if result.Item.UseCase != "测试接入" {
+		t.Fatalf("expected use_case %q, got %q", "测试接入", result.Item.UseCase)
+	}
+	if result.Item.CreatedAt == "" {
+		t.Fatal("expected created_at to be populated")
+	}
+
+	var status string
+	var reviewerID *string
+	var reviewedAt *time.Time
+	if err := conn.QueryRow(ctx, `
+		select status, reviewer_id, reviewed_at
+		from account_applications
+		where id = $1
+	`, result.Item.ID).Scan(&status, &reviewerID, &reviewedAt); err != nil {
+		t.Fatalf("select created application failed: %v", err)
+	}
+	if status != "pending" {
+		t.Fatalf("expected stored status %q, got %q", "pending", status)
+	}
+	if reviewerID != nil {
+		t.Fatalf("expected reviewer_id to be null, got %q", *reviewerID)
+	}
+	if reviewedAt != nil {
+		t.Fatal("expected reviewed_at to be null")
+	}
+}
+
 func TestPostgresConsoleServiceApproveApplicationRequiresTenantID(t *testing.T) {
 	t.Parallel()
 

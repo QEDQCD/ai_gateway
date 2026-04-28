@@ -341,6 +341,51 @@ func SeedDemoData(ctx context.Context, db seedDB, cfg SeedConfig) error {
 	return nil
 }
 
+func PruneSeededDisplayData(ctx context.Context, db seedDB) error {
+	statements := []string{
+		`delete from llm_usage_agg_hourly where platform_api_key_id in ('pak_live_console', 'pak_batch_worker');`,
+		`delete from llm_request_events where tenant_id in ('tenant_alpha', 'tenant_beta', 'tenant_gamma');`,
+		`delete from llm_request_logs where platform_api_key_id in ('pak_live_console', 'pak_batch_worker');`,
+		`delete from playground_runs where platform_api_key_id in ('pak_live_console', 'pak_batch_worker');`,
+		`delete from audit_logs where platform_api_key_id in ('pak_live_console', 'pak_batch_worker');`,
+		`delete from operational_alerts where scope in ('tenant_beta', 'rag-service', 'qwen-flash', 'gpt-4o-mini');`,
+		`delete from audit_events where detail in ('seed approve', 'seed key create', 'seed quota warning');`,
+		`delete from account_applications where id in ('app_alpha_approved', 'app_alpha_rejected');`,
+		`
+		with usage_rollup as (
+			select
+				q.tenant_id,
+				q.period_start,
+				count(l.id)::integer as requests_used,
+				coalesce(sum(l.total_tokens), 0)::integer as tokens_used
+			from tenant_quota_usage_periods q
+			left join llm_request_logs l
+				on l.tenant_id = q.tenant_id
+				and l.request_started_at >= q.period_start
+				and l.request_started_at < q.period_end
+			where q.tenant_id in ('tenant_alpha', 'tenant_beta', 'tenant_gamma')
+			group by q.tenant_id, q.period_start
+		)
+		update tenant_quota_usage_periods as q
+		set
+			requests_used = usage_rollup.requests_used,
+			tokens_used = usage_rollup.tokens_used,
+			last_aggregated_at = now()
+		from usage_rollup
+		where q.tenant_id = usage_rollup.tenant_id
+		  and q.period_start = usage_rollup.period_start;
+		`,
+	}
+
+	for _, statement := range statements {
+		if _, err := db.Exec(ctx, statement); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func hashPlatformAPIKey(rawKey string) string {
 	sum := sha256.Sum256([]byte(rawKey))
 	return "sha256:" + hex.EncodeToString(sum[:])

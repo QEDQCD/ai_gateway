@@ -1,4 +1,5 @@
 import { FormEvent, useState } from "react";
+import { Link } from "react-router-dom";
 
 import { BrandMark } from "../components/brand-mark";
 import { loginConsole } from "../lib/console-api";
@@ -81,6 +82,11 @@ export function LoginPage() {
             {submitting ? "登录中..." : "进入控制台"}
           </button>
         </form>
+        <div className="login-card__footer">
+          <Link className="button-shell" to="/apply">
+            申请账号
+          </Link>
+        </div>
       </section>
     </div>
   );

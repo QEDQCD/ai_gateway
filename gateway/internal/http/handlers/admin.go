@@ -39,6 +39,21 @@ func ConsoleApplications(console service.ConsoleService) fiber.Handler {
 	}
 }
 
+func ConsoleCreateApplication(console service.ConsoleService) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		var req service.CreateApplicationRequest
+		if err := c.BodyParser(&req); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
+		}
+
+		payload, err := console.CreateApplication(c.UserContext(), req)
+		if err != nil {
+			return consoleError(err)
+		}
+		return c.JSON(payload)
+	}
+}
+
 func ConsoleApproveApplication(console service.ConsoleService) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		var req service.ApproveApplicationRequest

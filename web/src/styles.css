@@ -517,7 +517,29 @@ a {
     transform 160ms ease;
 }
 
+.field-shell textarea {
+  min-height: 120px;
+  border-radius: 14px;
+  border: 1px solid rgba(129, 149, 222, 0.2);
+  background: rgba(255, 255, 255, 0.05);
+  padding: 12px 14px;
+  font-size: 15px;
+  color: var(--text-primary);
+  outline: none;
+  resize: vertical;
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease;
+}
+
 .field-shell input:focus {
+  border-color: rgba(87, 187, 255, 0.8);
+  box-shadow: 0 0 0 4px rgba(76, 152, 255, 0.16);
+  transform: translateY(-1px);
+}
+
+.field-shell textarea:focus {
   border-color: rgba(87, 187, 255, 0.8);
   box-shadow: 0 0 0 4px rgba(76, 152, 255, 0.16);
   transform: translateY(-1px);
@@ -532,6 +554,29 @@ a {
 .login-form__submit {
   height: 48px;
   border-radius: 14px;
+}
+
+.login-card__result {
+  margin-top: 18px;
+  padding: 16px 18px;
+  border-radius: 18px;
+  border: 1px solid rgba(113, 247, 187, 0.2);
+  background: linear-gradient(180deg, rgba(20, 74, 58, 0.34), rgba(8, 24, 20, 0.44));
+}
+
+.login-card__result h3 {
+  margin: 0 0 8px;
+}
+
+.login-card__result p {
+  margin: 6px 0 0;
+  color: var(--text-secondary);
+}
+
+.login-card__footer {
+  display: flex;
+  justify-content: flex-start;
+  margin-top: 18px;
 }
 
 @media (max-width: 1100px) {

@@ -78,6 +78,9 @@ func newDatabaseBackedServerApp(cfg config.Config) *fiber.App {
 	}); err != nil {
 		panic(err)
 	}
+	if err := gatewaydb.PruneSeededDisplayData(ctx, pool); err != nil {
+		panic(err)
+	}
 
 	queries := store.New(pool)
 	repository := store.NewAuthRepository(queries, providerSecretCodec)

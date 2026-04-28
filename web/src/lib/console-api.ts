@@ -272,6 +272,13 @@ export type ConsoleLoginRequest = {
   password: string;
 };
 
+export type CreateApplicationPayload = {
+  email: string;
+  name: string;
+  company_name: string;
+  use_case: string;
+};
+
 type JsonRecord = Record<string, unknown>;
 
 function asRecord(value: unknown): JsonRecord {
@@ -594,6 +601,14 @@ export function getMemberAuditEvents() {
 
 export function loginConsole(payload: ConsoleLoginRequest) {
   return requestJson<ConsoleSession>("/api/console/session/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function createApplication(payload: CreateApplicationPayload) {
+  return requestJson<ApplicationMutationResult>("/api/console/applications", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),

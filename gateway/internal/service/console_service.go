@@ -101,6 +101,13 @@ type ApplicationsPageData struct {
 	Items []ApplicationItem `json:"items"`
 }
 
+type CreateApplicationRequest struct {
+	Email       string `json:"email"`
+	Name        string `json:"name"`
+	CompanyName string `json:"company_name"`
+	UseCase     string `json:"use_case"`
+}
+
 type ApproveApplicationRequest struct {
 	ActorID  string `json:"actor_id"`
 	Comment  string `json:"comment"`
@@ -274,6 +281,7 @@ type ConsoleService interface {
 	Overview(ctx context.Context) (OverviewPageData, error)
 	SystemStatus(ctx context.Context) (ConsoleSystemStatus, error)
 	Applications(ctx context.Context) (ApplicationsPageData, error)
+	CreateApplication(ctx context.Context, req CreateApplicationRequest) (ApplicationMutationResult, error)
 	ApproveApplication(ctx context.Context, id string, req ApproveApplicationRequest) (ApplicationMutationResult, error)
 	APIKeys(ctx context.Context) (APIKeysPageData, error)
 	CreateAPIKey(ctx context.Context, req CreateAPIKeyRequest) (APIKeyMutationResult, error)
@@ -330,6 +338,10 @@ func (unavailableConsoleService) SystemStatus(context.Context) (ConsoleSystemSta
 
 func (unavailableConsoleService) Applications(context.Context) (ApplicationsPageData, error) {
 	return ApplicationsPageData{}, ErrConsoleServiceUnavailable
+}
+
+func (unavailableConsoleService) CreateApplication(context.Context, CreateApplicationRequest) (ApplicationMutationResult, error) {
+	return ApplicationMutationResult{}, ErrConsoleServiceUnavailable
 }
 
 func (unavailableConsoleService) ApproveApplication(context.Context, string, ApproveApplicationRequest) (ApplicationMutationResult, error) {

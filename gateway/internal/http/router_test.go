@@ -156,6 +156,71 @@ func TestConsoleLoginRouteReturnsSessionPayload(t *testing.T) {
 	}
 }
 
+func TestConsoleApplicationSubmitRouteReturnsPendingPayload(t *testing.T) {
+	t.Parallel()
+
+	expected := service.ApplicationMutationResult{
+		Item: service.ApplicationItem{
+			ID:          "app_public_pending",
+			Email:       "new-user@example.com",
+			Name:        "新用户",
+			CompanyName: "New Co",
+			UseCase:     "测试接入",
+			Status:      "pending",
+			CreatedAt:   "2026-04-28T16:00:00+08:00",
+		},
+	}
+	var captured service.CreateApplicationRequest
+
+	app := apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+		AuthService: service.NewUnauthorizedAuthService(),
+		ConsoleService: stubConsoleService{
+			applicationMutation:     expected,
+			createApplicationReqRef: &captured,
+		},
+	})
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/console/applications",
+		strings.NewReader(`{"email":"new-user@example.com","name":"新用户","company_name":"New Co","use_case":"测试接入"}`),
+	)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, resp.StatusCode)
+	}
+
+	if captured.Email != "new-user@example.com" {
+		t.Fatalf("expected email %q, got %q", "new-user@example.com", captured.Email)
+	}
+	if captured.Name != "新用户" {
+		t.Fatalf("expected name %q, got %q", "新用户", captured.Name)
+	}
+	if captured.CompanyName != "New Co" {
+		t.Fatalf("expected company_name %q, got %q", "New Co", captured.CompanyName)
+	}
+	if captured.UseCase != "测试接入" {
+		t.Fatalf("expected use_case %q, got %q", "测试接入", captured.UseCase)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("ReadAll failed: %v", err)
+	}
+
+	const want = `{"item":{"id":"app_public_pending","email":"new-user@example.com","name":"新用户","company_name":"New Co","use_case":"测试接入","status":"pending","created_at":"2026-04-28T16:00:00+08:00"}}`
+	if string(body) != want {
+		t.Fatalf("expected body %s, got %s", want, string(body))
+	}
+}
+
 func TestAdminRoutesRequireConsoleSessionWhenEnabled(t *testing.T) {
 	t.Parallel()
 
@@ -1443,6 +1508,7 @@ type stubConsoleService struct {
 	apiKeySecretView         service.APIKeySecretView
 	applications             service.ApplicationsPageData
 	applicationMutation      service.ApplicationMutationResult
+	createApplicationReqRef  *service.CreateApplicationRequest
 	approveApplicationIDRef  *string
 	approveApplicationReqRef *service.ApproveApplicationRequest
 	usageOverview            service.UsageOverviewData
@@ -1543,6 +1609,13 @@ func (s stubConsoleService) APIKeys(context.Context) (service.APIKeysPageData, e
 
 func (s stubConsoleService) Applications(context.Context) (service.ApplicationsPageData, error) {
 	return s.applications, nil
+}
+
+func (s stubConsoleService) CreateApplication(_ context.Context, req service.CreateApplicationRequest) (service.ApplicationMutationResult, error) {
+	if s.createApplicationReqRef != nil {
+		*s.createApplicationReqRef = req
+	}
+	return s.applicationMutation, nil
 }
 
 func (s stubConsoleService) CreateAPIKey(context.Context, service.CreateAPIKeyRequest) (service.APIKeyMutationResult, error) {

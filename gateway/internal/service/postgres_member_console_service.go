@@ -43,7 +43,7 @@ func (s postgresMemberConsoleService) Overview(ctx context.Context) (MemberOverv
 		select
 			t.id,
 			t.name,
-			coalesce(count(p.id) filter (where p.status = 'active'), 0)
+			coalesce(count(p.id) filter (where p.status = 'active' and coalesce(p.created_by_user_id, '') <> ''), 0)
 		from tenants t
 		left join platform_api_keys p on p.tenant_id = t.id
 		where t.id = $1

@@ -82,6 +82,7 @@ func NewRouterWithDependencies(deps RouterDependencies) *fiber.App {
 	if consoleAuthService, ok := deps.AuthService.(service.ConsoleAuthService); ok {
 		app.Post("/console/session/login", handlers.ConsoleLogin(consoleAuthService))
 	}
+	app.Post("/console/applications", handlers.ConsoleCreateApplication(deps.ConsoleService))
 
 	admin := app.Group("/admin", middleware.RequireServiceBasicAuth(deps.ServiceAuthUsername, deps.ServiceAuthPassword))
 	if deps.ConsoleSessionEnabled {

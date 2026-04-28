@@ -71,7 +71,7 @@ func (s postgresConsoleService) Overview(ctx context.Context) (OverviewPageData,
 		select
 			(select count(*) from recent),
 			coalesce((select avg(case when status_code between 200 and 399 then 100.0 else 0 end) from recent), 0),
-			(select count(*) from platform_api_keys where status = 'active');
+			(select count(*) from platform_api_keys where status = 'active' and coalesce(created_by_user_id, '') <> '');
 	`).Scan(&requests24h, &successRate, &activeAPIKeys); err != nil {
 		return OverviewPageData{}, err
 	}
@@ -86,17 +86,29 @@ func (s postgresConsoleService) Overview(ctx context.Context) (OverviewPageData,
 	}
 
 	routeHealthRows, err := s.collectTableRows(ctx, `
+		with recent as (
+			select
+				request_model,
+				max(provider_credential_id) as provider_credential_id,
+				round(avg(latency_ms))::integer as avg_latency_ms,
+				sum(case when usage_status = 'success' then 1 else 0 end) as success_count,
+				count(*) as total_count
+			from llm_request_logs
+			where request_started_at >= now() - interval '24 hours'
+			group by request_model
+		)
 		select
-			requested_model,
-			resolved_provider,
-			latency_ms::text || ' ms',
-			case health_status
-				when 'healthy' then '健康'
-				when 'warning' then '告警'
-				else '降级'
+			recent.request_model,
+			coalesce(provider_credentials.display_name, '-'),
+			recent.avg_latency_ms::text || ' ms',
+			case
+				when recent.success_count = recent.total_count then '健康'
+				when recent.success_count = 0 then '降级'
+				else '告警'
 			end
-		from route_catalog
-		order by updated_at desc, requested_model asc
+		from recent
+		left join provider_credentials on provider_credentials.id = recent.provider_credential_id
+		order by recent.total_count desc, recent.request_model asc
 		limit 3;
 	`)
 	if err != nil {
@@ -111,20 +123,20 @@ func (s postgresConsoleService) Overview(ctx context.Context) (OverviewPageData,
 	topModelsRows, err := s.collectTableRows(ctx, `
 		with total as (
 			select count(*)::numeric as total_requests
-			from audit_logs
+			from llm_request_logs
 		)
 		select
-			requested_model,
+			request_model,
 			count(*)::text,
 			coalesce(round((count(*) * 100.0) / nullif((select total_requests from total), 0), 2), 0)::text || '%',
 			case
-				when max(endpoint) = '/v1/chat/completions' then '聊天'
-				when max(endpoint) = '/v1/embeddings' then '向量'
+				when max(request_path) = '/v1/chat/completions' then '聊天'
+				when max(request_path) = '/v1/embeddings' then '向量'
 				else '检索'
 			end
-		from audit_logs
-		group by requested_model
-		order by count(*) desc, requested_model asc
+		from llm_request_logs
+		group by request_model
+		order by count(*) desc, request_model asc
 		limit 3;
 	`)
 	if err != nil {
@@ -221,6 +233,59 @@ func (s postgresConsoleService) Applications(ctx context.Context) (ApplicationsP
 	}
 
 	return ApplicationsPageData{Items: items}, nil
+}
+
+func (s postgresConsoleService) CreateApplication(ctx context.Context, req CreateApplicationRequest) (ApplicationMutationResult, error) {
+	email := strings.TrimSpace(req.Email)
+	name := strings.TrimSpace(req.Name)
+	companyName := strings.TrimSpace(req.CompanyName)
+	useCase := strings.TrimSpace(req.UseCase)
+
+	if email == "" {
+		return ApplicationMutationResult{}, StatusError{
+			Code:    http.StatusBadRequest,
+			Message: "email is required",
+		}
+	}
+	if name == "" {
+		return ApplicationMutationResult{}, StatusError{
+			Code:    http.StatusBadRequest,
+			Message: "name is required",
+		}
+	}
+	if companyName == "" {
+		return ApplicationMutationResult{}, StatusError{
+			Code:    http.StatusBadRequest,
+			Message: "company_name is required",
+		}
+	}
+	if useCase == "" {
+		return ApplicationMutationResult{}, StatusError{
+			Code:    http.StatusBadRequest,
+			Message: "use_case is required",
+		}
+	}
+
+	row := s.db.QueryRow(ctx, `
+		insert into account_applications (
+			id,
+			email,
+			name,
+			company_name,
+			use_case,
+			status
+		) values (
+			$1, $2, $3, $4, $5, 'pending'
+		)
+		returning id, email, name, company_name, use_case, status, created_at
+	`, newApplicationID(), email, name, companyName, useCase)
+
+	item, err := scanApplicationItem(row)
+	if err != nil {
+		return ApplicationMutationResult{}, err
+	}
+
+	return ApplicationMutationResult{Item: item}, nil
 }
 
 func (s postgresConsoleService) ApproveApplication(ctx context.Context, id string, req ApproveApplicationRequest) (ApplicationMutationResult, error) {
@@ -329,6 +394,7 @@ func (s postgresConsoleService) APIKeys(ctx context.Context) (APIKeysPageData, e
 			p.secret_recoverable
 		from platform_api_keys p
 		join tenants t on t.id = p.tenant_id
+		where coalesce(p.created_by_user_id, '') <> ''
 		order by p.created_at asc, p.id asc;
 	`)
 	if err != nil {
@@ -1761,6 +1827,10 @@ func mapAPIKeyMutationError(err error, notFoundMessage string) error {
 
 func newPlatformAPIKeyID() string {
 	return "pak_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+}
+
+func newApplicationID() string {
+	return "app_" + strings.ReplaceAll(uuid.NewString(), "-", "")
 }
 
 func newUserID() string {

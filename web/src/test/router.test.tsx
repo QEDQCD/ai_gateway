@@ -106,6 +106,78 @@ describe("控制台路由", () => {
     expect(screen.getByLabelText("密码")).toBeInTheDocument();
   });
 
+  test("未登录时提供账号申请入口并可跳转到申请页", async () => {
+    mockAnonymousSession();
+
+    render(
+      <RouterProvider router={createTestRouter(["/login"])} future={{ v7_startTransition: true }} />,
+    );
+
+    expect(await screen.findByRole("link", { name: "申请账号" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("link", { name: "申请账号" }));
+
+    expect(await screen.findByRole("heading", { level: 2, name: "申请接入" })).toBeInTheDocument();
+  });
+
+  test("申请页提交表单后展示已提交状态", async () => {
+    mockAnonymousSession();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+
+      if (url === "/api/console/applications" && init?.method === "POST") {
+        expect(JSON.parse(String(init.body))).toEqual({
+          email: "new-user@example.com",
+          name: "新用户",
+          company_name: "New Co",
+          use_case: "测试接入",
+        });
+
+        return new Response(
+          JSON.stringify({
+            item: {
+              id: "app_new_pending",
+              email: "new-user@example.com",
+              name: "新用户",
+              company_name: "New Co",
+              use_case: "测试接入",
+              status: "pending",
+              created_at: "2026-04-28T16:00:00+08:00",
+            },
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+
+      throw new Error(`Unexpected fetch url: ${url}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <RouterProvider router={createTestRouter(["/apply"])} future={{ v7_startTransition: true }} />,
+    );
+
+    fireEvent.change(await screen.findByLabelText("邮箱"), {
+      target: { value: "new-user@example.com" },
+    });
+    fireEvent.change(screen.getByLabelText("姓名"), {
+      target: { value: "新用户" },
+    });
+    fireEvent.change(screen.getByLabelText("公司"), {
+      target: { value: "New Co" },
+    });
+    fireEvent.change(screen.getByLabelText("接入用途"), {
+      target: { value: "测试接入" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+
+    expect(await screen.findByText("申请已提交")).toBeInTheDocument();
+    expect(screen.getByText("状态：pending")).toBeInTheDocument();
+  });
+
   test("admin session 渲染 admin navigation", async () => {
     mockSession({ role: "admin" });
     mockFetch({
@@ -386,8 +458,8 @@ describe("控制台路由", () => {
     renderRoute("/api-keys");
 
     const detailSection = await screen.findByLabelText("已选密钥详情");
-    fireEvent.click(within(detailSection).getByRole("button", { name: "加载密钥摘要" }));
-    expect(await within(detailSection).findByText("agw_••••••••demo")).toBeInTheDocument();
+    expect(within(detailSection).queryByRole("button", { name: "加载密钥摘要" })).not.toBeInTheDocument();
+    expect(within(detailSection).getByText("agw_••••••••demo")).toBeInTheDocument();
     expect(within(detailSection).queryByText("agw-live-secret")).not.toBeInTheDocument();
 
     fireEvent.click(within(detailSection).getByRole("button", { name: "复制完整密钥" }));

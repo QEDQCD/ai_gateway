@@ -204,6 +204,9 @@ export function APIKeysPage() {
   const [selectedCopyNotice, setSelectedCopyNotice] = useState<string | null>(null);
   const [resultCopyNotice, setResultCopyNotice] = useState<string | null>(null);
   const actionResultRef = useRef<HTMLElement | null>(null);
+  const selectedItem = items.find((item) => item.id === selectedID) ?? null;
+  const selectedSecretForItem =
+    selectedItem && selectedSecret?.api_key_id === selectedItem.id ? selectedSecret : null;
 
   useEffect(() => {
     if (!data) {
@@ -234,15 +237,56 @@ export function APIKeysPage() {
   }, [actionNotice, actionResult]);
 
   useEffect(() => {
-    setSelectedSecret((current) => {
-      if (!selectedID || current?.api_key_id !== selectedID) {
-        return null;
-      }
-      return current;
-    });
+    if (!selectedID) {
+      setSelectedSecret(null);
+    }
     setSecretError(null);
     setSelectedCopyNotice(null);
   }, [selectedID]);
+
+  useEffect(() => {
+    if (!selectedItem) {
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadSecretSummary() {
+      try {
+        setSecretLoading(true);
+        setSecretError(null);
+        const secret = isAdmin
+          ? await revealAPIKeySecret(selectedItem.id)
+          : await revealMemberAPIKeySecret(selectedItem.id);
+        if (cancelled) {
+          return;
+        }
+        setSelectedSecret({
+          ...secret,
+          full_key: undefined,
+        });
+        if (secret.legacy_unrecoverable) {
+          setSecretError("该历史密钥不可回显，请执行轮换后再复制。");
+        }
+      } catch (currentError) {
+        if (cancelled) {
+          return;
+        }
+        setSelectedSecret(null);
+        setSecretError(currentError instanceof Error ? currentError.message : "密钥摘要加载失败。");
+      } finally {
+        if (!cancelled) {
+          setSecretLoading(false);
+        }
+      }
+    }
+
+    void loadSecretSummary();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isAdmin, selectedItem]);
 
   if (loading) {
     return <LoadingSection text="正在加载 API 密钥..." />;
@@ -251,10 +295,6 @@ export function APIKeysPage() {
   if (error || !data) {
     return <ErrorSection message={error ?? "API 密钥加载失败。"} />;
   }
-
-  const selectedItem = items.find((item) => item.id === selectedID) ?? null;
-  const selectedSecretForItem =
-    selectedItem && selectedSecret?.api_key_id === selectedItem.id ? selectedSecret : null;
 
   function resetFeedback() {
     setActionError(null);
@@ -331,32 +371,6 @@ export function APIKeysPage() {
       );
     } catch {
       setResultCopyNotice("复制失败，请重试。");
-    }
-  }
-
-  async function handleLoadSecretSummary() {
-    if (!selectedItem) {
-      return;
-    }
-
-    try {
-      setSecretLoading(true);
-      setSecretError(null);
-      setSelectedCopyNotice(null);
-      const secret = isAdmin
-        ? await revealAPIKeySecret(selectedItem.id)
-        : await revealMemberAPIKeySecret(selectedItem.id);
-      setSelectedSecret({
-        ...secret,
-        full_key: undefined,
-      });
-      if (secret.legacy_unrecoverable) {
-        setSecretError("该历史密钥不可回显，请执行轮换后再复制。");
-      }
-    } catch (currentError) {
-      setSecretError(currentError instanceof Error ? currentError.message : "密钥加载失败。");
-    } finally {
-      setSecretLoading(false);
     }
   }
 
@@ -601,7 +615,8 @@ export function APIKeysPage() {
           <div className="detail-list__row">
             <dt>密钥摘要</dt>
             <dd className="secret-text">
-              {selectedSecretForItem?.masked_key ?? "点击加载密钥摘要后显示"}
+              {selectedSecretForItem?.masked_key ??
+                (secretLoading ? "正在加载摘要..." : "暂无可显示摘要")}
             </dd>
           </div>
         </div>
@@ -609,14 +624,6 @@ export function APIKeysPage() {
           <button
             type="button"
             className="button-shell button-shell--primary"
-            disabled={!selectedItem || secretLoading}
-            onClick={handleLoadSecretSummary}
-          >
-            {secretLoading ? "加载中..." : "加载密钥摘要"}
-          </button>
-          <button
-            type="button"
-            className="button-shell"
             disabled={!selectedItem || secretLoading}
             onClick={handleCopySelectedSecret}
           >

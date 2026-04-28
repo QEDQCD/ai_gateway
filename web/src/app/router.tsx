@@ -4,6 +4,7 @@ import { Navigate, createBrowserRouter, createMemoryRouter } from "react-router-
 import { APIKeysPage } from "../pages/api-keys";
 import { AdminApplicationsPage } from "../pages/admin-applications";
 import { AdminTenantsPage } from "../pages/admin-tenants";
+import { ApplicationFormPage } from "../pages/application-form";
 import { AuditPage } from "../pages/audit";
 import { DashboardPage } from "../pages/dashboard";
 import { LoginPage } from "../pages/login";
@@ -177,6 +178,10 @@ function createRouteTree(session: ConsoleSession | null) {
       {
         path: "/login",
         element: <LoginPage />,
+      },
+      {
+        path: "/apply",
+        element: <ApplicationFormPage />,
       },
       {
         path: "*",

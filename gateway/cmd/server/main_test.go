@@ -304,8 +304,8 @@ func TestNewServerAppDatabaseModeWiresMemberOverview(t *testing.T) {
 	if payload.TenantName != "Alpha 租户" {
 		t.Fatalf("expected tenant_name %q, got %q", "Alpha 租户", payload.TenantName)
 	}
-	if payload.ActiveAPIKeys != 1 {
-		t.Fatalf("expected active_api_keys %d, got %d", 1, payload.ActiveAPIKeys)
+	if payload.ActiveAPIKeys != 0 {
+		t.Fatalf("expected active_api_keys %d, got %d", 0, payload.ActiveAPIKeys)
 	}
 	if !payload.Quota.Configured {
 		t.Fatal("expected quota to be configured")
