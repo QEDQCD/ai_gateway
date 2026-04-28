@@ -244,6 +244,83 @@ func TestPostgresConsoleServiceRevealLegacyKeyMarksUnrecoverable(t *testing.T) {
 	}
 }
 
+func TestPostgresConsoleServiceCopyAPIKeySecretWritesAllowedAuditLog(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	created, err := console.CreateAPIKey(service.ContextWithConsolePrincipal(ctx, service.ConsolePrincipal{
+		UserID: "user_admin_demo",
+		Role:   "admin",
+	}), service.CreateAPIKeyRequest{
+		TenantID: "tenant_demo",
+		Name:     "copy-audit-admin",
+		Scopes:   []string{"chat"},
+	})
+	if err != nil {
+		t.Fatalf("CreateAPIKey failed: %v", err)
+	}
+
+	copier, ok := console.(interface {
+		CopyAPIKeySecret(context.Context, string, string, string) (service.APIKeySecretView, error)
+	})
+	if !ok {
+		t.Fatal("expected console service to implement CopyAPIKeySecret")
+	}
+
+	copyCtx := service.ContextWithConsolePrincipal(ctx, service.ConsolePrincipal{
+		UserID: "user_admin_demo",
+		Role:   "admin",
+	})
+	secretView, err := copier.CopyAPIKeySecret(copyCtx, created.Item.ID, "203.0.113.10", "console-copy-test")
+	if err != nil {
+		t.Fatalf("CopyAPIKeySecret failed: %v", err)
+	}
+	if !secretView.Revealable {
+		t.Fatal("expected copied key to be revealable")
+	}
+	if secretView.FullKey == "" {
+		t.Fatal("expected FullKey to be populated")
+	}
+
+	var actorUserID string
+	var actorRole string
+	var action string
+	var accessResult string
+	var ipAddress string
+	var userAgent string
+	if err := conn.QueryRow(ctx, `
+		select actor_user_id, actor_role, action, access_result, ip_address, user_agent
+		from api_key_secret_access_logs
+		where api_key_id = $1
+		order by created_at desc, id desc
+		limit 1;
+	`, created.Item.ID).Scan(&actorUserID, &actorRole, &action, &accessResult, &ipAddress, &userAgent); err != nil {
+		t.Fatalf("QueryRow api_key_secret_access_logs failed: %v", err)
+	}
+	if actorUserID != "user_admin_demo" {
+		t.Fatalf("expected actor_user_id %q, got %q", "user_admin_demo", actorUserID)
+	}
+	if actorRole != "admin" {
+		t.Fatalf("expected actor_role %q, got %q", "admin", actorRole)
+	}
+	if action != "copy" {
+		t.Fatalf("expected action %q, got %q", "copy", action)
+	}
+	if accessResult != "allowed" {
+		t.Fatalf("expected access_result %q, got %q", "allowed", accessResult)
+	}
+	if ipAddress != "203.0.113.10" {
+		t.Fatalf("expected ip_address %q, got %q", "203.0.113.10", ipAddress)
+	}
+	if userAgent != "console-copy-test" {
+		t.Fatalf("expected user_agent %q, got %q", "console-copy-test", userAgent)
+	}
+}
+
 func TestPostgresConsoleServiceApplicationsReturnsPendingRows(t *testing.T) {
 	t.Parallel()
 

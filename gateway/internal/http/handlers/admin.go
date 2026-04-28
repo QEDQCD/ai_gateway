@@ -118,7 +118,20 @@ func ConsoleDeleteAPIKey(console service.ConsoleService) fiber.Handler {
 
 func ConsoleRevealAPIKeySecret(console service.ConsoleService) fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		payload, err := console.RevealAPIKeySecret(c.UserContext(), c.Params("id"))
+		payload, err := console.RevealAPIKeySecret(
+			service.ContextWithRequestAuditMetadata(c.UserContext(), c.IP(), c.Get(fiber.HeaderUserAgent)),
+			c.Params("id"),
+		)
+		if err != nil {
+			return consoleError(err)
+		}
+		return c.JSON(payload)
+	}
+}
+
+func ConsoleCopyAPIKeySecret(console service.ConsoleService) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		payload, err := console.CopyAPIKeySecret(c.UserContext(), c.Params("id"), c.IP(), c.Get(fiber.HeaderUserAgent))
 		if err != nil {
 			return consoleError(err)
 		}

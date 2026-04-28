@@ -69,7 +69,20 @@ func MemberDeactivateAPIKey(member service.MemberConsoleService) fiber.Handler {
 
 func MemberRevealAPIKeySecret(member service.MemberConsoleService) fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		payload, err := member.RevealAPIKeySecret(c.UserContext(), c.Params("id"))
+		payload, err := member.RevealAPIKeySecret(
+			service.ContextWithRequestAuditMetadata(c.UserContext(), c.IP(), c.Get(fiber.HeaderUserAgent)),
+			c.Params("id"),
+		)
+		if err != nil {
+			return consoleError(err)
+		}
+		return c.JSON(payload)
+	}
+}
+
+func MemberCopyAPIKeySecret(member service.MemberConsoleService) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		payload, err := member.CopyAPIKeySecret(c.UserContext(), c.Params("id"), c.IP(), c.Get(fiber.HeaderUserAgent))
 		if err != nil {
 			return consoleError(err)
 		}

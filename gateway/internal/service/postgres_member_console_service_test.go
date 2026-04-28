@@ -2,6 +2,7 @@ package service_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -152,6 +153,173 @@ func TestPostgresMemberConsoleServiceRevealAPIKeySecretReturnsOwnedSecret(t *tes
 	}
 	if secretView.MaskedKey == secretView.FullKey {
 		t.Fatal("expected masked key to differ from full key")
+	}
+}
+
+func TestPostgresMemberConsoleServiceCopyAPIKeySecretWritesAllowedAuditLog(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	member, conn := newUsageMemberConsoleService(t, ctx, service.ConsolePrincipal{
+		UserID:   "user_member_a",
+		Email:    "member-a@example.com",
+		Role:     "member",
+		TenantID: "tenant_demo",
+	})
+
+	created, err := member.CreateAPIKey(ctx, service.CreateAPIKeyRequest{
+		Name:   "owned-copy-key",
+		Scopes: []string{"chat"},
+	})
+	if err != nil {
+		t.Fatalf("CreateAPIKey failed: %v", err)
+	}
+
+	copier, ok := member.(interface {
+		CopyAPIKeySecret(context.Context, string, string, string) (service.APIKeySecretView, error)
+	})
+	if !ok {
+		t.Fatal("expected member service to implement CopyAPIKeySecret")
+	}
+
+	secretView, err := copier.CopyAPIKeySecret(ctx, created.Item.ID, "198.51.100.25", "member-copy-test")
+	if err != nil {
+		t.Fatalf("CopyAPIKeySecret failed: %v", err)
+	}
+	if !secretView.Revealable {
+		t.Fatal("expected copied key to be revealable")
+	}
+	if secretView.FullKey == "" {
+		t.Fatal("expected FullKey to be populated")
+	}
+
+	var actorUserID string
+	var actorRole string
+	var action string
+	var accessResult string
+	if err := conn.QueryRow(ctx, `
+		select actor_user_id, actor_role, action, access_result
+		from api_key_secret_access_logs
+		where api_key_id = $1
+		order by created_at desc, id desc
+		limit 1;
+	`, created.Item.ID).Scan(&actorUserID, &actorRole, &action, &accessResult); err != nil {
+		t.Fatalf("QueryRow api_key_secret_access_logs failed: %v", err)
+	}
+	if actorUserID != "user_member_a" {
+		t.Fatalf("expected actor_user_id %q, got %q", "user_member_a", actorUserID)
+	}
+	if actorRole != "member" {
+		t.Fatalf("expected actor_role %q, got %q", "member", actorRole)
+	}
+	if action != "copy" {
+		t.Fatalf("expected action %q, got %q", "copy", action)
+	}
+	if accessResult != "allowed" {
+		t.Fatalf("expected access_result %q, got %q", "allowed", accessResult)
+	}
+}
+
+func TestPostgresMemberConsoleServiceCopyAPIKeySecretWritesDeniedAuditLogForUnownedKey(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	member, conn := newUsageMemberConsoleService(t, ctx, service.ConsolePrincipal{
+		UserID:   "user_member_a",
+		Email:    "member-a@example.com",
+		Role:     "member",
+		TenantID: "tenant_demo",
+	})
+
+	if _, err := conn.Exec(ctx, `
+		insert into platform_api_keys (
+			id, tenant_id, name, key_hash, status, scopes, created_at, expires_at, secret_recoverable
+		) values (
+			'pak_member_b_owned_copy_only',
+			'tenant_demo',
+			'member-b-owned',
+			'sha256:member-b-owned',
+			'active',
+			ARRAY['chat'],
+			now(),
+			now() + interval '30 days',
+			false
+		);
+	`); err != nil {
+		t.Fatalf("seed member-b platform api key failed: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `
+		insert into audit_events (
+			id,
+			actor_type,
+			actor_user_id,
+			tenant_id,
+			event_type,
+			target_type,
+			target_id,
+			detail
+		) values (
+			'audit_evt_member_b_owned_copy_only',
+			'member',
+			'user_member_b',
+			'tenant_demo',
+			'api_key_created',
+			'platform_api_key',
+			'pak_member_b_owned_copy_only',
+			'member b key'
+		);
+	`); err != nil {
+		t.Fatalf("seed member-b audit event failed: %v", err)
+	}
+
+	copier, ok := member.(interface {
+		CopyAPIKeySecret(context.Context, string, string, string) (service.APIKeySecretView, error)
+	})
+	if !ok {
+		t.Fatal("expected member service to implement CopyAPIKeySecret")
+	}
+
+	_, err := copier.CopyAPIKeySecret(ctx, "pak_member_b_owned_copy_only", "198.51.100.26", "member-copy-denied-test")
+	if err == nil {
+		t.Fatal("expected CopyAPIKeySecret to reject unowned key")
+	}
+
+	var statusErr service.StatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("expected StatusError, got %T", err)
+	}
+	if statusErr.Code != 404 {
+		t.Fatalf("expected status %d, got %d", 404, statusErr.Code)
+	}
+
+	var actorUserID string
+	var actorRole string
+	var action string
+	var accessResult string
+	if err := conn.QueryRow(ctx, `
+		select actor_user_id, actor_role, action, access_result
+		from api_key_secret_access_logs
+		where api_key_id = $1
+		order by created_at desc, id desc
+		limit 1;
+	`, "pak_member_b_owned_copy_only").Scan(&actorUserID, &actorRole, &action, &accessResult); err != nil {
+		t.Fatalf("QueryRow denied api_key_secret_access_logs failed: %v", err)
+	}
+	if actorUserID != "user_member_a" {
+		t.Fatalf("expected actor_user_id %q, got %q", "user_member_a", actorUserID)
+	}
+	if actorRole != "member" {
+		t.Fatalf("expected actor_role %q, got %q", "member", actorRole)
+	}
+	if action != "copy" {
+		t.Fatalf("expected action %q, got %q", "copy", action)
+	}
+	if accessResult != "denied" {
+		t.Fatalf("expected access_result %q, got %q", "denied", accessResult)
 	}
 }
 

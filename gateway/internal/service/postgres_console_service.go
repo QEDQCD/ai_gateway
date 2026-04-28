@@ -582,6 +582,23 @@ func (s postgresConsoleService) RevealAPIKeySecret(ctx context.Context, id strin
 	return buildAPIKeySecretView(record.ID, record.FullKey, record.Recoverable, record.ExpiresAt), nil
 }
 
+func (s postgresConsoleService) CopyAPIKeySecret(ctx context.Context, id string, ip string, userAgent string) (APIKeySecretView, error) {
+	record, err := s.loadManagedAPIKeySecretRecord(ctx, id)
+	if err != nil {
+		return APIKeySecretView{}, err
+	}
+
+	actorUserID := ""
+	if principal, ok := ConsolePrincipalFromContext(ctx); ok && principal.Role == "admin" {
+		actorUserID = principal.UserID
+	}
+	if err := insertAPIKeySecretAccessLog(ctx, s.db, record.ID, record.TenantID, actorUserID, "admin", "copy", "allowed", ip, userAgent); err != nil {
+		return APIKeySecretView{}, err
+	}
+
+	return buildAPIKeySecretView(record.ID, record.FullKey, record.Recoverable, record.ExpiresAt), nil
+}
+
 func (s postgresConsoleService) loadManagedAPIKeySecretRecord(ctx context.Context, id string) (managedAPIKeySecretRecord, error) {
 	var record managedAPIKeySecretRecord
 	var ciphertext string
@@ -599,6 +616,41 @@ func (s postgresConsoleService) loadManagedAPIKeySecretRecord(ctx context.Contex
 	}
 	record.FullKey = fullKey
 	return record, nil
+}
+
+func insertAPIKeySecretAccessLog(
+	ctx context.Context,
+	db consoleDB,
+	apiKeyID string,
+	tenantID string,
+	actorUserID string,
+	actorRole string,
+	action string,
+	accessResult string,
+	ip string,
+	userAgent string,
+) error {
+	_, err := db.Exec(ctx, `
+		insert into api_key_secret_access_logs (
+			id,
+			api_key_id,
+			tenant_id,
+			actor_user_id,
+			actor_role,
+			action,
+			access_result,
+			ip_address,
+			user_agent
+		) values ($1, $2, $3, $4, $5, $6, $7, $8, $9);
+	`, newAPIKeySecretAccessLogID(), strings.TrimSpace(apiKeyID), strings.TrimSpace(tenantID), nullableText(strings.TrimSpace(actorUserID)), strings.TrimSpace(actorRole), strings.TrimSpace(action), strings.TrimSpace(accessResult), strings.TrimSpace(ip), strings.TrimSpace(userAgent))
+	return err
+}
+
+func nullableText(value string) any {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	return strings.TrimSpace(value)
 }
 
 func (s postgresConsoleService) Routes(ctx context.Context) (RoutesPageData, error) {
@@ -1713,6 +1765,10 @@ func newTenantMembershipID() string {
 
 func newAuditEventID() string {
 	return "audit_evt_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+}
+
+func newAPIKeySecretAccessLogID() string {
+	return "aksal_" + strings.ReplaceAll(uuid.NewString(), "-", "")
 }
 
 func newPlatformAPIKeySecret() string {

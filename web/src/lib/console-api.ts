@@ -405,6 +405,12 @@ export function revealAPIKeySecret(id: string) {
   return requestJson<APIKeySecretView>(`/api/admin/api-keys/${id}/secret`);
 }
 
+export function copyAPIKeySecret(id: string) {
+  return requestJson<APIKeySecretView>(`/api/admin/api-keys/${id}/secret/copy`, {
+    method: "POST",
+  });
+}
+
 export type CreateMemberAPIKeyPayload = {
   name: string;
   scopes: APIKeyScope[];
@@ -442,6 +448,12 @@ export function deactivateMemberAPIKey(id: string) {
 
 export function revealMemberAPIKeySecret(id: string) {
   return requestJson<APIKeySecretView>(`/api/me/api-keys/${id}/secret`);
+}
+
+export function copyMemberAPIKeySecret(id: string) {
+  return requestJson<APIKeySecretView>(`/api/me/api-keys/${id}/secret/copy`, {
+    method: "POST",
+  });
 }
 
 export function getRoutes() {

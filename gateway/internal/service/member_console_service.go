@@ -54,6 +54,7 @@ type MemberConsoleService interface {
 	RotateAPIKey(ctx context.Context, id string, req RotateAPIKeyRequest) (APIKeyMutationResult, error)
 	DeactivateAPIKey(ctx context.Context, id string) (APIKeyMutationResult, error)
 	RevealAPIKeySecret(ctx context.Context, id string) (APIKeySecretView, error)
+	CopyAPIKeySecret(ctx context.Context, id string, ip string, userAgent string) (APIKeySecretView, error)
 	UsageOverview(ctx context.Context, query UsageQuery) (UsageOverviewData, error)
 	UsageRequests(ctx context.Context, query UsageQuery) (UsageRequestsPageData, error)
 	Failures(ctx context.Context, query UsageQuery) (MemberFailurePageData, error)
@@ -105,6 +106,10 @@ func (unavailableMemberConsoleService) DeactivateAPIKey(context.Context, string)
 }
 
 func (unavailableMemberConsoleService) RevealAPIKeySecret(context.Context, string) (APIKeySecretView, error) {
+	return APIKeySecretView{}, ErrConsoleServiceUnavailable
+}
+
+func (unavailableMemberConsoleService) CopyAPIKeySecret(context.Context, string, string, string) (APIKeySecretView, error) {
 	return APIKeySecretView{}, ErrConsoleServiceUnavailable
 }
 

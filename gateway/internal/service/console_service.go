@@ -8,6 +8,13 @@ import (
 
 var ErrConsoleServiceUnavailable = errors.New("console service unavailable")
 
+type requestAuditMetadataContextKey struct{}
+
+type RequestAuditMetadata struct {
+	IPAddress string
+	UserAgent string
+}
+
 type KeyMetric struct {
 	Label string `json:"label"`
 	Value string `json:"value"`
@@ -273,6 +280,7 @@ type ConsoleService interface {
 	DeactivateAPIKey(ctx context.Context, id string) (APIKeyMutationResult, error)
 	DeleteAPIKey(ctx context.Context, id string) (APIKeyMutationResult, error)
 	RevealAPIKeySecret(ctx context.Context, id string) (APIKeySecretView, error)
+	CopyAPIKeySecret(ctx context.Context, id string, ip string, userAgent string) (APIKeySecretView, error)
 	Routes(ctx context.Context) (RoutesPageData, error)
 	Playground(ctx context.Context) (PlaygroundPageData, error)
 	RunPlayground(ctx context.Context, req PlaygroundRunRequest) (PlaygroundRunResponse, error)
@@ -288,6 +296,27 @@ type unavailableConsoleService struct{}
 
 func NewUnavailableConsoleService() ConsoleService {
 	return unavailableConsoleService{}
+}
+
+func ContextWithRequestAuditMetadata(ctx context.Context, ip string, userAgent string) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, requestAuditMetadataContextKey{}, RequestAuditMetadata{
+		IPAddress: ip,
+		UserAgent: userAgent,
+	})
+}
+
+func RequestAuditMetadataFromContext(ctx context.Context) RequestAuditMetadata {
+	if ctx == nil {
+		return RequestAuditMetadata{}
+	}
+	metadata, ok := ctx.Value(requestAuditMetadataContextKey{}).(RequestAuditMetadata)
+	if !ok {
+		return RequestAuditMetadata{}
+	}
+	return metadata
 }
 
 func (unavailableConsoleService) Overview(context.Context) (OverviewPageData, error) {
@@ -327,6 +356,10 @@ func (unavailableConsoleService) DeleteAPIKey(context.Context, string) (APIKeyMu
 }
 
 func (unavailableConsoleService) RevealAPIKeySecret(context.Context, string) (APIKeySecretView, error) {
+	return APIKeySecretView{}, ErrConsoleServiceUnavailable
+}
+
+func (unavailableConsoleService) CopyAPIKeySecret(context.Context, string, string, string) (APIKeySecretView, error) {
 	return APIKeySecretView{}, ErrConsoleServiceUnavailable
 }
 

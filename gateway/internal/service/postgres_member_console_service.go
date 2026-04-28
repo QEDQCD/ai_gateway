@@ -402,40 +402,42 @@ func (s postgresMemberConsoleService) RevealAPIKeySecret(ctx context.Context, id
 		return APIKeySecretView{}, err
 	}
 
-	var keyID string
-	var ciphertext string
-	var recoverable bool
-	var expiresAt time.Time
-	if err := s.db.QueryRow(ctx, `
-		with owned_keys as (
-			select distinct on (e.target_id)
-				e.target_id,
-				e.actor_user_id
-			from audit_events e
-			where e.tenant_id = $2
-			  and e.actor_user_id = $3
-			  and e.event_type = 'api_key_created'
-			  and e.target_type = 'platform_api_key'
-			order by e.target_id, e.created_at asc, e.id asc
-		)
-		select
-			p.id,
-			p.key_ciphertext,
-			p.secret_recoverable,
-			coalesce(p.expires_at, p.created_at + interval '30 days')
-		from platform_api_keys p
-		join owned_keys o on o.target_id = p.id
-		where p.id = $1
-		  and p.tenant_id = $2;
-	`, strings.TrimSpace(id), principal.TenantID, principal.UserID).Scan(&keyID, &ciphertext, &recoverable, &expiresAt); err != nil {
-		return APIKeySecretView{}, mapAPIKeyMutationError(err, "api key not found")
-	}
-
-	fullKey, err := s.secretService.Reveal(ciphertext, recoverable)
+	record, owned, err := s.loadOwnedManagedAPIKeySecretRecord(ctx, id, principal)
 	if err != nil {
 		return APIKeySecretView{}, err
 	}
-	return buildAPIKeySecretView(keyID, fullKey, recoverable, expiresAt), nil
+	if !owned {
+		return APIKeySecretView{}, StatusError{
+			Code:    http.StatusNotFound,
+			Message: "api key not found",
+		}
+	}
+	return buildAPIKeySecretView(record.ID, record.FullKey, record.Recoverable, record.ExpiresAt), nil
+}
+
+func (s postgresMemberConsoleService) CopyAPIKeySecret(ctx context.Context, id string, ip string, userAgent string) (APIKeySecretView, error) {
+	principal, err := s.resolvePrincipal(ctx)
+	if err != nil {
+		return APIKeySecretView{}, err
+	}
+
+	record, owned, err := s.loadOwnedManagedAPIKeySecretRecord(ctx, id, principal)
+	if err != nil {
+		return APIKeySecretView{}, err
+	}
+	if !owned {
+		if err := insertAPIKeySecretAccessLog(ctx, s.db, record.ID, record.TenantID, principal.UserID, "member", "copy", "denied", ip, userAgent); err != nil {
+			return APIKeySecretView{}, err
+		}
+		return APIKeySecretView{}, StatusError{
+			Code:    http.StatusNotFound,
+			Message: "api key not found",
+		}
+	}
+	if err := insertAPIKeySecretAccessLog(ctx, s.db, record.ID, record.TenantID, principal.UserID, "member", "copy", "allowed", ip, userAgent); err != nil {
+		return APIKeySecretView{}, err
+	}
+	return buildAPIKeySecretView(record.ID, record.FullKey, record.Recoverable, record.ExpiresAt), nil
 }
 
 func (s postgresMemberConsoleService) UsageOverview(ctx context.Context, query UsageQuery) (UsageOverviewData, error) {
@@ -574,4 +576,42 @@ func (s postgresMemberConsoleService) ensureOwnedPlatformAPIKey(ctx context.Cont
 		}
 	}
 	return nil
+}
+
+func (s postgresMemberConsoleService) loadOwnedManagedAPIKeySecretRecord(ctx context.Context, id string, principal ConsolePrincipal) (managedAPIKeySecretRecord, bool, error) {
+	var record managedAPIKeySecretRecord
+	var ciphertext string
+	var owned bool
+	if err := s.db.QueryRow(ctx, `
+		select
+			p.id,
+			p.tenant_id,
+			p.key_ciphertext,
+			p.secret_recoverable,
+			coalesce(p.expires_at, p.created_at + interval '30 days'),
+			exists (
+				select 1
+				from audit_events e
+				where e.target_id = p.id
+				  and e.tenant_id = p.tenant_id
+				  and e.actor_user_id = $3
+				  and e.event_type = 'api_key_created'
+				  and e.target_type = 'platform_api_key'
+			) as owned
+		from platform_api_keys p
+		where p.id = $1
+		  and p.tenant_id = $2;
+	`, strings.TrimSpace(id), principal.TenantID, principal.UserID).Scan(&record.ID, &record.TenantID, &ciphertext, &record.Recoverable, &record.ExpiresAt, &owned); err != nil {
+		return managedAPIKeySecretRecord{}, false, mapAPIKeyMutationError(err, "api key not found")
+	}
+	if !owned {
+		return record, false, nil
+	}
+
+	fullKey, err := s.secretService.Reveal(ciphertext, record.Recoverable)
+	if err != nil {
+		return managedAPIKeySecretRecord{}, false, err
+	}
+	record.FullKey = fullKey
+	return record, true, nil
 }
