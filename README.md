@@ -157,6 +157,17 @@ curl -u <GATEWAY_SERVICE_AUTH_USERNAME>:<GATEWAY_SERVICE_AUTH_PASSWORD> \
 - 普通用户账号：固定使用 `member-a@example.com`
 - 对应密码：`GATEWAY_CONSOLE_ADMIN_PASSWORD`、`GATEWAY_CONSOLE_MEMBER_PASSWORD`
 
+### 公开申请注册
+
+未登录用户现在可以直接访问 `/apply` 发起接入申请，流程为：
+
+1. 获取本地图形验证码
+2. 输入邮箱、姓名、公司、用途、密码、确认密码
+3. 先验证验证码
+4. 验证通过后提交申请，状态进入 `pending`
+5. admin 审批通过后，若填写的是新 `tenant_id`，系统会自动创建租户并绑定该用户
+6. 用户可直接使用注册时设置的密码登录控制台
+
 ## 质量命令
 
 ```bash

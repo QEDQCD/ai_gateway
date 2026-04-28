@@ -705,9 +705,9 @@ func TestApplyMigrationsEnforceApplicationReviewIntegrity(t *testing.T) {
 
 	if _, err := conn.Exec(ctx, `
 		insert into account_applications (
-			id, email, name, company_name, use_case, status
+			id, email, email_normalized, name, company_name, use_case, status
 		) values (
-			'app_pending_ok', 'pending@example.com', 'Pending User', 'Demo Co', 'pending flow', 'pending'
+			'app_pending_ok', 'pending@example.com', 'pending@example.com', 'Pending User', 'Demo Co', 'pending flow', 'pending'
 		)
 	`); err != nil {
 		t.Fatalf("expected pending application without review metadata to succeed: %v", err)
@@ -715,9 +715,9 @@ func TestApplyMigrationsEnforceApplicationReviewIntegrity(t *testing.T) {
 
 	if _, err := conn.Exec(ctx, `
 		insert into account_applications (
-			id, email, name, company_name, use_case, status, reviewer_id, review_comment, reviewed_at
+			id, email, email_normalized, name, company_name, use_case, status, reviewer_id, review_comment, reviewed_at
 		) values (
-			'app_pending_reviewed', 'pending-reviewed@example.com', 'Pending Reviewed', 'Demo Co', 'bad pending state', 'pending', 'user_reviewer', 'should fail', timestamptz '2026-04-24T09:40:00Z'
+			'app_pending_reviewed', 'pending-reviewed@example.com', 'pending-reviewed@example.com', 'Pending Reviewed', 'Demo Co', 'bad pending state', 'pending', 'user_reviewer', 'should fail', timestamptz '2026-04-24T09:40:00Z'
 		)
 	`); err == nil {
 		t.Fatal("expected pending application with review metadata to fail")
@@ -725,9 +725,9 @@ func TestApplyMigrationsEnforceApplicationReviewIntegrity(t *testing.T) {
 
 	if _, err := conn.Exec(ctx, `
 		insert into account_applications (
-			id, email, name, company_name, use_case, status, review_comment, reviewed_at
+			id, email, email_normalized, name, company_name, use_case, status, review_comment, reviewed_at
 		) values (
-			'app_approved_missing_reviewer', 'approved-missing-reviewer@example.com', 'Approved Missing Reviewer', 'Demo Co', 'bad approved state', 'approved', 'missing reviewer', timestamptz '2026-04-24T09:41:00Z'
+			'app_approved_missing_reviewer', 'approved-missing-reviewer@example.com', 'approved-missing-reviewer@example.com', 'Approved Missing Reviewer', 'Demo Co', 'bad approved state', 'approved', 'missing reviewer', timestamptz '2026-04-24T09:41:00Z'
 		)
 	`); err == nil {
 		t.Fatal("expected approved application without reviewer_id to fail")
@@ -735,9 +735,9 @@ func TestApplyMigrationsEnforceApplicationReviewIntegrity(t *testing.T) {
 
 	if _, err := conn.Exec(ctx, `
 		insert into account_applications (
-			id, email, name, company_name, use_case, status, reviewer_id, review_comment
+			id, email, email_normalized, name, company_name, use_case, status, reviewer_id, review_comment
 		) values (
-			'app_rejected_missing_reviewed_at', 'rejected-missing-reviewed-at@example.com', 'Rejected Missing ReviewedAt', 'Demo Co', 'bad rejected state', 'rejected', 'user_reviewer', 'missing reviewed_at'
+			'app_rejected_missing_reviewed_at', 'rejected-missing-reviewed-at@example.com', 'rejected-missing-reviewed-at@example.com', 'Rejected Missing ReviewedAt', 'Demo Co', 'bad rejected state', 'rejected', 'user_reviewer', 'missing reviewed_at'
 		)
 	`); err == nil {
 		t.Fatal("expected rejected application without reviewed_at to fail")

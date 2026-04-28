@@ -4,7 +4,7 @@
 
 **Goal:** 为公开申请链路增加“注册时设置密码 + 本地图形验证码先验证后提交”的完整闭环，并让 admin 审批通过后的用户可直接使用注册密码登录控制台。
 
-**Architecture:** 后端继续使用 Go + PostgreSQL，在 `account_applications` 中短暂保存 `password_hash`，新建 `captcha_challenges` 管理一次性验证码挑战和通过凭证。公开申请链路拆成“获取验证码”“校验验证码”“提交申请”三段，审批通过时将申请密码哈希迁移到正式 `users.password_hash`，审批拒绝或通过后都清空申请侧残留密码哈希。
+**Architecture:** 后端继续使用 Go + PostgreSQL，在 `account_applications` 中短暂保存 `password_hash`，新建 `captcha_challenges` 管理一次性验证码挑战和通过凭证。公开申请链路拆成“获取验证码”“校验验证码”“提交申请”三段，审批通过时将申请密码哈希迁移到正式 `users.password_hash`，审批拒绝或通过后都清空申请侧残留密码哈希；如果 admin 指定的 `tenant_id` 尚不存在，则在同一审批事务中自动创建 `active` 租户。
 
 **Tech Stack:** Go 1.22, Fiber, PostgreSQL, bcrypt, React 18, Vite, Vitest, Docker Compose
 
@@ -925,7 +925,7 @@ Expected:
 2. 输入邮箱、姓名、公司、用途、密码、确认密码
 3. 验证验证码，确认“提交申请”按钮从禁用变为可点击
 4. 提交申请，确认页面显示 pending
-5. admin 登录后在 /applications 审批通过
+5. admin 登录后在 /applications 审批通过，并验证新 `tenant_id` 可被自动创建
 6. 回到登录页，用刚注册的邮箱和密码登录成功
 ```
 

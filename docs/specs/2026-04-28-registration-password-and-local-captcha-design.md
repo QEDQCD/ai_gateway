@@ -133,12 +133,13 @@
 
 1. admin 在“账号申请”页选中 `pending` 申请
 2. admin 指定 `tenant_id` 并点击“审批通过”
-3. 后端创建或激活正式用户
-4. 后端创建 `tenant_memberships`
-5. 将申请中的 `password_hash` 写入正式用户
-6. 清空申请记录中的 `password_hash`
-7. 写入 `application_approved` 审计事件
-8. 返回 `approved`
+3. 若该 `tenant_id` 尚不存在，后端先自动创建 `active` 租户
+4. 后端创建或激活正式用户
+5. 后端创建 `tenant_memberships`
+6. 将申请中的 `password_hash` 写入正式用户
+7. 清空申请记录中的 `password_hash`
+8. 写入 `application_approved` 审计事件
+9. 返回 `approved`
 
 ### 5.3 admin 拒绝流程
 
@@ -275,7 +276,7 @@
 ```json
 {
   "captcha_id": "cap_123",
-  "image_data": "data:image/png;base64,...",
+  "image_data": "data:image/...;base64,...",
   "expires_at": "2026-04-28T12:00:00Z"
 }
 ```
@@ -372,6 +373,7 @@
 
 请求不需要新增字段，但服务端行为要变更：
 
+- 若 `tenant_id` 不存在，则在审批事务内自动创建 `active` 租户
 - 从申请记录读取 `password_hash`
 - 写入正式 `users.password_hash`
 - 审批完成后清空申请记录中的 `password_hash`
