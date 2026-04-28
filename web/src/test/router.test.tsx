@@ -362,7 +362,6 @@ describe("控制台路由", () => {
       "/api/admin/api-keys/pak_live_console/secret": {
         api_key_id: "pak_live_console",
         masked_key: "agw_••••••••demo",
-        full_key: "agw-live-secret",
         revealable: true,
         legacy_unrecoverable: false,
         expires_at: "2026-05-28T10:00:00+08:00",
@@ -387,8 +386,9 @@ describe("控制台路由", () => {
     renderRoute("/api-keys");
 
     const detailSection = await screen.findByLabelText("已选密钥详情");
-    fireEvent.click(within(detailSection).getByRole("button", { name: "显示完整密钥" }));
-    expect(await within(detailSection).findByText("agw-live-secret")).toBeInTheDocument();
+    fireEvent.click(within(detailSection).getByRole("button", { name: "加载密钥摘要" }));
+    expect(await within(detailSection).findByText("agw_••••••••demo")).toBeInTheDocument();
+    expect(within(detailSection).queryByText("agw-live-secret")).not.toBeInTheDocument();
 
     fireEvent.click(within(detailSection).getByRole("button", { name: "复制完整密钥" }));
     await waitFor(() => {

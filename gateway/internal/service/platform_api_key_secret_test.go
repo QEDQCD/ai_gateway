@@ -36,10 +36,10 @@ func TestPlatformAPIKeySecretServiceEncryptAndReveal(t *testing.T) {
 	}
 }
 
-func TestBuildAPIKeySecretViewMarksLegacyUnrecoverable(t *testing.T) {
+func TestBuildAPIKeySecretSummaryViewMarksLegacyUnrecoverable(t *testing.T) {
 	t.Parallel()
 
-	view := buildAPIKeySecretView("pak_legacy", "", false, time.Time{})
+	view := buildAPIKeySecretSummaryView("pak_legacy", "", false, time.Time{})
 	if view.Revealable {
 		t.Fatal("expected unrecoverable view to not be revealable")
 	}
@@ -48,5 +48,20 @@ func TestBuildAPIKeySecretViewMarksLegacyUnrecoverable(t *testing.T) {
 	}
 	if view.MaskedKey != "••••••••" {
 		t.Fatalf("expected masked fallback, got %q", view.MaskedKey)
+	}
+	if view.FullKey != "" {
+		t.Fatalf("expected summary view to omit full key, got %q", view.FullKey)
+	}
+}
+
+func TestBuildAPIKeySecretCopyViewIncludesFullKey(t *testing.T) {
+	t.Parallel()
+
+	view := buildAPIKeySecretCopyView("pak_live", "agw_live_secret", true, time.Time{})
+	if !view.Revealable {
+		t.Fatal("expected copy view to be revealable")
+	}
+	if view.FullKey != "agw_live_secret" {
+		t.Fatalf("expected full key in copy view, got %q", view.FullKey)
 	}
 }

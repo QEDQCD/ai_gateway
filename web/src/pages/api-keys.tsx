@@ -334,7 +334,7 @@ export function APIKeysPage() {
     }
   }
 
-  async function handleRevealSecret() {
+  async function handleLoadSecretSummary() {
     if (!selectedItem) {
       return;
     }
@@ -346,7 +346,10 @@ export function APIKeysPage() {
       const secret = isAdmin
         ? await revealAPIKeySecret(selectedItem.id)
         : await revealMemberAPIKeySecret(selectedItem.id);
-      setSelectedSecret(secret);
+      setSelectedSecret({
+        ...secret,
+        full_key: undefined,
+      });
       if (secret.legacy_unrecoverable) {
         setSecretError("该历史密钥不可回显，请执行轮换后再复制。");
       }
@@ -370,7 +373,10 @@ export function APIKeysPage() {
       const secret = isAdmin
         ? await copyAPIKeySecret(selectedItem.id)
         : await copyMemberAPIKeySecret(selectedItem.id);
-      setSelectedSecret(secret);
+      setSelectedSecret({
+        ...secret,
+        full_key: undefined,
+      });
 
       if (!secret.revealable || !secret.full_key) {
         setSelectedCopyNotice("该历史密钥不可回显，请先轮换后再复制。");
@@ -595,9 +601,7 @@ export function APIKeysPage() {
           <div className="detail-list__row">
             <dt>密钥摘要</dt>
             <dd className="secret-text">
-              {selectedSecretForItem?.full_key
-                ? selectedSecretForItem.full_key
-                : selectedSecretForItem?.masked_key ?? "点击显示完整密钥后加载"}
+              {selectedSecretForItem?.masked_key ?? "点击加载密钥摘要后显示"}
             </dd>
           </div>
         </div>
@@ -606,9 +610,9 @@ export function APIKeysPage() {
             type="button"
             className="button-shell button-shell--primary"
             disabled={!selectedItem || secretLoading}
-            onClick={handleRevealSecret}
+            onClick={handleLoadSecretSummary}
           >
-            {secretLoading ? "加载中..." : "显示完整密钥"}
+            {secretLoading ? "加载中..." : "加载密钥摘要"}
           </button>
           <button
             type="button"

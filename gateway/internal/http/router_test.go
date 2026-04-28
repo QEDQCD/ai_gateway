@@ -392,7 +392,6 @@ func TestAdminRevealAPIKeySecretRouteReturnsConsoleData(t *testing.T) {
 			apiKeySecretView: service.APIKeySecretView{
 				APIKeyID:            "pak_demo",
 				MaskedKey:           "agw_****demo",
-				FullKey:             "agw_secret_demo",
 				Revealable:          true,
 				LegacyUnrecoverable: false,
 				ExpiresAt:           "2026-05-01T12:00:00Z",
@@ -415,7 +414,7 @@ func TestAdminRevealAPIKeySecretRouteReturnsConsoleData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("io.ReadAll failed: %v", err)
 	}
-	expected := `{"api_key_id":"pak_demo","masked_key":"agw_****demo","full_key":"agw_secret_demo","revealable":true,"legacy_unrecoverable":false,"expires_at":"2026-05-01T12:00:00Z"}`
+	expected := `{"api_key_id":"pak_demo","masked_key":"agw_****demo","revealable":true,"legacy_unrecoverable":false,"expires_at":"2026-05-01T12:00:00Z"}`
 	if string(body) != expected {
 		t.Fatalf("expected body %q, got %q", expected, string(body))
 	}
@@ -431,7 +430,6 @@ func TestAdminCopyAPIKeySecretRouteReturnsConsoleData(t *testing.T) {
 			apiKeySecretView: service.APIKeySecretView{
 				APIKeyID:            "pak_demo",
 				MaskedKey:           "agw_****demo",
-				FullKey:             "agw_secret_demo",
 				Revealable:          true,
 				LegacyUnrecoverable: false,
 				ExpiresAt:           "2026-05-01T12:00:00Z",
@@ -454,7 +452,7 @@ func TestAdminCopyAPIKeySecretRouteReturnsConsoleData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("io.ReadAll failed: %v", err)
 	}
-	expected := `{"api_key_id":"pak_demo","masked_key":"agw_****demo","full_key":"agw_secret_demo","revealable":true,"legacy_unrecoverable":false,"expires_at":"2026-05-01T12:00:00Z"}`
+	expected := `{"api_key_id":"pak_demo","masked_key":"agw_****demo","revealable":true,"legacy_unrecoverable":false,"expires_at":"2026-05-01T12:00:00Z"}`
 	if string(body) != expected {
 		t.Fatalf("expected body %q, got %q", expected, string(body))
 	}
@@ -747,7 +745,7 @@ func TestMemberOverviewRouteResolvesPrincipalAndReturnsMemberData(t *testing.T) 
 	if err != nil {
 		t.Fatalf("io.ReadAll failed: %v", err)
 	}
-	expected := `{"tenant_id":"tenant_demo","tenant_name":"Demo Tenant","active_api_keys":1}`
+	expected := `{"tenant_id":"tenant_demo","tenant_name":"Demo Tenant","active_api_keys":1,"quota":{"configured":false,"request_limit":0,"requests_used":0,"requests_remaining":0,"token_limit":0,"tokens_used":0,"tokens_remaining":0,"resets_at":""}}`
 	if string(body) != expected {
 		t.Fatalf("expected body %q, got %q", expected, string(body))
 	}
@@ -813,7 +811,6 @@ func TestMemberRevealAPIKeySecretRouteReturnsConsoleData(t *testing.T) {
 			apiKeySecretView: service.APIKeySecretView{
 				APIKeyID:            "pak_demo",
 				MaskedKey:           "agw_****demo",
-				FullKey:             "agw_secret_demo",
 				Revealable:          true,
 				LegacyUnrecoverable: false,
 				ExpiresAt:           "2026-05-01T12:00:00Z",
@@ -838,7 +835,7 @@ func TestMemberRevealAPIKeySecretRouteReturnsConsoleData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("io.ReadAll failed: %v", err)
 	}
-	expected := `{"api_key_id":"pak_demo","masked_key":"agw_****demo","full_key":"agw_secret_demo","revealable":true,"legacy_unrecoverable":false,"expires_at":"2026-05-01T12:00:00Z"}`
+	expected := `{"api_key_id":"pak_demo","masked_key":"agw_****demo","revealable":true,"legacy_unrecoverable":false,"expires_at":"2026-05-01T12:00:00Z"}`
 	if string(body) != expected {
 		t.Fatalf("expected body %q, got %q", expected, string(body))
 	}

@@ -425,7 +425,7 @@ func (s postgresMemberConsoleService) RevealAPIKeySecret(ctx context.Context, id
 	if err := insertAPIKeySecretAccessLog(ctx, s.db, record.ID, record.TenantID, principal.UserID, "member", "reveal", "allowed", metadata.IPAddress, metadata.UserAgent); err != nil {
 		return APIKeySecretView{}, err
 	}
-	return buildAPIKeySecretView(record.ID, record.FullKey, record.Recoverable, record.ExpiresAt), nil
+	return buildAPIKeySecretSummaryView(record.ID, record.FullKey, record.Recoverable, record.ExpiresAt), nil
 }
 
 func (s postgresMemberConsoleService) CopyAPIKeySecret(ctx context.Context, id string, ip string, userAgent string) (APIKeySecretView, error) {
@@ -450,7 +450,7 @@ func (s postgresMemberConsoleService) CopyAPIKeySecret(ctx context.Context, id s
 	if err := insertAPIKeySecretAccessLog(ctx, s.db, record.ID, record.TenantID, principal.UserID, "member", "copy", "allowed", ip, userAgent); err != nil {
 		return APIKeySecretView{}, err
 	}
-	return buildAPIKeySecretView(record.ID, record.FullKey, record.Recoverable, record.ExpiresAt), nil
+	return buildAPIKeySecretCopyView(record.ID, record.FullKey, record.Recoverable, record.ExpiresAt), nil
 }
 
 func (s postgresMemberConsoleService) UsageOverview(ctx context.Context, query UsageQuery) (UsageOverviewData, error) {

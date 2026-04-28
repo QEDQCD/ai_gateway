@@ -154,11 +154,11 @@ func TestPostgresMemberConsoleServiceRevealAPIKeySecretReturnsOwnedSecret(t *tes
 	if !secretView.Revealable {
 		t.Fatal("expected Revealable to be true")
 	}
-	if secretView.FullKey == "" {
-		t.Fatal("expected FullKey to be populated")
+	if secretView.FullKey != "" {
+		t.Fatalf("expected reveal summary to omit full key, got %q", secretView.FullKey)
 	}
-	if secretView.MaskedKey == secretView.FullKey {
-		t.Fatal("expected masked key to differ from full key")
+	if secretView.MaskedKey == "" || secretView.MaskedKey == "••••••••" {
+		t.Fatalf("expected masked key to be populated, got %q", secretView.MaskedKey)
 	}
 
 	var actorUserID string

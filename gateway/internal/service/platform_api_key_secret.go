@@ -42,20 +42,33 @@ func (s platformAPIKeySecretService) Reveal(ciphertext string, recoverable bool)
 	return s.codec.Decrypt(ciphertext)
 }
 
-func buildAPIKeySecretView(apiKeyID string, fullKey string, recoverable bool, expiresAt time.Time) APIKeySecretView {
+func buildAPIKeySecretView(apiKeyID string, fullKey string, recoverable bool, expiresAt time.Time, includeFullKey bool) APIKeySecretView {
 	expiresAtText := ""
 	if !expiresAt.IsZero() {
 		expiresAtText = expiresAt.In(shanghaiLocation()).Format(time.RFC3339)
 	}
 
+	fullKeyText := ""
+	if includeFullKey {
+		fullKeyText = fullKey
+	}
+
 	return APIKeySecretView{
 		APIKeyID:            apiKeyID,
 		MaskedKey:           maskManagedAPIKey(fullKey),
-		FullKey:             fullKey,
+		FullKey:             fullKeyText,
 		Revealable:          recoverable && strings.TrimSpace(fullKey) != "",
 		LegacyUnrecoverable: !recoverable,
 		ExpiresAt:           expiresAtText,
 	}
+}
+
+func buildAPIKeySecretSummaryView(apiKeyID string, fullKey string, recoverable bool, expiresAt time.Time) APIKeySecretView {
+	return buildAPIKeySecretView(apiKeyID, fullKey, recoverable, expiresAt, false)
+}
+
+func buildAPIKeySecretCopyView(apiKeyID string, fullKey string, recoverable bool, expiresAt time.Time) APIKeySecretView {
+	return buildAPIKeySecretView(apiKeyID, fullKey, recoverable, expiresAt, true)
 }
 
 func maskManagedAPIKey(rawKey string) string {
