@@ -221,6 +221,47 @@ func TestConsoleApplicationSubmitRouteReturnsPendingPayload(t *testing.T) {
 	}
 }
 
+func TestConsoleCaptchaRoutesReturnChallengeAndPassToken(t *testing.T) {
+	t.Parallel()
+
+	app := apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+		ConsoleService: stubConsoleService{
+			captchaChallenge: service.CaptchaChallenge{
+				CaptchaID: "cap_demo",
+				ImageData: "data:image/png;base64,AAAA",
+				ExpiresAt: "2026-04-29T00:00:00Z",
+			},
+			captchaPassResult: service.CaptchaPassResult{
+				CaptchaPassToken: "cp_demo",
+				ExpiresAt:        "2026-04-29T00:00:00Z",
+			},
+		},
+	})
+
+	getReq := httptest.NewRequest(http.MethodGet, "/console/captcha", nil)
+	getResp, err := app.Test(getReq)
+	if err != nil {
+		t.Fatalf("GET captcha failed: %v", err)
+	}
+	if getResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", getResp.StatusCode)
+	}
+
+	verifyReq := httptest.NewRequest(
+		http.MethodPost,
+		"/console/captcha/verify",
+		strings.NewReader(`{"captcha_id":"cap_demo","captcha_code":"A7KQ"}`),
+	)
+	verifyReq.Header.Set("Content-Type", "application/json")
+	verifyResp, err := app.Test(verifyReq)
+	if err != nil {
+		t.Fatalf("POST captcha verify failed: %v", err)
+	}
+	if verifyResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", verifyResp.StatusCode)
+	}
+}
+
 func TestAdminRoutesRequireConsoleSessionWhenEnabled(t *testing.T) {
 	t.Parallel()
 
@@ -1564,6 +1605,8 @@ func (s stubConsoleAuthService) ResolveConsoleSession(context.Context, string) (
 
 type stubConsoleService struct {
 	systemStatus             service.ConsoleSystemStatus
+	captchaChallenge         service.CaptchaChallenge
+	captchaPassResult        service.CaptchaPassResult
 	apiKeys                  service.APIKeysPageData
 	apiKeyMutationResult     service.APIKeyMutationResult
 	apiKeySecretView         service.APIKeySecretView
@@ -1664,6 +1707,14 @@ func (s stubConsoleService) Overview(context.Context) (service.OverviewPageData,
 
 func (s stubConsoleService) SystemStatus(context.Context) (service.ConsoleSystemStatus, error) {
 	return s.systemStatus, nil
+}
+
+func (s stubConsoleService) IssueCaptcha(context.Context, string, string) (service.CaptchaChallenge, error) {
+	return s.captchaChallenge, nil
+}
+
+func (s stubConsoleService) VerifyCaptcha(context.Context, service.VerifyCaptchaRequest) (service.CaptchaPassResult, error) {
+	return s.captchaPassResult, nil
 }
 
 func (s stubConsoleService) APIKeys(context.Context) (service.APIKeysPageData, error) {

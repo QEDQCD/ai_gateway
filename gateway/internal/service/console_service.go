@@ -303,6 +303,8 @@ type UsageRequestsPageData struct {
 type ConsoleService interface {
 	Overview(ctx context.Context) (OverviewPageData, error)
 	SystemStatus(ctx context.Context) (ConsoleSystemStatus, error)
+	IssueCaptcha(ctx context.Context, ip string, userAgent string) (CaptchaChallenge, error)
+	VerifyCaptcha(ctx context.Context, req VerifyCaptchaRequest) (CaptchaPassResult, error)
 	Applications(ctx context.Context) (ApplicationsPageData, error)
 	CreateApplication(ctx context.Context, req CreateApplicationRequest) (ApplicationMutationResult, error)
 	ApproveApplication(ctx context.Context, id string, req ApproveApplicationRequest) (ApplicationMutationResult, error)
@@ -358,6 +360,14 @@ func (unavailableConsoleService) Overview(context.Context) (OverviewPageData, er
 
 func (unavailableConsoleService) SystemStatus(context.Context) (ConsoleSystemStatus, error) {
 	return ConsoleSystemStatus{}, ErrConsoleServiceUnavailable
+}
+
+func (unavailableConsoleService) IssueCaptcha(context.Context, string, string) (CaptchaChallenge, error) {
+	return CaptchaChallenge{}, ErrConsoleServiceUnavailable
+}
+
+func (unavailableConsoleService) VerifyCaptcha(context.Context, VerifyCaptchaRequest) (CaptchaPassResult, error) {
+	return CaptchaPassResult{}, ErrConsoleServiceUnavailable
 }
 
 func (unavailableConsoleService) Applications(context.Context) (ApplicationsPageData, error) {
