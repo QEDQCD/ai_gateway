@@ -89,6 +89,63 @@ func TestSeedDemoDataEncryptsProviderSecrets(t *testing.T) {
 	}
 }
 
+func TestSeedDemoDataEncryptsPlatformAPIKeys(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	container, dsn := startPostgresContainer(ctx, t)
+	t.Cleanup(func() {
+		_ = container.Terminate(context.Background())
+	})
+
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("pgx.Connect failed: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = conn.Close(context.Background())
+	})
+
+	for _, migration := range readMigrations(t) {
+		if _, err := conn.Exec(ctx, migration); err != nil {
+			t.Fatalf("conn.Exec migration failed: %v", err)
+		}
+	}
+
+	codec, err := secret.NewCodec("0123456789abcdef0123456789abcdef")
+	if err != nil {
+		t.Fatalf("secret.NewCodec failed: %v", err)
+	}
+
+	if err := SeedDemoData(ctx, conn, SeedConfig{
+		PlatformAPIKey:      "platform-live-key",
+		ProviderBaseURL:     "https://dashscope.aliyuncs.com/compatible-mode/v1",
+		ProviderAPIKey:      "seed-provider-key",
+		Provider:            "dashscope",
+		ProviderDisplayName: "DashScope Primary",
+		SecretCodec:         codec,
+		PlatformKeyCodec:    codec,
+	}); err != nil {
+		t.Fatalf("SeedDemoData failed: %v", err)
+	}
+
+	var ciphertext string
+	var recoverable bool
+	if err := conn.QueryRow(ctx, `
+		select key_ciphertext, secret_recoverable
+		from platform_api_keys
+		where id = 'pak_live_console'
+	`).Scan(&ciphertext, &recoverable); err != nil {
+		t.Fatalf("QueryRow failed: %v", err)
+	}
+	if !strings.HasPrefix(ciphertext, secret.EncryptedSecretPrefix) {
+		t.Fatalf("expected encrypted key prefix %q, got %q", secret.EncryptedSecretPrefix, ciphertext)
+	}
+	if !recoverable {
+		t.Fatal("expected seeded platform api key to be recoverable")
+	}
+}
+
 func TestSeedDemoDataAlignsProviderCredentialAndRouteSemantics(t *testing.T) {
 	t.Parallel()
 

@@ -30,6 +30,7 @@ type SeedConfig struct {
 	Provider            string
 	ProviderDisplayName string
 	SecretCodec         *secret.Codec
+	PlatformKeyCodec    *secret.Codec
 	AdminPassword       string
 	MemberPassword      string
 }
@@ -164,6 +165,10 @@ func SeedDemoData(ctx context.Context, db seedDB, cfg SeedConfig) error {
 	if err != nil {
 		return err
 	}
+	platformKeyCiphertext, err := encryptSeedPlatformAPIKey(cfg.PlatformKeyCodec, cfg.SecretCodec, cfg.PlatformAPIKey)
+	if err != nil {
+		return err
+	}
 	ragSecret, err := encryptSeedSecret(cfg.SecretCodec, "rag-internal")
 	if err != nil {
 		return err
@@ -178,16 +183,20 @@ func SeedDemoData(ctx context.Context, db seedDB, cfg SeedConfig) error {
 			name = excluded.name,
 			status = excluded.status,
 			request_quota_per_day = excluded.request_quota_per_day;`,
-		fmt.Sprintf(`insert into platform_api_keys (id, tenant_id, name, key_hash, status, scopes, last_used_at) values
-			('pak_live_console', 'tenant_alpha', 'prod-gateway', '%s', 'active', '{"chat","rag","embeddings"}', now()),
-			('pak_batch_worker', 'tenant_beta', 'batch-worker', 'sha256:batch-worker', 'active', '{"embeddings"}', now() - interval '14 minutes')
+		fmt.Sprintf(`insert into platform_api_keys (id, tenant_id, name, key_hash, key_ciphertext, key_kek_version, secret_recoverable, status, scopes, last_used_at, expires_at) values
+			('pak_live_console', 'tenant_alpha', 'prod-gateway', '%s', '%s', 'v1', true, 'active', '{"chat","rag","embeddings"}', now(), now() + interval '30 days'),
+			('pak_batch_worker', 'tenant_beta', 'batch-worker', 'sha256:batch-worker', '', 'v1', false, 'active', '{"embeddings"}', now() - interval '14 minutes', null)
 		on conflict (id) do update set
 			name = excluded.name,
 			tenant_id = excluded.tenant_id,
 			key_hash = excluded.key_hash,
+			key_ciphertext = excluded.key_ciphertext,
+			key_kek_version = excluded.key_kek_version,
+			secret_recoverable = excluded.secret_recoverable,
 			status = excluded.status,
 			scopes = excluded.scopes,
-			last_used_at = excluded.last_used_at;`, keyHash),
+			last_used_at = excluded.last_used_at,
+			expires_at = excluded.expires_at;`, keyHash, escapeLiteral(platformKeyCiphertext)),
 		fmt.Sprintf(`insert into provider_credentials (id, provider, display_name, encrypted_secret, status, supported_models, base_url) values
 			('%s', '%s', '%s', '%s', 'active', '{%s}', '%s'),
 			('provider_rag_service', 'rag', '知识库检索服务', '%s', 'active', '{"rag-query"}', 'http://rag-service:8000')
@@ -351,6 +360,19 @@ func encryptSeedSecret(codec *secret.Codec, value string) (string, error) {
 	}
 	if codec == nil {
 		return "", errors.New("provider secret codec is required for seeded provider credentials")
+	}
+	return codec.Encrypt(value)
+}
+
+func encryptSeedPlatformAPIKey(codec *secret.Codec, fallbackCodec *secret.Codec, value string) (string, error) {
+	if strings.TrimSpace(value) == "" {
+		return "", nil
+	}
+	if codec == nil {
+		codec = fallbackCodec
+	}
+	if codec == nil {
+		return "", errors.New("platform api key codec is required for seeded platform api keys")
 	}
 	return codec.Encrypt(value)
 }

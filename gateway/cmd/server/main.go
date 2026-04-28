@@ -56,6 +56,7 @@ func newServerApp(cfg config.Config) *fiber.App {
 func newDatabaseBackedServerApp(cfg config.Config) *fiber.App {
 	ctx := context.Background()
 	providerSecretCodec := mustNewProviderSecretCodec(cfg)
+	platformAPIKeySecretCodec := mustNewPlatformAPIKeySecretCodec(cfg)
 
 	pool, err := openPostgresWithRetry(ctx, cfg.DatabaseURL)
 	if err != nil {
@@ -71,6 +72,7 @@ func newDatabaseBackedServerApp(cfg config.Config) *fiber.App {
 		Provider:            cfg.SeedProvider,
 		ProviderDisplayName: cfg.SeedProviderDisplayName,
 		SecretCodec:         providerSecretCodec,
+		PlatformKeyCodec:    platformAPIKeySecretCodec,
 		AdminPassword:       cfg.SeedAdminPassword,
 		MemberPassword:      cfg.SeedMemberPassword,
 	}); err != nil {
@@ -255,6 +257,25 @@ func mustNewProviderSecretCodec(cfg config.Config) *secret.Codec {
 	}
 
 	codec, err := secret.NewCodec(providerSecretKey)
+	if err != nil {
+		panic(err)
+	}
+	return codec
+}
+
+func mustNewPlatformAPIKeySecretCodec(cfg config.Config) *secret.Codec {
+	platformAPIKeySecretKey := strings.TrimSpace(cfg.PlatformAPIKeySecretKey)
+	if platformAPIKeySecretKey == "" {
+		platformAPIKeySecretKey = strings.TrimSpace(cfg.ProviderSecretKey)
+	}
+	if platformAPIKeySecretKey == "" {
+		if strings.TrimSpace(cfg.DatabaseURL) != "" {
+			panic("gateway: GATEWAY_PLATFORM_API_KEY_SECRET_KEY or GATEWAY_PLATFORM_API_KEY_SECRET_KEY_FILE is required in database mode")
+		}
+		return nil
+	}
+
+	codec, err := secret.NewCodec(platformAPIKeySecretKey)
 	if err != nil {
 		panic(err)
 	}

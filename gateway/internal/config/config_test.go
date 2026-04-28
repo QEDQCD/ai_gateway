@@ -75,3 +75,20 @@ func TestLoadReadsSecretsFromFiles(t *testing.T) {
 		t.Fatalf("expected provider secret key from file, got %q", cfg.ProviderSecretKey)
 	}
 }
+
+func TestLoadReadsPlatformAPIKeySecretKeyFromFile(t *testing.T) {
+	tempDir := t.TempDir()
+	secretKeyPath := filepath.Join(tempDir, "platform_api_key_secret")
+	const expected = "0123456789abcdef0123456789abcdef"
+	if err := os.WriteFile(secretKeyPath, []byte(expected+"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile secret key failed: %v", err)
+	}
+
+	t.Setenv("GATEWAY_PLATFORM_API_KEY_SECRET_KEY", "")
+	t.Setenv("GATEWAY_PLATFORM_API_KEY_SECRET_KEY_FILE", secretKeyPath)
+
+	cfg := Load()
+	if cfg.PlatformAPIKeySecretKey != expected {
+		t.Fatalf("expected PlatformAPIKeySecretKey %q, got %q", expected, cfg.PlatformAPIKeySecretKey)
+	}
+}

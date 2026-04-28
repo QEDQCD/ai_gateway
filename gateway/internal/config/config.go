@@ -28,6 +28,7 @@ type Config struct {
 	SeedProvider            string
 	SeedProviderDisplayName string
 	ProviderSecretKey       string
+	PlatformAPIKeySecretKey string
 	SeedAdminPassword       string
 	SeedMemberPassword      string
 
@@ -77,6 +78,7 @@ func Load() Config {
 		SeedProvider:                     defaultString(lookupEnv("GATEWAY_SEED_PROVIDER"), bootstrapProvider),
 		SeedProviderDisplayName:          defaultString(lookupEnv("GATEWAY_SEED_PROVIDER_DISPLAY_NAME"), bootstrapProviderDisplayName),
 		ProviderSecretKey:                lookupEnv("GATEWAY_PROVIDER_SECRET_KEY"),
+		PlatformAPIKeySecretKey:          lookupEnv("GATEWAY_PLATFORM_API_KEY_SECRET_KEY"),
 		SeedAdminPassword:                lookupEnv("GATEWAY_CONSOLE_ADMIN_PASSWORD"),
 		SeedMemberPassword:               lookupEnv("GATEWAY_CONSOLE_MEMBER_PASSWORD"),
 		BootstrapPlatformAPIKey:          lookupEnv("GATEWAY_BOOTSTRAP_PLATFORM_API_KEY"),
