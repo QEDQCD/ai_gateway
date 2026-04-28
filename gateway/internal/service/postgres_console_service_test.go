@@ -2,6 +2,8 @@ package service_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"net/http"
 	"strings"
@@ -14,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
+	"golang.org/x/crypto/bcrypt"
 )
 
 func TestPostgresConsoleServiceSystemStatus(t *testing.T) {
@@ -459,11 +462,31 @@ func TestPostgresConsoleServiceCreateApplicationPersistsPendingRow(t *testing.T)
 
 	console, conn := newUsageConsoleService(t, ctx)
 
+	if _, err := conn.Exec(ctx, `
+		insert into captcha_challenges (
+			id,
+			answer_hash,
+			status,
+			pass_token_hash,
+			expires_at
+		) values (
+			'cap_for_apply',
+			$1,
+			'verified',
+			$2,
+			now() + interval '5 minutes'
+		)
+	`, testHashCaptchaValue("ABCD"), testHashCaptchaValue("cp_valid")); err != nil {
+		t.Fatalf("seed captcha challenge failed: %v", err)
+	}
+
 	result, err := console.CreateApplication(ctx, service.CreateApplicationRequest{
-		Email:       "new-user@example.com",
-		Name:        "新用户",
-		CompanyName: "New Co",
-		UseCase:     "测试接入",
+		Email:            "new-user@example.com",
+		Name:             "新用户",
+		CompanyName:      "New Co",
+		UseCase:          "测试接入",
+		Password:         "Example1234",
+		CaptchaPassToken: "cp_valid",
 	})
 	if err != nil {
 		t.Fatalf("CreateApplication failed: %v", err)
@@ -492,23 +515,42 @@ func TestPostgresConsoleServiceCreateApplicationPersistsPendingRow(t *testing.T)
 	}
 
 	var status string
+	var passwordHash *string
 	var reviewerID *string
 	var reviewedAt *time.Time
 	if err := conn.QueryRow(ctx, `
-		select status, reviewer_id, reviewed_at
+		select status, password_hash, reviewer_id, reviewed_at
 		from account_applications
 		where id = $1
-	`, result.Item.ID).Scan(&status, &reviewerID, &reviewedAt); err != nil {
+	`, result.Item.ID).Scan(&status, &passwordHash, &reviewerID, &reviewedAt); err != nil {
 		t.Fatalf("select created application failed: %v", err)
 	}
 	if status != "pending" {
 		t.Fatalf("expected stored status %q, got %q", "pending", status)
+	}
+	if passwordHash == nil || strings.TrimSpace(*passwordHash) == "" {
+		t.Fatal("expected password_hash to be stored")
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(*passwordHash), []byte("Example1234")); err != nil {
+		t.Fatalf("expected stored password_hash to match Example1234: %v", err)
 	}
 	if reviewerID != nil {
 		t.Fatalf("expected reviewer_id to be null, got %q", *reviewerID)
 	}
 	if reviewedAt != nil {
 		t.Fatal("expected reviewed_at to be null")
+	}
+
+	var captchaStatus string
+	if err := conn.QueryRow(ctx, `
+		select status
+		from captcha_challenges
+		where id = 'cap_for_apply'
+	`).Scan(&captchaStatus); err != nil {
+		t.Fatalf("select captcha challenge failed: %v", err)
+	}
+	if captchaStatus != "consumed" {
+		t.Fatalf("expected captcha status %q, got %q", "consumed", captchaStatus)
 	}
 }
 
@@ -539,6 +581,61 @@ func TestPostgresConsoleServiceCreateApplicationRequiresPasswordAndCaptchaToken(
 		t.Fatalf("expected 400, got %d", statusErr.Code)
 	}
 }
+
+func TestPostgresConsoleServiceCreateApplicationRejectsExistingActiveUserEmail(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	if _, err := conn.Exec(ctx, `
+		insert into captcha_challenges (
+			id,
+			answer_hash,
+			status,
+			pass_token_hash,
+			expires_at
+		) values (
+			'cap_duplicate_user',
+			$1,
+			'verified',
+			$2,
+			now() + interval '5 minutes'
+		)
+	`, testHashCaptchaValue("EFGH"), testHashCaptchaValue("cp_existing_user")); err != nil {
+		t.Fatalf("seed captcha challenge failed: %v", err)
+	}
+
+	if _, err := conn.Exec(ctx, `
+		insert into users (id, email, name, role, status, password_hash)
+		values ('user_existing_login', 'member@example.com', 'Existing', 'member', 'active', '$2a$10$abcdefghijklmnopqrstuv')
+	`); err != nil {
+		t.Fatalf("seed existing user failed: %v", err)
+	}
+
+	_, err := console.CreateApplication(ctx, service.CreateApplicationRequest{
+		Email:            "member@example.com",
+		Name:             "新用户",
+		CompanyName:      "New Co",
+		UseCase:          "测试接入",
+		Password:         "Example1234",
+		CaptchaPassToken: "cp_existing_user",
+	})
+	if err == nil {
+		t.Fatal("expected duplicate active user email error")
+	}
+
+	var statusErr service.StatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("expected StatusError, got %T", err)
+	}
+	if statusErr.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", statusErr.Code)
+	}
+}
+
 
 func TestPostgresConsoleServiceApproveApplicationRequiresTenantID(t *testing.T) {
 	t.Parallel()
@@ -2182,6 +2279,11 @@ func mustParseUsageTime(t *testing.T, value string) time.Time {
 		t.Fatalf("time.Parse failed: %v", err)
 	}
 	return parsed
+}
+
+func testHashCaptchaValue(value string) string {
+	sum := sha256.Sum256([]byte(strings.ToUpper(strings.TrimSpace(value))))
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 func startUsagePostgresContainer(ctx context.Context, t *testing.T) (testcontainers.Container, string) {

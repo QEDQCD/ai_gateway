@@ -169,6 +169,34 @@ func hashCaptchaValue(value string) string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
+func validateConsolePassword(password string) error {
+	if len(password) < 8 || len(password) > 72 {
+		return StatusError{
+			Code:    http.StatusBadRequest,
+			Message: "password must be between 8 and 72 characters",
+		}
+	}
+
+	var hasLetter bool
+	var hasDigit bool
+	for _, r := range password {
+		switch {
+		case r >= '0' && r <= '9':
+			hasDigit = true
+		case (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z'):
+			hasLetter = true
+		}
+	}
+	if !hasLetter || !hasDigit {
+		return StatusError{
+			Code:    http.StatusBadRequest,
+			Message: "password must include letters and digits",
+		}
+	}
+
+	return nil
+}
+
 func normalizeCaptchaCode(value string) string {
 	return strings.ToUpper(strings.TrimSpace(value))
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"golang.org/x/crypto/bcrypt"
 )
 
 type consoleDB interface {
@@ -248,10 +249,11 @@ func (s postgresConsoleService) Applications(ctx context.Context) (ApplicationsP
 
 func (s postgresConsoleService) CreateApplication(ctx context.Context, req CreateApplicationRequest) (ApplicationMutationResult, error) {
 	email := strings.TrimSpace(req.Email)
+	emailNormalized := strings.ToLower(email)
 	name := strings.TrimSpace(req.Name)
 	companyName := strings.TrimSpace(req.CompanyName)
 	useCase := strings.TrimSpace(req.UseCase)
-	password := strings.TrimSpace(req.Password)
+	password := req.Password
 	captchaPassToken := strings.TrimSpace(req.CaptchaPassToken)
 
 	if email == "" {
@@ -278,7 +280,7 @@ func (s postgresConsoleService) CreateApplication(ctx context.Context, req Creat
 			Message: "use_case is required",
 		}
 	}
-	if password == "" {
+	if strings.TrimSpace(password) == "" {
 		return ApplicationMutationResult{}, StatusError{
 			Code:    http.StatusBadRequest,
 			Message: "password is required",
@@ -291,19 +293,87 @@ func (s postgresConsoleService) CreateApplication(ctx context.Context, req Creat
 		}
 	}
 
+	if err := validateConsolePassword(password); err != nil {
+		return ApplicationMutationResult{}, err
+	}
+
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return ApplicationMutationResult{}, err
+	}
+
+	var consumedCaptchaID string
+	if err := s.db.QueryRow(ctx, `
+		update captcha_challenges
+		set
+			status = 'consumed',
+			consumed_at = now(),
+			updated_at = now()
+		where pass_token_hash = $1
+		  and status = 'verified'
+		  and expires_at > now()
+		returning id
+	`, hashCaptchaValue(captchaPassToken)).Scan(&consumedCaptchaID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ApplicationMutationResult{}, StatusError{
+				Code:    http.StatusBadRequest,
+				Message: "captcha_pass_token is invalid",
+			}
+		}
+		return ApplicationMutationResult{}, err
+	}
+
+	var activeUserExists bool
+	if err := s.db.QueryRow(ctx, `
+		select exists(
+			select 1
+			from users
+			where lower(email) = $1
+			  and status = 'active'
+		)
+	`, emailNormalized).Scan(&activeUserExists); err != nil {
+		return ApplicationMutationResult{}, err
+	}
+	if activeUserExists {
+		return ApplicationMutationResult{}, StatusError{
+			Code:    http.StatusConflict,
+			Message: "email already has an active account",
+		}
+	}
+
+	var pendingExists bool
+	if err := s.db.QueryRow(ctx, `
+		select exists(
+			select 1
+			from account_applications
+			where email_normalized = $1
+			  and status = 'pending'
+		)
+	`, emailNormalized).Scan(&pendingExists); err != nil {
+		return ApplicationMutationResult{}, err
+	}
+	if pendingExists {
+		return ApplicationMutationResult{}, StatusError{
+			Code:    http.StatusConflict,
+			Message: "email already has a pending application",
+		}
+	}
+
 	row := s.db.QueryRow(ctx, `
 		insert into account_applications (
 			id,
 			email,
+			email_normalized,
 			name,
 			company_name,
 			use_case,
+			password_hash,
 			status
 		) values (
-			$1, $2, $3, $4, $5, 'pending'
+			$1, $2, $3, $4, $5, $6, $7, 'pending'
 		)
 		returning id, email, name, company_name, use_case, status, created_at
-	`, newApplicationID(), email, name, companyName, useCase)
+	`, newApplicationID(), email, emailNormalized, name, companyName, useCase, string(passwordHash))
 
 	item, err := scanApplicationItem(row)
 	if err != nil {
