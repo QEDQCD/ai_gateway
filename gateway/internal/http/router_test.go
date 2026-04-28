@@ -712,6 +712,67 @@ func TestAdminApproveApplicationCreatesUserMembershipAndAudit(t *testing.T) {
 	}
 }
 
+func TestAdminRejectApplicationRouteReturnsConsoleData(t *testing.T) {
+	t.Parallel()
+
+	var capturedID string
+	var capturedReq service.RejectApplicationRequest
+
+	app := apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+		ServiceAuthUsername: "test-console-user",
+		ServiceAuthPassword: "test-console-password",
+		ConsoleService: stubConsoleService{
+			rejectApplicationIDRef:  &capturedID,
+			rejectApplicationReqRef: &capturedReq,
+			applicationMutation: service.ApplicationMutationResult{
+				Item: service.ApplicationItem{
+					ID:          "app_router_reject",
+					Email:       "router-reject@example.com",
+					Name:        "路由待拒绝用户",
+					CompanyName: "Reject Co",
+					UseCase:     "测试接入",
+					Status:      "rejected",
+					CreatedAt:   "2026-04-25T09:02:03+08:00",
+				},
+			},
+		},
+	})
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/admin/applications/app_router_reject/reject",
+		strings.NewReader(`{"actor_id":"user_admin_demo","comment":"rejected via route"}`),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	req.SetBasicAuth("test-console-user", "test-console-password")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("io.ReadAll failed: %v", err)
+	}
+	expected := `{"item":{"id":"app_router_reject","email":"router-reject@example.com","name":"路由待拒绝用户","company_name":"Reject Co","use_case":"测试接入","status":"rejected","created_at":"2026-04-25T09:02:03+08:00"}}`
+	if string(body) != expected {
+		t.Fatalf("expected body %q, got %q", expected, string(body))
+	}
+	if capturedID != "app_router_reject" {
+		t.Fatalf("expected captured id %q, got %q", "app_router_reject", capturedID)
+	}
+	if capturedReq.ActorID != "user_admin_demo" {
+		t.Fatalf("expected actor_id %q, got %q", "user_admin_demo", capturedReq.ActorID)
+	}
+	if capturedReq.Comment != "rejected via route" {
+		t.Fatalf("expected comment %q, got %q", "rejected via route", capturedReq.Comment)
+	}
+}
+
 func TestAdminUsageOverviewRouteReturnsConsoleData(t *testing.T) {
 	t.Parallel()
 
@@ -1511,6 +1572,8 @@ type stubConsoleService struct {
 	createApplicationReqRef  *service.CreateApplicationRequest
 	approveApplicationIDRef  *string
 	approveApplicationReqRef *service.ApproveApplicationRequest
+	rejectApplicationIDRef   *string
+	rejectApplicationReqRef  *service.RejectApplicationRequest
 	usageOverview            service.UsageOverviewData
 	usageTrends              service.UsageTrendData
 	usageLatencyWall         service.UsageLatencyWallData
@@ -1628,6 +1691,16 @@ func (s stubConsoleService) ApproveApplication(_ context.Context, id string, req
 	}
 	if s.approveApplicationReqRef != nil {
 		*s.approveApplicationReqRef = req
+	}
+	return s.applicationMutation, nil
+}
+
+func (s stubConsoleService) RejectApplication(_ context.Context, id string, req service.RejectApplicationRequest) (service.ApplicationMutationResult, error) {
+	if s.rejectApplicationIDRef != nil {
+		*s.rejectApplicationIDRef = id
+	}
+	if s.rejectApplicationReqRef != nil {
+		*s.rejectApplicationReqRef = req
 	}
 	return s.applicationMutation, nil
 }

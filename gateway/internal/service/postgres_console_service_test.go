@@ -732,6 +732,90 @@ func TestPostgresConsoleServiceApproveApplicationCreatesUserMembershipAndAudit(t
 	}
 }
 
+func TestPostgresConsoleServiceRejectApplicationUpdatesStatusAndAudit(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	if _, err := conn.Exec(ctx, `
+		insert into account_applications (
+			id,
+			email,
+			name,
+			company_name,
+			use_case,
+			status,
+			created_at
+		) values (
+			'app_service_reject',
+			'reject@example.com',
+			'待拒绝用户',
+			'Reject Co',
+			'测试接入',
+			'pending',
+			timestamptz '2026-04-25T01:02:03Z'
+		);
+	`); err != nil {
+		t.Fatalf("seed reject application scenario failed: %v", err)
+	}
+
+	result, err := console.RejectApplication(ctx, "app_service_reject", service.RejectApplicationRequest{
+		ActorID: "user_admin_demo",
+		Comment: "rejected via service",
+	})
+	if err != nil {
+		t.Fatalf("RejectApplication failed: %v", err)
+	}
+
+	if result.Item.Status != "rejected" {
+		t.Fatalf("expected item status %q, got %q", "rejected", result.Item.Status)
+	}
+
+	var applicationStatus string
+	var reviewerID string
+	var reviewComment string
+	var reviewedAt time.Time
+	if err := conn.QueryRow(ctx, `
+		select status, reviewer_id, review_comment, reviewed_at
+		from account_applications
+		where id = 'app_service_reject'
+	`).Scan(&applicationStatus, &reviewerID, &reviewComment, &reviewedAt); err != nil {
+		t.Fatalf("select rejected application failed: %v", err)
+	}
+	if applicationStatus != "rejected" {
+		t.Fatalf("expected application status %q, got %q", "rejected", applicationStatus)
+	}
+	if reviewerID != "user_admin_demo" {
+		t.Fatalf("expected reviewer_id %q, got %q", "user_admin_demo", reviewerID)
+	}
+	if reviewComment != "rejected via service" {
+		t.Fatalf("expected review_comment %q, got %q", "rejected via service", reviewComment)
+	}
+	if reviewedAt.IsZero() {
+		t.Fatal("expected reviewed_at to be set")
+	}
+
+	var auditCount int
+	if err := conn.QueryRow(ctx, `
+		select count(*)
+		from audit_events
+		where actor_type = 'admin'
+			and actor_user_id = 'user_admin_demo'
+			and event_type = 'application_rejected'
+			and target_type = 'account_application'
+			and target_id = 'app_service_reject'
+			and detail = 'rejected via service'
+	`).Scan(&auditCount); err != nil {
+		t.Fatalf("select rejection audit event count failed: %v", err)
+	}
+	if auditCount != 1 {
+		t.Fatalf("expected 1 rejection audit event, got %d", auditCount)
+	}
+}
+
 func TestPostgresConsoleServiceAuditUsesUsageLogsAndEvents(t *testing.T) {
 	t.Parallel()
 

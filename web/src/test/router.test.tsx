@@ -1111,6 +1111,77 @@ describe("控制台路由", () => {
     expect(screen.getByText("approved")).toBeInTheDocument();
   });
 
+  test("账号申请页支持拒绝审批", async () => {
+    mockSession({ role: "admin", user_id: "user_admin_demo" });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+
+      if (url === "/api/admin/system/status") {
+        return new Response(JSON.stringify(defaultSystemStatus()), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url === "/api/admin/applications" && !init?.method) {
+        return new Response(
+          JSON.stringify({
+            items: [
+              {
+                id: "app_reject",
+                email: "reject@example.com",
+                name: "待拒绝用户",
+                company_name: "Reject Co",
+                use_case: "测试接入",
+                status: "pending",
+                created_at: "2026-04-25T09:02:03+08:00",
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+      if (url === "/api/admin/applications/app_reject/reject" && init?.method === "POST") {
+        expect(JSON.parse(String(init.body))).toEqual({
+          actor_id: "user_admin_demo",
+          comment: "通过控制台审批",
+        });
+
+        return new Response(
+          JSON.stringify({
+            item: {
+              id: "app_reject",
+              email: "reject@example.com",
+              name: "待拒绝用户",
+              company_name: "Reject Co",
+              use_case: "测试接入",
+              status: "rejected",
+              created_at: "2026-04-25T09:02:03+08:00",
+            },
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+
+      throw new Error(`Unexpected fetch url: ${url}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderRoute("/applications");
+
+    fireEvent.click(await screen.findByRole("button", { name: "选择 待拒绝用户" }));
+    fireEvent.click(screen.getByRole("button", { name: "拒绝审批" }));
+
+    expect(await screen.findByText("审批已拒绝")).toBeInTheDocument();
+    expect(screen.getByText("rejected")).toBeInTheDocument();
+  });
+
   test("账号申请页在审批提交中锁定上下文，成功结果不受后续选择或租户输入漂移影响", async () => {
     mockSession({ role: "admin", user_id: "user_admin_demo" });
     let resolveApproval: (() => void) | null = null;

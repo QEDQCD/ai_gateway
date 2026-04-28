@@ -5,6 +5,7 @@ import {
   type ApplicationItem,
   approveApplication,
   getApplications,
+  rejectApplication,
 } from "../lib/console-api";
 import { useConsoleSession } from "../lib/session";
 import { useRemoteData } from "../lib/use-remote-data";
@@ -25,8 +26,9 @@ function buildDefaultTenantID(item: ApplicationItem | null) {
 }
 
 type ApprovalResultState = {
+  action: "approved" | "rejected";
   item: ApplicationItem;
-  tenantID: string;
+  tenantID?: string;
 };
 
 export function AdminApplicationsPage() {
@@ -92,8 +94,38 @@ export function AdminApplicationsPage() {
         current.map((item) => (item.id === approvalItem.id ? result.item : item)),
       );
       setActionResult({
+        action: "approved",
         item: result.item,
         tenantID: approvalTenantID,
+      });
+    } catch (currentError) {
+      setActionError(currentError instanceof Error ? currentError.message : "审批失败，请稍后重试。");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleReject() {
+    if (!selectedItem) {
+      return;
+    }
+
+    const rejectionItem = selectedItem;
+    const rejectionComment = comment.trim() || "通过控制台审批";
+
+    try {
+      setSubmitting(true);
+      setActionError(null);
+      const result = await rejectApplication(rejectionItem.id, {
+        actor_id: session.user_id,
+        comment: rejectionComment,
+      });
+      setItems((current) =>
+        current.map((item) => (item.id === rejectionItem.id ? result.item : item)),
+      );
+      setActionResult({
+        action: "rejected",
+        item: result.item,
       });
     } catch (currentError) {
       setActionError(currentError instanceof Error ? currentError.message : "审批失败，请稍后重试。");
@@ -184,10 +216,18 @@ export function AdminApplicationsPage() {
                 <button
                   type="button"
                   className="button-shell button-shell--primary"
-                  disabled={submitting || selectedItem.status === "approved"}
+                  disabled={submitting || selectedItem.status !== "pending"}
                   onClick={handleApprove}
                 >
                   审批通过
+                </button>
+                <button
+                  type="button"
+                  className="button-shell"
+                  disabled={submitting || selectedItem.status !== "pending"}
+                  onClick={handleReject}
+                >
+                  拒绝审批
                 </button>
                 <button
                   type="button"
@@ -203,6 +243,7 @@ export function AdminApplicationsPage() {
                 </button>
               </div>
               {selectedItem.status === "approved" ? <p>该申请已经通过审批。</p> : null}
+              {selectedItem.status === "rejected" ? <p>该申请已经拒绝。</p> : null}
             </div>
           ) : (
             <p>请选择一条申请后再进行审批。</p>
@@ -238,10 +279,10 @@ export function AdminApplicationsPage() {
 
       {actionResult ? (
         <section className="section-card section-card--success">
-          <h3>审批已完成</h3>
+          <h3>{actionResult.action === "approved" ? "审批已完成" : "审批已拒绝"}</h3>
           <p>申请人：{actionResult.item.name}</p>
           <p>状态：{actionResult.item.status}</p>
-          <p>租户：{actionResult.tenantID}</p>
+          {actionResult.tenantID ? <p>租户：{actionResult.tenantID}</p> : null}
         </section>
       ) : null}
     </div>

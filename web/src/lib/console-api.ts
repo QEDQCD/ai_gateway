@@ -97,6 +97,11 @@ export type ApproveApplicationPayload = {
   tenant_id: string;
 };
 
+export type RejectApplicationPayload = {
+  actor_id: string;
+  comment: string;
+};
+
 export type ApplicationMutationResult = {
   item: ApplicationItem;
 };
@@ -382,6 +387,14 @@ export function getApplications() {
 
 export function approveApplication(id: string, payload: ApproveApplicationPayload) {
   return requestJson<ApplicationMutationResult>(`/api/admin/applications/${id}/approve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function rejectApplication(id: string, payload: RejectApplicationPayload) {
+  return requestJson<ApplicationMutationResult>(`/api/admin/applications/${id}/reject`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),

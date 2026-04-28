@@ -114,6 +114,11 @@ type ApproveApplicationRequest struct {
 	TenantID string `json:"tenant_id"`
 }
 
+type RejectApplicationRequest struct {
+	ActorID string `json:"actor_id"`
+	Comment string `json:"comment"`
+}
+
 type ApplicationMutationResult struct {
 	Item ApplicationItem `json:"item"`
 }
@@ -283,6 +288,7 @@ type ConsoleService interface {
 	Applications(ctx context.Context) (ApplicationsPageData, error)
 	CreateApplication(ctx context.Context, req CreateApplicationRequest) (ApplicationMutationResult, error)
 	ApproveApplication(ctx context.Context, id string, req ApproveApplicationRequest) (ApplicationMutationResult, error)
+	RejectApplication(ctx context.Context, id string, req RejectApplicationRequest) (ApplicationMutationResult, error)
 	APIKeys(ctx context.Context) (APIKeysPageData, error)
 	CreateAPIKey(ctx context.Context, req CreateAPIKeyRequest) (APIKeyMutationResult, error)
 	RotateAPIKey(ctx context.Context, id string, req RotateAPIKeyRequest) (APIKeyMutationResult, error)
@@ -345,6 +351,10 @@ func (unavailableConsoleService) CreateApplication(context.Context, CreateApplic
 }
 
 func (unavailableConsoleService) ApproveApplication(context.Context, string, ApproveApplicationRequest) (ApplicationMutationResult, error) {
+	return ApplicationMutationResult{}, ErrConsoleServiceUnavailable
+}
+
+func (unavailableConsoleService) RejectApplication(context.Context, string, RejectApplicationRequest) (ApplicationMutationResult, error) {
 	return ApplicationMutationResult{}, ErrConsoleServiceUnavailable
 }
 

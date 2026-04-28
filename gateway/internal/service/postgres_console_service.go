@@ -391,6 +391,70 @@ func (s postgresConsoleService) ApproveApplication(ctx context.Context, id strin
 	return ApplicationMutationResult{Item: item}, nil
 }
 
+func (s postgresConsoleService) RejectApplication(ctx context.Context, id string, req RejectApplicationRequest) (ApplicationMutationResult, error) {
+	applicationID := strings.TrimSpace(id)
+	actorID := strings.TrimSpace(req.ActorID)
+	comment := strings.TrimSpace(req.Comment)
+	if applicationID == "" {
+		return ApplicationMutationResult{}, StatusError{
+			Code:    http.StatusBadRequest,
+			Message: "application id is required",
+		}
+	}
+	if actorID == "" {
+		return ApplicationMutationResult{}, StatusError{
+			Code:    http.StatusBadRequest,
+			Message: "actor_id is required",
+		}
+	}
+
+	row := s.db.QueryRow(ctx, `
+		with updated_application as (
+			update account_applications
+			set
+				status = 'rejected',
+				reviewer_id = $2,
+				review_comment = $3,
+				reviewed_at = now()
+			where id = $1
+			  and status = 'pending'
+			returning id, email, name, company_name, use_case, status, created_at
+		),
+		inserted_audit as (
+			insert into audit_events (
+				id,
+				actor_type,
+				actor_user_id,
+				event_type,
+				target_type,
+				target_id,
+				detail
+			)
+			select
+				$4,
+				'admin',
+				$2,
+				'application_rejected',
+				'account_application',
+				id,
+				$3
+			from updated_application
+		)
+		select id, email, name, company_name, use_case, status, created_at
+		from updated_application;
+	`, applicationID, actorID, comment, newAuditEventID())
+
+	item, err := scanApplicationItem(row)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ApplicationMutationResult{}, s.mapRejectApplicationPendingError(ctx, applicationID)
+		}
+		return ApplicationMutationResult{}, mapRejectApplicationWriteError(err)
+	}
+
+	return ApplicationMutationResult{Item: item}, nil
+}
+
 func (s postgresConsoleService) APIKeys(ctx context.Context) (APIKeysPageData, error) {
 	rows, err := s.db.Query(ctx, `
 		with managed_keys as (
@@ -1790,6 +1854,10 @@ func (s postgresConsoleService) mapApproveApplicationPendingError(ctx context.Co
 	}
 }
 
+func (s postgresConsoleService) mapRejectApplicationPendingError(ctx context.Context, id string) error {
+	return s.mapApproveApplicationPendingError(ctx, id)
+}
+
 func mapApproveApplicationWriteError(err error) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
@@ -1798,6 +1866,28 @@ func mapApproveApplicationWriteError(err error) error {
 			return StatusError{
 				Code:    http.StatusBadRequest,
 				Message: "actor_id or tenant_id not found",
+				Err:     err,
+			}
+		case "23514":
+			return StatusError{
+				Code:    http.StatusBadRequest,
+				Message: "actor_id must reference an admin user",
+				Err:     err,
+			}
+		}
+	}
+
+	return err
+}
+
+func mapRejectApplicationWriteError(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		switch pgErr.Code {
+		case "23503":
+			return StatusError{
+				Code:    http.StatusBadRequest,
+				Message: "actor_id not found",
 				Err:     err,
 			}
 		case "23514":

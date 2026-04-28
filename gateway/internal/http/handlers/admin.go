@@ -69,6 +69,21 @@ func ConsoleApproveApplication(console service.ConsoleService) fiber.Handler {
 	}
 }
 
+func ConsoleRejectApplication(console service.ConsoleService) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		var req service.RejectApplicationRequest
+		if err := c.BodyParser(&req); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
+		}
+
+		payload, err := console.RejectApplication(c.UserContext(), c.Params("id"), req)
+		if err != nil {
+			return consoleError(err)
+		}
+		return c.JSON(payload)
+	}
+}
+
 func ConsoleAPIKeys(console service.ConsoleService) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		payload, err := console.APIKeys(c.UserContext())
