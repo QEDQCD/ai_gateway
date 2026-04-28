@@ -4,7 +4,10 @@ import { ErrorSection, LoadingSection } from "../components/console";
 import {
   type APIKeyItem,
   type APIKeyMutationResult,
+  type APIKeySecretView,
   type APIKeyScope,
+  copyAPIKeySecret,
+  copyMemberAPIKeySecret,
   createAPIKey,
   createMemberAPIKey,
   deactivateAPIKey,
@@ -12,6 +15,8 @@ import {
   deleteAPIKey,
   getAPIKeys,
   getMemberAPIKeys,
+  revealAPIKeySecret,
+  revealMemberAPIKeySecret,
   rotateAPIKey,
   rotateMemberAPIKey,
 } from "../lib/console-api";
@@ -29,6 +34,16 @@ function maskAPIKey(rawKey: string) {
   }
 
   return `${rawKey.slice(0, 4)}••••••••${rawKey.slice(-4)}`;
+}
+
+function buildSecretViewFromRawKey(item: APIKeyItem, rawKey: string): APIKeySecretView {
+  return {
+    api_key_id: item.id,
+    masked_key: maskAPIKey(rawKey),
+    revealable: true,
+    legacy_unrecoverable: false,
+    expires_at: item.expires_at,
+  };
 }
 
 type CopyMethod = "clipboard" | "execCommand" | "manual";
@@ -73,7 +88,13 @@ async function copyTextWithFallback(value: string): Promise<CopyMethod> {
     const execCommand = (
       document as Document & { execCommand?: (command: string) => boolean }
     ).execCommand;
-    copied = execCommand?.("copy") ?? false;
+    if (typeof execCommand === "function") {
+      try {
+        copied = execCommand.call(document, "copy");
+      } catch {
+        copied = false;
+      }
+    }
   } finally {
     document.body.removeChild(textarea);
   }
@@ -82,7 +103,11 @@ async function copyTextWithFallback(value: string): Promise<CopyMethod> {
     return "execCommand";
   }
 
-  prompt("浏览器自动复制不可用，请手动复制完整密钥：", value);
+  try {
+    globalThis.prompt?.("浏览器自动复制不可用，请手动复制完整密钥：", value);
+  } catch {
+    // Ignore prompt restrictions and still surface manual copy guidance in UI.
+  }
   return "manual";
 }
 
@@ -173,7 +198,11 @@ export function APIKeysPage() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionResult, setActionResult] = useState<APIKeyMutationResult | null>(null);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
-  const [copyNotice, setCopyNotice] = useState<string | null>(null);
+  const [selectedSecret, setSelectedSecret] = useState<APIKeySecretView | null>(null);
+  const [secretLoading, setSecretLoading] = useState(false);
+  const [secretError, setSecretError] = useState<string | null>(null);
+  const [selectedCopyNotice, setSelectedCopyNotice] = useState<string | null>(null);
+  const [resultCopyNotice, setResultCopyNotice] = useState<string | null>(null);
   const actionResultRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
@@ -204,6 +233,17 @@ export function APIKeysPage() {
     }
   }, [actionNotice, actionResult]);
 
+  useEffect(() => {
+    setSelectedSecret((current) => {
+      if (!selectedID || current?.api_key_id !== selectedID) {
+        return null;
+      }
+      return current;
+    });
+    setSecretError(null);
+    setSelectedCopyNotice(null);
+  }, [selectedID]);
+
   if (loading) {
     return <LoadingSection text="正在加载 API 密钥..." />;
   }
@@ -213,12 +253,16 @@ export function APIKeysPage() {
   }
 
   const selectedItem = items.find((item) => item.id === selectedID) ?? null;
+  const selectedSecretForItem =
+    selectedItem && selectedSecret?.api_key_id === selectedItem.id ? selectedSecret : null;
 
   function resetFeedback() {
     setActionError(null);
     setActionResult(null);
     setActionNotice(null);
-    setCopyNotice(null);
+    setSecretError(null);
+    setSelectedCopyNotice(null);
+    setResultCopyNotice(null);
   }
 
   function toggleScope(scope: APIKeyScope) {
@@ -279,13 +323,72 @@ export function APIKeysPage() {
 
     try {
       const copyMethod = await copyTextWithFallback(actionResult.raw_key);
-      setCopyNotice(
+      setSelectedCopyNotice(null);
+      setResultCopyNotice(
         copyMethod === "manual"
           ? "浏览器自动复制不可用，请在弹窗中手动复制完整密钥。"
           : "完整密钥已复制到剪贴板。",
       );
     } catch {
-      setCopyNotice("复制失败，请重试。");
+      setResultCopyNotice("复制失败，请重试。");
+    }
+  }
+
+  async function handleRevealSecret() {
+    if (!selectedItem) {
+      return;
+    }
+
+    try {
+      setSecretLoading(true);
+      setSecretError(null);
+      setSelectedCopyNotice(null);
+      const secret = isAdmin
+        ? await revealAPIKeySecret(selectedItem.id)
+        : await revealMemberAPIKeySecret(selectedItem.id);
+      setSelectedSecret(secret);
+      if (secret.legacy_unrecoverable) {
+        setSecretError("该历史密钥不可回显，请执行轮换后再复制。");
+      }
+    } catch (currentError) {
+      setSecretError(currentError instanceof Error ? currentError.message : "密钥加载失败。");
+    } finally {
+      setSecretLoading(false);
+    }
+  }
+
+  async function handleCopySelectedSecret() {
+    if (!selectedItem) {
+      return;
+    }
+
+    try {
+      setSecretLoading(true);
+      setSecretError(null);
+      setSelectedCopyNotice(null);
+      setResultCopyNotice(null);
+      const secret = isAdmin
+        ? await copyAPIKeySecret(selectedItem.id)
+        : await copyMemberAPIKeySecret(selectedItem.id);
+      setSelectedSecret(secret);
+
+      if (!secret.revealable || !secret.full_key) {
+        setSelectedCopyNotice("该历史密钥不可回显，请先轮换后再复制。");
+        return;
+      }
+
+      const copyMethod = await copyTextWithFallback(secret.full_key);
+      setSelectedCopyNotice(
+        copyMethod === "manual"
+          ? "浏览器自动复制不可用，请在弹窗中手动复制完整密钥。"
+          : "完整密钥已复制到剪贴板。",
+      );
+    } catch (currentError) {
+      setSelectedCopyNotice(
+        currentError instanceof Error ? currentError.message : "复制失败，请重试。",
+      );
+    } finally {
+      setSecretLoading(false);
     }
   }
 
@@ -293,7 +396,8 @@ export function APIKeysPage() {
     try {
       setSubmitting(true);
       setActionError(null);
-      setCopyNotice(null);
+      setSelectedCopyNotice(null);
+      setResultCopyNotice(null);
 
       if ((actionMode === "create" || actionMode === "rotate") && selectedScopes.length < 1) {
         setActionError("至少选择 1 项权限范围。");
@@ -315,6 +419,9 @@ export function APIKeysPage() {
         setSelectedID(result.item.id);
         setActionResult(result);
         setActionNotice("新建密钥已完成");
+        if (result.raw_key) {
+          setSelectedSecret(buildSecretViewFromRawKey(result.item, result.raw_key));
+        }
         setActionMode(null);
         return;
       }
@@ -338,6 +445,9 @@ export function APIKeysPage() {
         setSelectedID(result.item.id);
         setActionResult(result);
         setActionNotice("轮换操作已完成");
+        if (result.raw_key) {
+          setSelectedSecret(buildSecretViewFromRawKey(result.item, result.raw_key));
+        }
         setActionMode(null);
         return;
       }
@@ -351,6 +461,9 @@ export function APIKeysPage() {
         );
         setActionResult(result);
         setActionNotice("停用操作已完成");
+        if (selectedSecret?.api_key_id === selectedItem.id) {
+          setSelectedSecret((current) => (current ? { ...current, expires_at: result.item.expires_at } : null));
+        }
         setActionMode(null);
         return;
       }
@@ -367,6 +480,7 @@ export function APIKeysPage() {
         });
         setActionResult(result);
         setActionNotice("删除操作已完成");
+        setSelectedSecret(null);
         setActionMode(null);
       }
     } catch (currentError) {
@@ -457,6 +571,58 @@ export function APIKeysPage() {
         </table>
       </section>
 
+      <section aria-label="已选密钥详情" className="section-card api-key-detail-card">
+        <div className="section-card__header">
+          <div>
+            <p className="api-key-detail-card__eyebrow">已选密钥</p>
+            <h3>{selectedItem?.name ?? "未选择密钥"}</h3>
+          </div>
+          <p>{selectedItem ? `${selectedItem.tenant} / ${selectedItem.status}` : "请选择左侧密钥"}</p>
+        </div>
+        <div className="detail-list">
+          <div className="detail-list__row">
+            <dt>权限范围</dt>
+            <dd>{selectedItem ? selectedItem.scopes.join(" / ") : "-"}</dd>
+          </div>
+          <div className="detail-list__row">
+            <dt>到期时间</dt>
+            <dd>{selectedItem?.expires_at ?? selectedSecretForItem?.expires_at ?? "-"}</dd>
+          </div>
+          <div className="detail-list__row">
+            <dt>创建人</dt>
+            <dd>{selectedItem?.created_by_user_id || selectedItem?.owner_user_id || "-"}</dd>
+          </div>
+          <div className="detail-list__row">
+            <dt>密钥摘要</dt>
+            <dd className="secret-text">
+              {selectedSecretForItem?.full_key
+                ? selectedSecretForItem.full_key
+                : selectedSecretForItem?.masked_key ?? "点击显示完整密钥后加载"}
+            </dd>
+          </div>
+        </div>
+        <div className="page-actions">
+          <button
+            type="button"
+            className="button-shell button-shell--primary"
+            disabled={!selectedItem || secretLoading}
+            onClick={handleRevealSecret}
+          >
+            {secretLoading ? "加载中..." : "显示完整密钥"}
+          </button>
+          <button
+            type="button"
+            className="button-shell"
+            disabled={!selectedItem || secretLoading}
+            onClick={handleCopySelectedSecret}
+          >
+            {secretLoading ? "复制中..." : "复制完整密钥"}
+          </button>
+        </div>
+        {secretError ? <p className="form-error">{secretError}</p> : null}
+        {selectedCopyNotice ? <p>{selectedCopyNotice}</p> : null}
+      </section>
+
       {actionMode ? (
         <section className="section-card">
           <h3>
@@ -531,7 +697,11 @@ export function APIKeysPage() {
       ) : null}
 
       {actionResult || actionNotice ? (
-        <section ref={actionResultRef} className="section-card section-card--success">
+        <section
+          ref={actionResultRef}
+          aria-label="最近操作结果"
+          className="section-card section-card--success"
+        >
           <h3>{actionNotice ?? "操作结果"}</h3>
           <p>名称：{actionResult?.item.name}</p>
           <p>状态：{actionResult?.item.status}</p>
@@ -539,11 +709,11 @@ export function APIKeysPage() {
             <div className="api-key-secret">
               <p className="secret-text">一次性密钥：{maskAPIKey(actionResult.raw_key)}</p>
               <button type="button" className="button-shell" onClick={handleCopyRawKey}>
-                复制完整密钥
+                复制本次完整密钥
               </button>
             </div>
           ) : null}
-          {copyNotice ? <p>{copyNotice}</p> : null}
+          {resultCopyNotice ? <p>{resultCopyNotice}</p> : null}
         </section>
       ) : null}
 

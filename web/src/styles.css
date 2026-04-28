@@ -757,6 +757,63 @@ a {
   word-break: break-all;
 }
 
+.api-key-detail-card {
+  border: 1px solid rgba(138, 169, 196, 0.24);
+  background:
+    radial-gradient(circle at top left, rgba(80, 174, 255, 0.12), transparent 34%),
+    linear-gradient(180deg, rgba(7, 16, 28, 0.92), rgba(9, 22, 36, 0.88));
+  color: #eef5ff;
+  box-shadow: 0 24px 80px rgba(4, 12, 24, 0.18);
+}
+
+.api-key-detail-card .detail-list__row dt,
+.api-key-detail-card .detail-list__row dd,
+.api-key-detail-card .section-card__header p,
+.api-key-detail-card .section-card__header h3 {
+  color: inherit;
+}
+
+.api-key-detail-card__eyebrow {
+  margin: 0 0 8px;
+  font-size: 12px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #8bb8ff;
+}
+
+.quota-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.quota-card {
+  display: grid;
+  gap: 8px;
+  background:
+    radial-gradient(circle at top left, rgba(80, 174, 255, 0.18), rgba(6, 18, 30, 0.94));
+  border: 1px solid rgba(115, 157, 198, 0.22);
+  border-radius: 20px;
+  padding: 20px;
+  color: #eef5ff;
+}
+
+.quota-card span {
+  color: #8bb8ff;
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.quota-card strong {
+  font-size: 26px;
+  line-height: 1.1;
+}
+
+.quota-card p {
+  color: rgba(238, 245, 255, 0.82);
+}
+
 .usage-wall__toolbar,
 .usage-wall__legend {
   display: flex;

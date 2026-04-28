@@ -12,6 +12,12 @@ type TenantSummary = {
   sampleKeyName: string;
 };
 
+const numberFormatter = new Intl.NumberFormat("zh-CN");
+
+function formatNumber(value: number | undefined) {
+  return numberFormatter.format(value ?? 0);
+}
+
 function buildTenantSummaries(items: Awaited<ReturnType<typeof getAPIKeys>>["items"]): TenantSummary[] {
   const map = new Map<string, TenantSummary>();
 
@@ -145,6 +151,32 @@ export function AdminTenantsPage() {
           </div>
         </section>
       </div>
+
+      {data.overview.quota_summary?.configured ? (
+        <section className="quota-summary-grid">
+          <article className="quota-card">
+            <span>平台月请求额度</span>
+            <strong>
+              {formatNumber(data.overview.quota_summary.requests_used)} /{" "}
+              {formatNumber(data.overview.quota_summary.request_limit)}
+            </strong>
+            <p>
+              剩余 {formatNumber(data.overview.quota_summary.requests_remaining)}
+              {data.overview.quota_summary.resets_at
+                ? `，重置时间 ${data.overview.quota_summary.resets_at}`
+                : ""}
+            </p>
+          </article>
+          <article className="quota-card">
+            <span>平台月 Token 额度</span>
+            <strong>
+              {formatNumber(data.overview.quota_summary.tokens_used)} /{" "}
+              {formatNumber(data.overview.quota_summary.token_limit)}
+            </strong>
+            <p>剩余 {formatNumber(data.overview.quota_summary.tokens_remaining)}</p>
+          </article>
+        </section>
+      ) : null}
     </div>
   );
 }

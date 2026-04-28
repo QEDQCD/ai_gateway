@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { RouterProvider, createMemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -179,6 +179,16 @@ describe("控制台路由", () => {
         tenant_id: "tenant_demo",
         tenant_name: "Demo Tenant",
         active_api_keys: 1,
+        quota: {
+          configured: true,
+          request_limit: 500000,
+          requests_used: 120000,
+          requests_remaining: 380000,
+          token_limit: 10000000,
+          tokens_used: 2400000,
+          tokens_remaining: 7600000,
+          resets_at: "2026-05-01T00:00:00+08:00",
+        },
       },
     });
 
@@ -188,6 +198,35 @@ describe("控制台路由", () => {
 
     expect(await screen.findByRole("heading", { level: 1, name: "我的总览" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "我的总览" })).toHaveAttribute("aria-current", "page");
+  });
+
+  test("member 总览页展示真实租户额度卡片", async () => {
+    mockSession({ role: "member", tenant_id: "tenant_demo", user_id: "user_member_a" });
+    mockFetch({
+      "/api/me/overview": {
+        tenant_id: "tenant_demo",
+        tenant_name: "Demo Tenant",
+        active_api_keys: 2,
+        quota: {
+          configured: true,
+          request_limit: 500000,
+          requests_used: 120000,
+          requests_remaining: 380000,
+          token_limit: 10000000,
+          tokens_used: 2400000,
+          tokens_remaining: 7600000,
+          resets_at: "2026-05-01T00:00:00+08:00",
+        },
+      },
+    });
+
+    render(
+      <RouterProvider router={createTestRouter(["/me"])} future={{ v7_startTransition: true }} />,
+    );
+
+    expect(await screen.findByText("本月请求额度")).toBeInTheDocument();
+    expect(screen.getByText("120,000 / 500,000")).toBeInTheDocument();
+    expect(screen.getByText("2,400,000 / 10,000,000")).toBeInTheDocument();
   });
 
   test("AppLayout 在空导航时使用安全兜底元信息", async () => {
@@ -299,9 +338,63 @@ describe("控制台路由", () => {
     renderRoute("/api-keys");
 
     expect(await screen.findByRole("heading", { level: 1, name: "API 密钥" })).toBeInTheDocument();
-    expect(await screen.findByText("生产网关")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "选择 生产网关" })).toBeInTheDocument();
     expect(screen.getByText("平台密钥与上游凭证分离管理。")).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith("/api/admin/api-keys");
+  });
+
+  test("API 密钥页展示稳定详情区并支持历史密钥回显复制", async () => {
+    mockFetch({
+      "/api/admin/api-keys": {
+        items: [
+          {
+            id: "pak_live_console",
+            name: "生产网关",
+            tenant: "tenant_alpha",
+            status: "启用",
+            scopes: ["chat"],
+            last_used_at: "2026-04-28T10:00:00+08:00",
+            created_by_user_id: "user_admin_demo",
+            expires_at: "2026-05-28T10:00:00+08:00",
+          },
+        ],
+      },
+      "/api/admin/api-keys/pak_live_console/secret": {
+        api_key_id: "pak_live_console",
+        masked_key: "agw_••••••••demo",
+        full_key: "agw-live-secret",
+        revealable: true,
+        legacy_unrecoverable: false,
+        expires_at: "2026-05-28T10:00:00+08:00",
+      },
+      "/api/admin/api-keys/pak_live_console/secret/copy": {
+        api_key_id: "pak_live_console",
+        masked_key: "agw_••••••••demo",
+        full_key: "agw-live-secret",
+        revealable: true,
+        legacy_unrecoverable: false,
+        expires_at: "2026-05-28T10:00:00+08:00",
+      },
+    });
+
+    const clipboardWriteText = vi.fn(async () => undefined);
+    vi.stubGlobal("navigator", {
+      clipboard: {
+        writeText: clipboardWriteText,
+      },
+    });
+
+    renderRoute("/api-keys");
+
+    const detailSection = await screen.findByLabelText("已选密钥详情");
+    fireEvent.click(within(detailSection).getByRole("button", { name: "显示完整密钥" }));
+    expect(await within(detailSection).findByText("agw-live-secret")).toBeInTheDocument();
+
+    fireEvent.click(within(detailSection).getByRole("button", { name: "复制完整密钥" }));
+    await waitFor(() => {
+      expect(clipboardWriteText).toHaveBeenCalledWith("agw-live-secret");
+    });
+    expect(await screen.findByText("完整密钥已复制到剪贴板。")).toBeInTheDocument();
   });
 
   test("API 密钥页新建后只展示脱敏值并可复制完整密钥", async () => {
@@ -375,16 +468,18 @@ describe("控制台路由", () => {
       screen.getByText((content) => content.includes("一次性密钥：") && content.includes("••••")),
     ).toBeInTheDocument();
     expect(document.body).not.toHaveTextContent("ak_live_new_secret");
-    fireEvent.click(screen.getByRole("button", { name: "复制完整密钥" }));
+    fireEvent.click(screen.getByRole("button", { name: "复制本次完整密钥" }));
     await waitFor(() => {
       expect(writeText).toHaveBeenCalledWith("ak_live_new_secret");
       expect(screen.getByText("完整密钥已复制到剪贴板。")).toBeInTheDocument();
     });
-    expect(screen.getByText("new-key")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "选择 new-key" })).toBeInTheDocument();
   });
 
   test("API 密钥页在无 navigator.clipboard 时也能回退复制完整密钥", async () => {
-    const execCommand = vi.fn().mockReturnValue(true);
+    const execCommand = vi.fn(function (this: unknown, command: string) {
+      return this === document && command === "copy";
+    });
     Object.defineProperty(document, "execCommand", {
       value: execCommand,
       configurable: true,
@@ -445,7 +540,7 @@ describe("控制台路由", () => {
     fireEvent.click(screen.getByRole("button", { name: "确认创建" }));
 
     expect(await screen.findByText("新建密钥已完成")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "复制完整密钥" }));
+    fireEvent.click(screen.getByRole("button", { name: "复制本次完整密钥" }));
 
     await waitFor(() => {
       expect(execCommand).toHaveBeenCalledWith("copy");
@@ -455,7 +550,9 @@ describe("控制台路由", () => {
 
   test("API 密钥页在 clipboard.writeText 被拒绝时也会继续回退复制", async () => {
     const writeText = vi.fn().mockRejectedValue(new Error("NotAllowedError"));
-    const execCommand = vi.fn().mockReturnValue(true);
+    const execCommand = vi.fn(function (this: unknown, command: string) {
+      return this === document && command === "copy";
+    });
     Object.defineProperty(document, "execCommand", {
       value: execCommand,
       configurable: true,
@@ -518,7 +615,7 @@ describe("控制台路由", () => {
     fireEvent.click(screen.getByRole("button", { name: "确认创建" }));
 
     expect(await screen.findByText("新建密钥已完成")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "复制完整密钥" }));
+    fireEvent.click(screen.getByRole("button", { name: "复制本次完整密钥" }));
 
     await waitFor(() => {
       expect(writeText).toHaveBeenCalledWith("ak_live_clipboard_reject_secret");
@@ -529,7 +626,9 @@ describe("控制台路由", () => {
 
   test("API 密钥页在自动复制全部失败时会回退到人工复制完整密钥", async () => {
     const writeText = vi.fn().mockRejectedValue(new Error("NotAllowedError"));
-    const execCommand = vi.fn().mockReturnValue(false);
+    const execCommand = vi.fn(function (this: unknown, command: string) {
+      return this === document && command === "copy" ? false : false;
+    });
     const promptMock = vi.fn().mockReturnValue("");
     Object.defineProperty(document, "execCommand", {
       value: execCommand,
@@ -594,7 +693,7 @@ describe("控制台路由", () => {
     fireEvent.click(screen.getByRole("button", { name: "确认创建" }));
 
     expect(await screen.findByText("新建密钥已完成")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "复制完整密钥" }));
+    fireEvent.click(screen.getByRole("button", { name: "复制本次完整密钥" }));
 
     await waitFor(() => {
       expect(writeText).toHaveBeenCalledWith("ak_live_manual_copy_secret");
@@ -687,12 +786,12 @@ describe("控制台路由", () => {
 
     expect(await screen.findByText("轮换操作已完成")).toBeInTheDocument();
     expect(document.body).not.toHaveTextContent("ak_live_rotated_secret");
-    fireEvent.click(screen.getByRole("button", { name: "复制完整密钥" }));
+    fireEvent.click(screen.getByRole("button", { name: "复制本次完整密钥" }));
     await waitFor(() => {
       expect(writeText).toHaveBeenCalledWith("ak_live_rotated_secret");
       expect(screen.getByText("完整密钥已复制到剪贴板。")).toBeInTheDocument();
     });
-    expect(screen.getByText("生产网关-轮换")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "选择 生产网关-轮换" })).toBeInTheDocument();
   });
 
   test("API 密钥页可以切换权限范围并删除未使用密钥", async () => {
@@ -785,7 +884,7 @@ describe("控制台路由", () => {
     fireEvent.click(screen.getByLabelText("rag"));
     fireEvent.click(screen.getByRole("button", { name: "确认创建" }));
 
-    expect(await screen.findByText("scope-test")).toBeInTheDocument();
+    expect(await screen.findByText("名称：scope-test")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "选择 unused-key" }));
     fireEvent.click(screen.getByRole("button", { name: "删除密钥" }));
@@ -1288,7 +1387,10 @@ describe("控制台路由", () => {
 
   test("member API 密钥页在透明复制受限的浏览器中也能复制完整密钥", async () => {
     const writeText = vi.fn().mockRejectedValue(new Error("NotAllowedError"));
-    const execCommand = vi.fn().mockImplementation((command: string) => {
+    const execCommand = vi.fn(function (this: unknown, command: string) {
+      if (this !== document) {
+        return false;
+      }
       if (command !== "copy") {
         return false;
       }
@@ -1355,7 +1457,7 @@ describe("控制台路由", () => {
     fireEvent.click(screen.getByRole("button", { name: "确认创建" }));
 
     expect(await screen.findByText("新建密钥已完成")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "复制完整密钥" }));
+    fireEvent.click(screen.getByRole("button", { name: "复制本次完整密钥" }));
 
     await waitFor(() => {
       expect(writeText).toHaveBeenCalledWith("mk_copy_secret");
@@ -1452,7 +1554,7 @@ describe("控制台路由", () => {
       "/api/me/api-keys/mk_live/rotate",
       expect.objectContaining({ method: "POST" }),
     );
-    expect(screen.getByText("member-rotated-key")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "选择 member-rotated-key" })).toBeInTheDocument();
     expect(screen.getAllByText("停用").length).toBeGreaterThan(0);
     expect(screen.getByText("名称：member-rotated-key")).toBeInTheDocument();
 

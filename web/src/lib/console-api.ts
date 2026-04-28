@@ -15,6 +15,20 @@ export type OverviewPageData = {
   top_models: TableRow[];
   recent_alerts: TableRow[];
   audit_snapshot: TableRow[];
+  quota_summary?: TenantQuotaSummary;
+};
+
+export type TenantQuotaSummary = {
+  configured?: boolean;
+  request_limit: number;
+  requests_used: number;
+  requests_remaining: number;
+  token_limit: number;
+  tokens_used: number;
+  tokens_remaining: number;
+  period_start?: string;
+  period_end?: string;
+  resets_at: string;
 };
 
 export type ConsoleSystemStatus = {
@@ -36,6 +50,10 @@ export type APIKeyItem = {
   scopes: APIKeyScope[];
   last_used_at: string;
   owner_user_id?: string;
+  created_by_user_id?: string;
+  expires_at?: string;
+  revealable?: boolean;
+  legacy_unrecoverable?: boolean;
 };
 
 export type APIKeysPageData = {
@@ -234,6 +252,7 @@ export type MemberOverviewPageData = {
   tenant_id: string;
   tenant_name: string;
   active_api_keys: number;
+  quota?: TenantQuotaSummary;
 };
 
 export type MemberAuditItem = {
