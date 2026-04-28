@@ -359,6 +359,7 @@ func TestPostgresConsoleServiceApplicationsReturnsPendingRows(t *testing.T) {
 		insert into account_applications (
 			id,
 			email,
+			email_normalized,
 			name,
 			company_name,
 			use_case,
@@ -370,6 +371,7 @@ func TestPostgresConsoleServiceApplicationsReturnsPendingRows(t *testing.T) {
 		) values
 			(
 				'app_demo_pending',
+				'pending@example.com',
 				'pending@example.com',
 				'待审批用户',
 				'Pending Co',
@@ -383,6 +385,7 @@ func TestPostgresConsoleServiceApplicationsReturnsPendingRows(t *testing.T) {
 			(
 				'app_demo_rejected',
 				'rejected@example.com',
+				'rejected@example.com',
 				'已拒绝用户',
 				'Rejected Co',
 				'压测脚本',
@@ -394,6 +397,7 @@ func TestPostgresConsoleServiceApplicationsReturnsPendingRows(t *testing.T) {
 			),
 			(
 				'app_demo_approved',
+				'approved@example.com',
 				'approved@example.com',
 				'已审批用户',
 				'Approved Co',
@@ -879,6 +883,89 @@ func TestPostgresConsoleServiceApproveApplicationCreatesUserMembershipAndAudit(t
 	}
 	if auditCount != 1 {
 		t.Fatalf("expected 1 approval audit event, got %d", auditCount)
+	}
+}
+
+func TestPostgresConsoleServiceApproveApplicationCreatesTenantWhenMissing(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte("Example1234"), bcrypt.DefaultCost)
+	if err != nil {
+		t.Fatalf("GenerateFromPassword failed: %v", err)
+	}
+
+	if _, err := conn.Exec(ctx, `
+		insert into account_applications (
+			id,
+			email,
+			email_normalized,
+			name,
+			company_name,
+			use_case,
+			password_hash,
+			status,
+			created_at
+		) values (
+			'app_create_tenant_pending',
+			'create-tenant@example.com',
+			'create-tenant@example.com',
+			'新租户申请用户',
+			'Create Tenant Co',
+			'新租户接入',
+			$1,
+			'pending',
+			timestamptz '2026-04-25T01:02:03Z'
+		)
+	`, string(passwordHash)); err != nil {
+		t.Fatalf("seed create tenant application failed: %v", err)
+	}
+
+	result, err := console.ApproveApplication(ctx, "app_create_tenant_pending", service.ApproveApplicationRequest{
+		ActorID:  "user_admin_demo",
+		Comment:  "approved with new tenant",
+		TenantID: "tenant_create_tenant_co",
+	})
+	if err != nil {
+		t.Fatalf("ApproveApplication failed: %v", err)
+	}
+
+	if result.Item.Status != "approved" {
+		t.Fatalf("expected item status %q, got %q", "approved", result.Item.Status)
+	}
+
+	var tenantName string
+	var tenantStatus string
+	if err := conn.QueryRow(ctx, `
+		select name, status
+		from tenants
+		where id = 'tenant_create_tenant_co'
+	`).Scan(&tenantName, &tenantStatus); err != nil {
+		t.Fatalf("select created tenant failed: %v", err)
+	}
+	if tenantName != "Create Tenant Co" {
+		t.Fatalf("expected tenant name %q, got %q", "Create Tenant Co", tenantName)
+	}
+	if tenantStatus != "active" {
+		t.Fatalf("expected tenant status %q, got %q", "active", tenantStatus)
+	}
+
+	var membershipCount int
+	if err := conn.QueryRow(ctx, `
+		select count(*)
+		from tenant_memberships
+		where tenant_id = 'tenant_create_tenant_co'
+			and role = 'member'
+			and status = 'active'
+	`).Scan(&membershipCount); err != nil {
+		t.Fatalf("select created tenant membership failed: %v", err)
+	}
+	if membershipCount != 1 {
+		t.Fatalf("expected 1 active membership for created tenant, got %d", membershipCount)
 	}
 }
 

@@ -443,6 +443,18 @@ func (s postgresConsoleService) ApproveApplication(ctx context.Context, id strin
 				account_applications.status,
 				selected_application.created_at
 		),
+		upserted_tenant as (
+			insert into tenants (id, name, status)
+			select
+				$5,
+				case
+					when company_name <> '' then company_name
+					else name
+				end,
+				'active'
+			from updated_application
+			on conflict (id) do nothing
+		),
 		upserted_user as (
 			insert into users (id, email, name, role, status, password_hash)
 			select $4, email, name, 'member', 'active', password_hash
