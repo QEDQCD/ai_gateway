@@ -1033,6 +1033,36 @@ describe("控制台路由", () => {
     expect(fetchMock).toHaveBeenCalledWith("/api/me/overview");
   });
 
+  test("member 总览请求会携带控制台会话头", async () => {
+    const sessionToken = "session_token_demo";
+    mockSession({
+      role: "member",
+      tenant_id: "tenant_demo",
+      user_id: "user_member_a",
+      token: sessionToken,
+    });
+    const fetchMock = mockFetch(
+      {
+        "/api/me/overview": {
+          tenant_id: "tenant_demo",
+          tenant_name: "Demo Tenant",
+          active_api_keys: 2,
+        },
+      },
+      {
+        "/api/me/overview": (init) => {
+          const headers = new Headers(init?.headers);
+          expect(headers.get("X-Console-Session")).toBe(sessionToken);
+        },
+      },
+    );
+
+    renderRoute("/me");
+
+    expect((await screen.findAllByText("Demo Tenant")).length).toBeGreaterThan(0);
+    expect(fetchMock).toHaveBeenCalledWith("/api/me/overview", expect.any(Object));
+  });
+
   test("member API 密钥页走 /me 接口且不显示租户输入或删除操作", async () => {
     mockSession({ role: "member", tenant_id: "tenant_demo", user_id: "user_member_a" });
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

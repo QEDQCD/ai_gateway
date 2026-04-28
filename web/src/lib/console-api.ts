@@ -291,14 +291,20 @@ function toPlaygroundRun(value: unknown): PlaygroundRunResponse {
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   const session = getConsoleSession();
-  const headers = new Headers(init?.headers);
+  let response: Response;
 
   if (session?.token) {
+    const headers = new Headers(init?.headers);
     headers.set("X-Console-Session", session.token);
+    response = await fetch(path, {
+      ...(init ?? {}),
+      headers: Object.fromEntries(headers.entries()),
+    });
+  } else if (init) {
+    response = await fetch(path, init);
+  } else {
+    response = await fetch(path);
   }
-
-  const requestInit = headers.size > 0 ? { ...(init ?? {}), headers: Object.fromEntries(headers.entries()) } : init;
-  const response = requestInit ? await fetch(path, requestInit) : await fetch(path);
 
   if (!response.ok) {
     let detail = "";
