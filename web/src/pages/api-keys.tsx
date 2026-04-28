@@ -31,7 +31,9 @@ function maskAPIKey(rawKey: string) {
   return `${rawKey.slice(0, 4)}••••••••${rawKey.slice(-4)}`;
 }
 
-async function copyTextWithFallback(value: string) {
+type CopyMethod = "clipboard" | "execCommand" | "manual";
+
+async function copyTextWithFallback(value: string): Promise<CopyMethod> {
   if (
     typeof navigator !== "undefined" &&
     "clipboard" in navigator &&
@@ -40,7 +42,7 @@ async function copyTextWithFallback(value: string) {
   ) {
     try {
       await navigator.clipboard.writeText(value);
-      return;
+      return "clipboard";
     } catch {
       // Some browsers expose the API but reject in non-secure or restricted contexts.
     }
@@ -61,19 +63,27 @@ async function copyTextWithFallback(value: string) {
   textarea.style.boxShadow = "none";
   textarea.style.background = "transparent";
   document.body.appendChild(textarea);
-  textarea.focus();
-  textarea.select();
-  textarea.setSelectionRange(0, textarea.value.length);
+  let copied = false;
 
-  const execCommand = (
-    document as Document & { execCommand?: (command: string) => boolean }
-  ).execCommand;
-  const copied = execCommand?.("copy") ?? false;
-  document.body.removeChild(textarea);
+  try {
+    textarea.focus();
+    textarea.select();
+    textarea.setSelectionRange(0, textarea.value.length);
 
-  if (!copied) {
-    throw new Error("copy failed");
+    const execCommand = (
+      document as Document & { execCommand?: (command: string) => boolean }
+    ).execCommand;
+    copied = execCommand?.("copy") ?? false;
+  } finally {
+    document.body.removeChild(textarea);
   }
+
+  if (copied) {
+    return "execCommand";
+  }
+
+  prompt("浏览器自动复制不可用，请手动复制完整密钥：", value);
+  return "manual";
 }
 
 function getSubmitLabel(actionMode: Exclude<ActionMode, null>, submitting: boolean) {
@@ -268,8 +278,12 @@ export function APIKeysPage() {
     }
 
     try {
-      await copyTextWithFallback(actionResult.raw_key);
-      setCopyNotice("完整密钥已复制到剪贴板。");
+      const copyMethod = await copyTextWithFallback(actionResult.raw_key);
+      setCopyNotice(
+        copyMethod === "manual"
+          ? "浏览器自动复制不可用，请在弹窗中手动复制完整密钥。"
+          : "完整密钥已复制到剪贴板。",
+      );
     } catch {
       setCopyNotice("复制失败，请重试。");
     }

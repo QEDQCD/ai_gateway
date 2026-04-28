@@ -527,6 +527,89 @@ describe("控制台路由", () => {
     });
   });
 
+  test("API 密钥页在自动复制全部失败时会回退到人工复制完整密钥", async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error("NotAllowedError"));
+    const execCommand = vi.fn().mockReturnValue(false);
+    const promptMock = vi.fn().mockReturnValue("");
+    Object.defineProperty(document, "execCommand", {
+      value: execCommand,
+      configurable: true,
+    });
+    vi.stubGlobal("navigator", {
+      clipboard: { writeText },
+    });
+    vi.stubGlobal("prompt", promptMock);
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+
+      if (url === "/api/admin/system/status") {
+        return new Response(JSON.stringify(defaultSystemStatus()), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url === "/api/admin/api-keys" && !init?.method) {
+        return new Response(
+          JSON.stringify({
+            items: [],
+            credential_mode: "平台 API Key 与上游凭据分离",
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+      if (url === "/api/admin/api-keys" && init?.method === "POST") {
+        return new Response(
+          JSON.stringify({
+            item: {
+              id: "pak_new",
+              name: "manual-copy-key",
+              tenant: "tenant_alpha",
+              status: "启用",
+              scopes: ["chat"],
+              last_used_at: "2026-04-24T12:00:00+08:00",
+            },
+            raw_key: "ak_live_manual_copy_secret",
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+
+      throw new Error(`Unexpected fetch url: ${url}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderRoute("/api-keys");
+
+    fireEvent.click(await screen.findByRole("button", { name: "新建密钥" }));
+    fireEvent.change(screen.getByLabelText("租户 ID"), { target: { value: "tenant_alpha" } });
+    fireEvent.change(screen.getByLabelText("名称"), { target: { value: "manual-copy-key" } });
+    fireEvent.click(screen.getByRole("button", { name: "确认创建" }));
+
+    expect(await screen.findByText("新建密钥已完成")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "复制完整密钥" }));
+
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith("ak_live_manual_copy_secret");
+      expect(execCommand).toHaveBeenCalledWith("copy");
+      expect(promptMock).toHaveBeenCalledWith(
+        "浏览器自动复制不可用，请手动复制完整密钥：",
+        "ak_live_manual_copy_secret",
+      );
+      expect(
+        screen.getByText("浏览器自动复制不可用，请在弹窗中手动复制完整密钥。"),
+      ).toBeInTheDocument();
+    });
+    expect(document.body).not.toHaveTextContent("ak_live_manual_copy_secret");
+  });
+
   test("API 密钥页轮换时回填当前权限范围并可复制完整密钥", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("navigator", {
