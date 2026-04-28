@@ -1133,6 +1133,154 @@ describe("控制台路由", () => {
     expect(fetchMock).toHaveBeenCalledWith("/api/me/api-keys");
   });
 
+  test("member 创建密钥时立即展示提交中状态并在成功后滚动到结果区域", async () => {
+    mockSession({ role: "member", tenant_id: "tenant_demo", user_id: "user_member_a" });
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: scrollIntoView,
+    });
+
+    let resolveCreate: ((response: Response) => void) | null = null;
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+
+      if (url === "/api/me/api-keys" && !init?.method) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              items: [],
+            }),
+            {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            },
+          ),
+        );
+      }
+
+      if (url === "/api/me/api-keys" && init?.method === "POST") {
+        return new Promise<Response>((resolve) => {
+          resolveCreate = resolve;
+        });
+      }
+
+      throw new Error(`Unexpected fetch url: ${url}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderRoute("/api-keys");
+
+    fireEvent.click(await screen.findByRole("button", { name: "新建密钥" }));
+    fireEvent.change(screen.getByLabelText("名称"), { target: { value: "member-pending-key" } });
+    fireEvent.click(screen.getByRole("button", { name: "确认创建" }));
+
+    expect(screen.getByRole("button", { name: "创建中..." })).toBeDisabled();
+
+    resolveCreate?.(
+      new Response(
+        JSON.stringify({
+          item: {
+            id: "mk_pending_done",
+            name: "member-pending-key",
+            tenant: "tenant_demo",
+            status: "启用",
+            scopes: ["chat"],
+            last_used_at: "刚刚",
+            owner_user_id: "user_member_a",
+          },
+          raw_key: "mk_pending_secret",
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+
+    expect(await screen.findByText("新建密钥已完成")).toBeInTheDocument();
+    expect(scrollIntoView).toHaveBeenCalled();
+  });
+
+  test("member API 密钥页在透明复制受限的浏览器中也能复制完整密钥", async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error("NotAllowedError"));
+    const execCommand = vi.fn().mockImplementation((command: string) => {
+      if (command !== "copy") {
+        return false;
+      }
+      const textarea = document.body.querySelector("textarea");
+      if (!(textarea instanceof HTMLTextAreaElement)) {
+        return false;
+      }
+      return textarea.style.opacity !== "0";
+    });
+    Object.defineProperty(document, "execCommand", {
+      configurable: true,
+      value: execCommand,
+    });
+    vi.stubGlobal("navigator", {
+      clipboard: { writeText },
+    });
+    mockSession({ role: "member", tenant_id: "tenant_demo", user_id: "user_member_a" });
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+
+      if (url === "/api/me/api-keys" && !init?.method) {
+        return new Response(
+          JSON.stringify({
+            items: [],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+
+      if (url === "/api/me/api-keys" && init?.method === "POST") {
+        return new Response(
+          JSON.stringify({
+            item: {
+              id: "mk_copy_member",
+              name: "member-copy-key",
+              tenant: "tenant_demo",
+              status: "启用",
+              scopes: ["chat"],
+              last_used_at: "刚刚",
+              owner_user_id: "user_member_a",
+            },
+            raw_key: "mk_copy_secret",
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+
+      throw new Error(`Unexpected fetch url: ${url}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderRoute("/api-keys");
+
+    fireEvent.click(await screen.findByRole("button", { name: "新建密钥" }));
+    fireEvent.change(screen.getByLabelText("名称"), { target: { value: "member-copy-key" } });
+    fireEvent.click(screen.getByRole("button", { name: "确认创建" }));
+
+    expect(await screen.findByText("新建密钥已完成")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "复制完整密钥" }));
+
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith("mk_copy_secret");
+      expect(execCommand).toHaveBeenCalledWith("copy");
+      expect(screen.getByText("完整密钥已复制到剪贴板。")).toBeInTheDocument();
+    });
+  });
+
   test("member API 密钥页在 rotate 和 deactivate 时命中 /me 分支并更新本地状态", async () => {
     mockSession({ role: "member", tenant_id: "tenant_demo", user_id: "user_member_a" });
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

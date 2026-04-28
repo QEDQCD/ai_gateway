@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 
 import { ErrorSection, LoadingSection } from "../components/console";
 import {
@@ -48,9 +48,18 @@ async function copyTextWithFallback(value: string) {
 
   const textarea = document.createElement("textarea");
   textarea.value = value;
-  textarea.setAttribute("readonly", "true");
+  textarea.readOnly = true;
+  textarea.setAttribute("aria-hidden", "true");
   textarea.style.position = "fixed";
-  textarea.style.opacity = "0";
+  textarea.style.top = "0";
+  textarea.style.left = "-9999px";
+  textarea.style.width = "1px";
+  textarea.style.height = "1px";
+  textarea.style.padding = "0";
+  textarea.style.border = "0";
+  textarea.style.outline = "none";
+  textarea.style.boxShadow = "none";
+  textarea.style.background = "transparent";
   document.body.appendChild(textarea);
   textarea.focus();
   textarea.select();
@@ -65,6 +74,26 @@ async function copyTextWithFallback(value: string) {
   if (!copied) {
     throw new Error("copy failed");
   }
+}
+
+function getSubmitLabel(actionMode: Exclude<ActionMode, null>, submitting: boolean) {
+  if (!submitting) {
+    return actionMode === "create"
+      ? "确认创建"
+      : actionMode === "rotate"
+        ? "确认轮换"
+        : actionMode === "deactivate"
+          ? "确认停用"
+          : "确认删除";
+  }
+
+  return actionMode === "create"
+    ? "创建中..."
+    : actionMode === "rotate"
+      ? "轮换中..."
+      : actionMode === "deactivate"
+        ? "停用中..."
+        : "删除中...";
 }
 
 function ScopePicker({
@@ -135,6 +164,7 @@ export function APIKeysPage() {
   const [actionResult, setActionResult] = useState<APIKeyMutationResult | null>(null);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [copyNotice, setCopyNotice] = useState<string | null>(null);
+  const actionResultRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     if (!data) {
@@ -149,6 +179,20 @@ export function APIKeysPage() {
       return data.items[0]?.id ?? null;
     });
   }, [data]);
+
+  useEffect(() => {
+    if (!actionNotice && !actionResult) {
+      return;
+    }
+
+    const scrollIntoView = actionResultRef.current?.scrollIntoView;
+    if (typeof scrollIntoView === "function") {
+      scrollIntoView.call(actionResultRef.current, {
+        behavior: "smooth",
+        block: "start",
+      });
+    }
+  }, [actionNotice, actionResult]);
 
   if (loading) {
     return <LoadingSection text="正在加载 API 密钥..." />;
@@ -458,13 +502,7 @@ export function APIKeysPage() {
               disabled={submitting}
               onClick={handleConfirm}
             >
-              {actionMode === "create"
-                ? "确认创建"
-                : actionMode === "rotate"
-                  ? "确认轮换"
-                  : actionMode === "deactivate"
-                    ? "确认停用"
-                    : "确认删除"}
+              {getSubmitLabel(actionMode, submitting)}
             </button>
             <button
               type="button"
@@ -479,7 +517,7 @@ export function APIKeysPage() {
       ) : null}
 
       {actionResult || actionNotice ? (
-        <section className="section-card section-card--success">
+        <section ref={actionResultRef} className="section-card section-card--success">
           <h3>{actionNotice ?? "操作结果"}</h3>
           <p>名称：{actionResult?.item.name}</p>
           <p>状态：{actionResult?.item.status}</p>
