@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/example/ai_gateway/gateway/internal/secret"
 	"github.com/example/ai_gateway/gateway/internal/service"
 	"github.com/jackc/pgx/v5"
 )
@@ -111,10 +112,57 @@ func TestPostgresMemberConsoleServiceAPIKeysOnlyReturnsCreatorsKeys(t *testing.T
 	}
 }
 
+func TestPostgresMemberConsoleServiceRevealAPIKeySecretReturnsOwnedSecret(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	member, _ := newUsageMemberConsoleService(t, ctx, service.ConsolePrincipal{
+		UserID:   "user_member_a",
+		Email:    "member-a@example.com",
+		Role:     "member",
+		TenantID: "tenant_demo",
+	})
+
+	created, err := member.CreateAPIKey(ctx, service.CreateAPIKeyRequest{
+		Name:   "owned-key",
+		Scopes: []string{"chat"},
+	})
+	if err != nil {
+		t.Fatalf("CreateAPIKey failed: %v", err)
+	}
+
+	revealer, ok := member.(interface {
+		RevealAPIKeySecret(context.Context, string) (service.APIKeySecretView, error)
+	})
+	if !ok {
+		t.Fatal("expected member service to implement RevealAPIKeySecret")
+	}
+
+	secretView, err := revealer.RevealAPIKeySecret(ctx, created.Item.ID)
+	if err != nil {
+		t.Fatalf("RevealAPIKeySecret failed: %v", err)
+	}
+	if !secretView.Revealable {
+		t.Fatal("expected Revealable to be true")
+	}
+	if secretView.FullKey == "" {
+		t.Fatal("expected FullKey to be populated")
+	}
+	if secretView.MaskedKey == secretView.FullKey {
+		t.Fatal("expected masked key to differ from full key")
+	}
+}
+
 func newUsageMemberConsoleService(t *testing.T, ctx context.Context, principal service.ConsolePrincipal) (service.MemberConsoleService, *pgx.Conn) {
 	t.Helper()
 
 	_, conn := newUsageConsoleService(t, ctx)
-	member := service.NewPostgresMemberConsoleService(conn, principal)
+	codec, err := secret.NewCodec("0123456789abcdef0123456789abcdef")
+	if err != nil {
+		t.Fatalf("secret.NewCodec failed: %v", err)
+	}
+	member := service.NewPostgresMemberConsoleService(conn, principal, codec)
 	return member, conn
 }

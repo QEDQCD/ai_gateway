@@ -13,13 +13,17 @@ type MemberOverviewPageData struct {
 }
 
 type MemberAPIKeyItem struct {
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
-	Tenant      string   `json:"tenant"`
-	Status      string   `json:"status"`
-	Scopes      []string `json:"scopes"`
-	LastUsedAt  string   `json:"last_used_at"`
-	OwnerUserID string   `json:"owner_user_id"`
+	ID                 string   `json:"id"`
+	Name               string   `json:"name"`
+	Tenant             string   `json:"tenant"`
+	Status             string   `json:"status"`
+	Scopes             []string `json:"scopes"`
+	LastUsedAt         string   `json:"last_used_at"`
+	OwnerUserID         string   `json:"owner_user_id"`
+	CreatedByUserID     string   `json:"created_by_user_id,omitempty"`
+	ExpiresAt           string   `json:"expires_at,omitempty"`
+	Revealable          bool     `json:"revealable,omitempty"`
+	LegacyUnrecoverable bool     `json:"legacy_unrecoverable,omitempty"`
 }
 
 type MemberAPIKeysPageData struct {

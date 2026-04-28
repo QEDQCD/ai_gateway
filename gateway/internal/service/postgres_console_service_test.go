@@ -8,6 +8,7 @@ import (
 	"time"
 
 	gatewaydb "github.com/example/ai_gateway/gateway/db"
+	"github.com/example/ai_gateway/gateway/internal/secret"
 	"github.com/example/ai_gateway/gateway/internal/service"
 	"github.com/jackc/pgx/v5"
 	"github.com/testcontainers/testcontainers-go"
@@ -195,6 +196,51 @@ func TestPostgresConsoleServiceDeleteReferencedAPIKeyReturnsConflict(t *testing.
 	}
 	if statusErr.Code != 409 {
 		t.Fatalf("expected conflict status, got %d", statusErr.Code)
+	}
+}
+
+func TestPostgresConsoleServiceRevealLegacyKeyMarksUnrecoverable(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	if _, err := conn.Exec(ctx, `
+		insert into platform_api_keys (
+			id, tenant_id, name, key_hash, status, scopes, created_at, expires_at, secret_recoverable
+		) values (
+			'pak_legacy_only_hash',
+			'tenant_demo',
+			'legacy-only-hash',
+			'sha256:legacy-only-hash',
+			'active',
+			ARRAY['chat'],
+			now(),
+			now() + interval '30 days',
+			false
+		);
+	`); err != nil {
+		t.Fatalf("seed legacy key failed: %v", err)
+	}
+
+	revealer, ok := console.(interface {
+		RevealAPIKeySecret(context.Context, string) (service.APIKeySecretView, error)
+	})
+	if !ok {
+		t.Fatal("expected console service to implement RevealAPIKeySecret")
+	}
+
+	secretView, err := revealer.RevealAPIKeySecret(ctx, "pak_legacy_only_hash")
+	if err != nil {
+		t.Fatalf("RevealAPIKeySecret failed: %v", err)
+	}
+	if secretView.Revealable {
+		t.Fatal("expected legacy key to be unrecoverable")
+	}
+	if !secretView.LegacyUnrecoverable {
+		t.Fatal("expected LegacyUnrecoverable to be true")
 	}
 }
 
@@ -1851,7 +1897,12 @@ func newUsageConsoleService(t *testing.T, ctx context.Context) (service.ConsoleS
 		}
 	}
 
-	return service.NewPostgresConsoleService(conn, nil, nil, nil, ""), conn
+	codec, err := secret.NewCodec("0123456789abcdef0123456789abcdef")
+	if err != nil {
+		t.Fatalf("secret.NewCodec failed: %v", err)
+	}
+
+	return service.NewPostgresConsoleService(conn, nil, nil, nil, "", codec), conn
 }
 
 func mustParseUsageTime(t *testing.T, value string) time.Time {

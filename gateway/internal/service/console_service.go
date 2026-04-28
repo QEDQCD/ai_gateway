@@ -37,12 +37,16 @@ type ConsoleSystemStatus struct {
 }
 
 type APIKeyItem struct {
-	ID         string   `json:"id"`
-	Name       string   `json:"name"`
-	Tenant     string   `json:"tenant"`
-	Status     string   `json:"status"`
-	Scopes     []string `json:"scopes"`
-	LastUsedAt string   `json:"last_used_at"`
+	ID                 string   `json:"id"`
+	Name               string   `json:"name"`
+	Tenant             string   `json:"tenant"`
+	Status             string   `json:"status"`
+	Scopes             []string `json:"scopes"`
+	LastUsedAt         string   `json:"last_used_at"`
+	CreatedByUserID     string   `json:"created_by_user_id,omitempty"`
+	ExpiresAt           string   `json:"expires_at,omitempty"`
+	Revealable          bool     `json:"revealable,omitempty"`
+	LegacyUnrecoverable bool     `json:"legacy_unrecoverable,omitempty"`
 }
 
 type APIKeysPageData struct {
@@ -64,6 +68,15 @@ type RotateAPIKeyRequest struct {
 type APIKeyMutationResult struct {
 	Item   APIKeyItem `json:"item"`
 	RawKey string     `json:"raw_key,omitempty"`
+}
+
+type APIKeySecretView struct {
+	APIKeyID            string `json:"api_key_id"`
+	MaskedKey           string `json:"masked_key"`
+	FullKey             string `json:"full_key,omitempty"`
+	Revealable          bool   `json:"revealable"`
+	LegacyUnrecoverable bool   `json:"legacy_unrecoverable"`
+	ExpiresAt           string `json:"expires_at,omitempty"`
 }
 
 type ApplicationItem struct {

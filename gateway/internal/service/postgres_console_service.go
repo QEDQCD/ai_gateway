@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/example/ai_gateway/gateway/internal/domain"
+	"github.com/example/ai_gateway/gateway/internal/secret"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -28,11 +29,23 @@ type postgresConsoleService struct {
 	chatProxy       ChatProxyService
 	ragProxy        RAGProxyService
 	seedPlatformKey string
+	secretService   platformAPIKeySecretService
 }
 
-func NewPostgresConsoleService(db consoleDB, authService AuthService, chatProxy ChatProxyService, ragProxy RAGProxyService, seedPlatformKey string) ConsoleService {
+func NewPostgresConsoleService(
+	db consoleDB,
+	authService AuthService,
+	chatProxy ChatProxyService,
+	ragProxy RAGProxyService,
+	seedPlatformKey string,
+	secretCodecs ...*secret.Codec,
+) ConsoleService {
 	if db == nil {
 		return NewUnavailableConsoleService()
+	}
+	var secretCodec *secret.Codec
+	if len(secretCodecs) > 0 {
+		secretCodec = secretCodecs[0]
 	}
 	return postgresConsoleService{
 		db:              db,
@@ -40,6 +53,7 @@ func NewPostgresConsoleService(db consoleDB, authService AuthService, chatProxy 
 		chatProxy:       chatProxy,
 		ragProxy:        ragProxy,
 		seedPlatformKey: seedPlatformKey,
+		secretService:   newPlatformAPIKeySecretService(secretCodec),
 	}
 }
 
@@ -303,7 +317,16 @@ func (s postgresConsoleService) ApproveApplication(ctx context.Context, id strin
 
 func (s postgresConsoleService) APIKeys(ctx context.Context) (APIKeysPageData, error) {
 	rows, err := s.db.Query(ctx, `
-		select p.id, p.name, t.id, p.status, p.scopes, coalesce(p.last_used_at, p.created_at)
+		select
+			p.id,
+			p.name,
+			t.id,
+			p.status,
+			p.scopes,
+			coalesce(p.last_used_at, p.created_at),
+			coalesce(p.created_by_user_id, ''),
+			coalesce(p.expires_at, p.created_at + interval '30 days'),
+			p.secret_recoverable
 		from platform_api_keys p
 		join tenants t on t.id = p.tenant_id
 		order by p.created_at asc, p.id asc;
@@ -318,11 +341,26 @@ func (s postgresConsoleService) APIKeys(ctx context.Context) (APIKeysPageData, e
 		var item APIKeyItem
 		var status string
 		var lastUsedAt time.Time
-		if err := rows.Scan(&item.ID, &item.Name, &item.Tenant, &status, &item.Scopes, &lastUsedAt); err != nil {
+		var expiresAt time.Time
+		var secretRecoverable bool
+		if err := rows.Scan(
+			&item.ID,
+			&item.Name,
+			&item.Tenant,
+			&status,
+			&item.Scopes,
+			&lastUsedAt,
+			&item.CreatedByUserID,
+			&expiresAt,
+			&secretRecoverable,
+		); err != nil {
 			return APIKeysPageData{}, err
 		}
-		item.Status = translateLifecycleStatus(status)
+		item.Status = translateLifecycleStatus(status, expiresAt, time.Now())
 		item.LastUsedAt = lastUsedAt.In(shanghaiLocation()).Format(time.RFC3339)
+		item.ExpiresAt = expiresAt.In(shanghaiLocation()).Format(time.RFC3339)
+		item.Revealable = secretRecoverable
+		item.LegacyUnrecoverable = !secretRecoverable
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
@@ -344,12 +382,14 @@ func (s postgresConsoleService) CreateAPIKey(ctx context.Context, req CreateAPIK
 	}
 
 	rawKey := newPlatformAPIKeySecret()
+	principal, _ := ConsolePrincipalFromContext(ctx)
 	item, err := s.insertPlatformAPIKey(ctx, createPlatformAPIKeyInput{
-		ID:       newPlatformAPIKeyID(),
-		TenantID: strings.TrimSpace(req.TenantID),
-		Name:     strings.TrimSpace(req.Name),
-		Scopes:   sanitizeScopes(req.Scopes),
-		RawKey:   rawKey,
+		ID:              newPlatformAPIKeyID(),
+		TenantID:        strings.TrimSpace(req.TenantID),
+		Name:            strings.TrimSpace(req.Name),
+		Scopes:          sanitizeScopes(req.Scopes),
+		RawKey:          rawKey,
+		CreatedByUserID: principal.UserID,
 	})
 	if err != nil {
 		return APIKeyMutationResult{}, err
@@ -370,13 +410,19 @@ func (s postgresConsoleService) RotateAPIKey(ctx context.Context, id string, req
 	}
 
 	newRawKey := newPlatformAPIKeySecret()
+	ciphertext, recoverable, err := s.secretService.Encrypt(newRawKey)
+	if err != nil {
+		return APIKeyMutationResult{}, err
+	}
 	var item APIKeyItem
 	var status string
 	var lastUsedAt time.Time
+	var expiresAt time.Time
 	row := s.db.QueryRow(ctx, `
 		with previous as (
 			select
 				tenant_id,
+				coalesce(created_by_user_id, '') as created_by_user_id,
 				case
 					when $3 <> '' then $3
 					else name
@@ -389,26 +435,57 @@ func (s postgresConsoleService) RotateAPIKey(ctx context.Context, id string, req
 			where id = $1
 		),
 		inserted as (
-			insert into platform_api_keys (id, tenant_id, name, key_hash, status, scopes, created_at)
-			select $2, tenant_id, next_name, $5, 'active', next_scopes, now()
+			insert into platform_api_keys (
+				id,
+				tenant_id,
+				name,
+				key_hash,
+				key_ciphertext,
+				key_kek_version,
+				status,
+				scopes,
+				created_by_user_id,
+				created_at,
+				expires_at,
+				rotated_from_key_id,
+				secret_recoverable
+			)
+			select
+				$2,
+				tenant_id,
+				next_name,
+				$5,
+				$6,
+				$7,
+				'active',
+				next_scopes,
+				nullif(created_by_user_id, ''),
+				now(),
+				now() + interval '30 days',
+				$1,
+				$8
 			from previous
-			returning id, name, tenant_id, status, scopes, created_at
+			returning id, name, tenant_id, status, scopes, created_at, coalesce(created_by_user_id, '') as created_by_user_id, expires_at, secret_recoverable
 		),
 		disabled as (
 			update platform_api_keys
-			set status = 'disabled'
+			set status = 'disabled',
+				disabled_at = now(),
+				disabled_reason = 'rotated'
 			where id = $1
 			  and exists (select 1 from inserted)
 		)
-		select id, name, tenant_id, status, scopes, created_at
+		select id, name, tenant_id, status, scopes, created_at, coalesce(created_by_user_id, ''), expires_at, secret_recoverable
 		from inserted;
-	`, strings.TrimSpace(id), newPlatformAPIKeyID(), strings.TrimSpace(req.Name), sanitizeScopes(req.Scopes), hashPlatformAPIKey(newRawKey))
-	if err := row.Scan(&item.ID, &item.Name, &item.Tenant, &status, &item.Scopes, &lastUsedAt); err != nil {
+	`, strings.TrimSpace(id), newPlatformAPIKeyID(), strings.TrimSpace(req.Name), sanitizeScopes(req.Scopes), hashPlatformAPIKey(newRawKey), ciphertext, platformAPIKeyKEKVersionV1, recoverable)
+	if err := row.Scan(&item.ID, &item.Name, &item.Tenant, &status, &item.Scopes, &lastUsedAt, &item.CreatedByUserID, &expiresAt, &item.Revealable); err != nil {
 		return APIKeyMutationResult{}, mapAPIKeyMutationError(err, "api key not found")
 	}
 
-	item.Status = translateLifecycleStatus(status)
+	item.Status = translateLifecycleStatus(status, expiresAt, time.Now())
 	item.LastUsedAt = lastUsedAt.In(shanghaiLocation()).Format(time.RFC3339)
+	item.ExpiresAt = expiresAt.In(shanghaiLocation()).Format(time.RFC3339)
+	item.LegacyUnrecoverable = !item.Revealable
 	return APIKeyMutationResult{
 		Item:   item,
 		RawKey: newRawKey,
@@ -426,17 +503,22 @@ func (s postgresConsoleService) DeactivateAPIKey(ctx context.Context, id string)
 	var item APIKeyItem
 	var status string
 	var lastUsedAt time.Time
+	var expiresAt time.Time
 	if err := s.db.QueryRow(ctx, `
 		update platform_api_keys
-		set status = 'disabled'
+		set status = 'disabled',
+			disabled_at = now(),
+			disabled_reason = 'deactivated'
 		where id = $1
-		returning id, name, tenant_id, status, scopes, coalesce(last_used_at, created_at);
-	`, strings.TrimSpace(id)).Scan(&item.ID, &item.Name, &item.Tenant, &status, &item.Scopes, &lastUsedAt); err != nil {
+		returning id, name, tenant_id, status, scopes, coalesce(last_used_at, created_at), coalesce(created_by_user_id, ''), coalesce(expires_at, created_at + interval '30 days'), secret_recoverable;
+	`, strings.TrimSpace(id)).Scan(&item.ID, &item.Name, &item.Tenant, &status, &item.Scopes, &lastUsedAt, &item.CreatedByUserID, &expiresAt, &item.Revealable); err != nil {
 		return APIKeyMutationResult{}, mapAPIKeyMutationError(err, "api key not found")
 	}
 
-	item.Status = translateLifecycleStatus(status)
+	item.Status = translateLifecycleStatus(status, expiresAt, time.Now())
 	item.LastUsedAt = lastUsedAt.In(shanghaiLocation()).Format(time.RFC3339)
+	item.ExpiresAt = expiresAt.In(shanghaiLocation()).Format(time.RFC3339)
+	item.LegacyUnrecoverable = !item.Revealable
 	return APIKeyMutationResult{Item: item}, nil
 }
 
@@ -451,11 +533,12 @@ func (s postgresConsoleService) DeleteAPIKey(ctx context.Context, id string) (AP
 	var item APIKeyItem
 	var status string
 	var lastUsedAt time.Time
+	var expiresAt time.Time
 	if err := s.db.QueryRow(ctx, `
 		delete from platform_api_keys
 		where id = $1
-		returning id, name, tenant_id, status, scopes, coalesce(last_used_at, created_at);
-	`, strings.TrimSpace(id)).Scan(&item.ID, &item.Name, &item.Tenant, &status, &item.Scopes, &lastUsedAt); err != nil {
+		returning id, name, tenant_id, status, scopes, coalesce(last_used_at, created_at), coalesce(created_by_user_id, ''), coalesce(expires_at, created_at + interval '30 days'), secret_recoverable;
+	`, strings.TrimSpace(id)).Scan(&item.ID, &item.Name, &item.Tenant, &status, &item.Scopes, &lastUsedAt, &item.CreatedByUserID, &expiresAt, &item.Revealable); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return APIKeyMutationResult{}, StatusError{
 				Code:    http.StatusNotFound,
@@ -478,7 +561,44 @@ func (s postgresConsoleService) DeleteAPIKey(ctx context.Context, id string) (AP
 
 	item.Status = "已删除"
 	item.LastUsedAt = lastUsedAt.In(shanghaiLocation()).Format(time.RFC3339)
+	item.ExpiresAt = expiresAt.In(shanghaiLocation()).Format(time.RFC3339)
+	item.LegacyUnrecoverable = !item.Revealable
 	return APIKeyMutationResult{Item: item}, nil
+}
+
+type managedAPIKeySecretRecord struct {
+	ID          string
+	TenantID    string
+	FullKey     string
+	Recoverable bool
+	ExpiresAt   time.Time
+}
+
+func (s postgresConsoleService) RevealAPIKeySecret(ctx context.Context, id string) (APIKeySecretView, error) {
+	record, err := s.loadManagedAPIKeySecretRecord(ctx, id)
+	if err != nil {
+		return APIKeySecretView{}, err
+	}
+	return buildAPIKeySecretView(record.ID, record.FullKey, record.Recoverable, record.ExpiresAt), nil
+}
+
+func (s postgresConsoleService) loadManagedAPIKeySecretRecord(ctx context.Context, id string) (managedAPIKeySecretRecord, error) {
+	var record managedAPIKeySecretRecord
+	var ciphertext string
+	if err := s.db.QueryRow(ctx, `
+		select id, tenant_id, key_ciphertext, secret_recoverable, coalesce(expires_at, created_at + interval '30 days')
+		from platform_api_keys
+		where id = $1;
+	`, strings.TrimSpace(id)).Scan(&record.ID, &record.TenantID, &ciphertext, &record.Recoverable, &record.ExpiresAt); err != nil {
+		return managedAPIKeySecretRecord{}, mapAPIKeyMutationError(err, "api key not found")
+	}
+
+	fullKey, err := s.secretService.Reveal(ciphertext, record.Recoverable)
+	if err != nil {
+		return managedAPIKeySecretRecord{}, err
+	}
+	record.FullKey = fullKey
+	return record, nil
 }
 
 func (s postgresConsoleService) Routes(ctx context.Context) (RoutesPageData, error) {
@@ -1364,11 +1484,17 @@ func (s postgresConsoleService) insertAuditLog(ctx context.Context, tenantID str
 	return err
 }
 
-func translateLifecycleStatus(status string) string {
-	if status == "active" {
+func translateLifecycleStatus(status string, expiresAt time.Time, now time.Time) string {
+	switch {
+	case status == "disabled":
+		return "停用"
+	case !expiresAt.IsZero() && !now.Before(expiresAt):
+		return "已过期"
+	case !expiresAt.IsZero() && expiresAt.Sub(now) <= apiKeyExpiryWarningWindow:
+		return "即将过期"
+	default:
 		return "启用"
 	}
-	return "停用"
 }
 
 func translateRouteHealth(status string) string {
@@ -1427,27 +1553,51 @@ func shanghaiLocation() *time.Location {
 }
 
 type createPlatformAPIKeyInput struct {
-	ID       string
-	TenantID string
-	Name     string
-	Scopes   []string
-	RawKey   string
+	ID              string
+	TenantID        string
+	Name            string
+	Scopes          []string
+	RawKey          string
+	CreatedByUserID string
 }
 
 func (s postgresConsoleService) insertPlatformAPIKey(ctx context.Context, input createPlatformAPIKeyInput) (APIKeyItem, error) {
+	ciphertext, recoverable, err := s.secretService.Encrypt(input.RawKey)
+	if err != nil {
+		return APIKeyItem{}, err
+	}
+
 	var item APIKeyItem
 	var status string
 	var lastUsedAt time.Time
+	var expiresAt time.Time
 	if err := s.db.QueryRow(ctx, `
-		insert into platform_api_keys (id, tenant_id, name, key_hash, status, scopes, created_at)
-		values ($1, $2, $3, $4, 'active', $5, now())
-		returning id, name, tenant_id, status, scopes, created_at;
-	`, input.ID, input.TenantID, input.Name, hashPlatformAPIKey(input.RawKey), input.Scopes).Scan(&item.ID, &item.Name, &item.Tenant, &status, &item.Scopes, &lastUsedAt); err != nil {
+		insert into platform_api_keys (
+			id,
+			tenant_id,
+			name,
+			key_hash,
+			key_ciphertext,
+			key_kek_version,
+			status,
+			scopes,
+			created_by_user_id,
+			created_at,
+			expires_at,
+			secret_recoverable
+		)
+		values ($1, $2, $3, $4, $5, $6, 'active', $7, nullif($8, ''), now(), now() + interval '30 days', $9)
+		returning id, name, tenant_id, status, scopes, created_at, expires_at;
+	`, input.ID, input.TenantID, input.Name, hashPlatformAPIKey(input.RawKey), ciphertext, platformAPIKeyKEKVersionV1, input.Scopes, input.CreatedByUserID, recoverable).Scan(&item.ID, &item.Name, &item.Tenant, &status, &item.Scopes, &lastUsedAt, &expiresAt); err != nil {
 		return APIKeyItem{}, mapAPIKeyMutationError(err, "tenant not found")
 	}
 
-	item.Status = translateLifecycleStatus(status)
+	item.Status = translateLifecycleStatus(status, expiresAt, time.Now())
 	item.LastUsedAt = lastUsedAt.In(shanghaiLocation()).Format(time.RFC3339)
+	item.CreatedByUserID = input.CreatedByUserID
+	item.ExpiresAt = expiresAt.In(shanghaiLocation()).Format(time.RFC3339)
+	item.Revealable = recoverable
+	item.LegacyUnrecoverable = !recoverable
 	return item, nil
 }
 
