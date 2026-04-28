@@ -67,11 +67,22 @@ func (s postgresConsoleService) Overview(ctx context.Context) (OverviewPageData,
 			select status_code
 			from audit_logs
 			where created_at >= now() - interval '24 hours'
+		),
+		managed_keys as (
+			select distinct target_id
+			from audit_events
+			where event_type = 'api_key_created'
+			  and target_type = 'platform_api_key'
 		)
 		select
 			(select count(*) from recent),
 			coalesce((select avg(case when status_code between 200 and 399 then 100.0 else 0 end) from recent), 0),
-			(select count(*) from platform_api_keys where status = 'active' and coalesce(created_by_user_id, '') <> '');
+			(
+				select count(*)
+				from platform_api_keys
+				where status = 'active'
+				  and id in (select target_id from managed_keys)
+			);
 	`).Scan(&requests24h, &successRate, &activeAPIKeys); err != nil {
 		return OverviewPageData{}, err
 	}
@@ -382,6 +393,12 @@ func (s postgresConsoleService) ApproveApplication(ctx context.Context, id strin
 
 func (s postgresConsoleService) APIKeys(ctx context.Context) (APIKeysPageData, error) {
 	rows, err := s.db.Query(ctx, `
+		with managed_keys as (
+			select distinct target_id
+			from audit_events
+			where event_type = 'api_key_created'
+			  and target_type = 'platform_api_key'
+		)
 		select
 			p.id,
 			p.name,
@@ -394,7 +411,7 @@ func (s postgresConsoleService) APIKeys(ctx context.Context) (APIKeysPageData, e
 			p.secret_recoverable
 		from platform_api_keys p
 		join tenants t on t.id = p.tenant_id
-		where coalesce(p.created_by_user_id, '') <> ''
+		where p.id in (select target_id from managed_keys)
 		order by p.created_at asc, p.id asc;
 	`)
 	if err != nil {

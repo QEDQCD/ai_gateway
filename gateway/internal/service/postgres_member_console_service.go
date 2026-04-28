@@ -40,10 +40,17 @@ func (s postgresMemberConsoleService) Overview(ctx context.Context) (MemberOverv
 
 	var payload MemberOverviewPageData
 	if err := s.db.QueryRow(ctx, `
+		with managed_keys as (
+			select distinct target_id
+			from audit_events
+			where tenant_id = $1
+			  and event_type = 'api_key_created'
+			  and target_type = 'platform_api_key'
+		)
 		select
 			t.id,
 			t.name,
-			coalesce(count(p.id) filter (where p.status = 'active' and coalesce(p.created_by_user_id, '') <> ''), 0)
+			coalesce(count(p.id) filter (where p.status = 'active' and p.id in (select target_id from managed_keys)), 0)
 		from tenants t
 		left join platform_api_keys p on p.tenant_id = t.id
 		where t.id = $1
