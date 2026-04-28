@@ -1,20 +1,79 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { BrandMark } from "../components/brand-mark";
-import { createApplication } from "../lib/console-api";
+import { createApplication, issueCaptcha, verifyCaptcha } from "../lib/console-api";
 
 export function ApplicationFormPage() {
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
   const [companyName, setCompanyName] = useState("");
   const [useCase, setUseCase] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [captchaID, setCaptchaID] = useState("");
+  const [captchaImage, setCaptchaImage] = useState("");
+  const [captchaCode, setCaptchaCode] = useState("");
+  const [captchaPassToken, setCaptchaPassToken] = useState("");
+  const [captchaVerified, setCaptchaVerified] = useState(false);
+  const [captchaLoading, setCaptchaLoading] = useState(false);
+  const [captchaVerifying, setCaptchaVerifying] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const [captchaMessage, setCaptchaMessage] = useState("");
   const [submitted, setSubmitted] = useState<{
     name: string;
     status: string;
   } | null>(null);
+
+  useEffect(() => {
+    void loadCaptcha();
+  }, []);
+
+  async function loadCaptcha() {
+    setCaptchaLoading(true);
+    setCaptchaMessage("");
+    setCaptchaVerified(false);
+    setCaptchaPassToken("");
+    setCaptchaCode("");
+
+    try {
+      const challenge = await issueCaptcha();
+      setCaptchaID(challenge.captcha_id);
+      setCaptchaImage(challenge.image_data);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "验证码加载失败，请稍后重试。");
+    } finally {
+      setCaptchaLoading(false);
+    }
+  }
+
+  async function handleVerifyCaptcha() {
+    if (!captchaID || !captchaCode.trim()) {
+      return;
+    }
+
+    setCaptchaVerifying(true);
+    setError("");
+    setCaptchaMessage("");
+
+    try {
+      const result = await verifyCaptcha({
+        captcha_id: captchaID,
+        captcha_code: captchaCode.trim(),
+      });
+      setCaptchaPassToken(result.captcha_pass_token);
+      setCaptchaVerified(true);
+      setCaptchaMessage("验证码已通过");
+    } catch (nextError) {
+      setCaptchaVerified(false);
+      setCaptchaPassToken("");
+      setCaptchaMessage("");
+      setError(nextError instanceof Error ? nextError.message : "验证码校验失败，请稍后重试。");
+    } finally {
+      setCaptchaVerifying(false);
+    }
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -27,6 +86,8 @@ export function ApplicationFormPage() {
         name,
         company_name: companyName,
         use_case: useCase,
+        password,
+        captcha_pass_token: captchaPassToken,
       });
       setSubmitted({
         name: result.item.name,
@@ -38,6 +99,17 @@ export function ApplicationFormPage() {
       setSubmitting(false);
     }
   }
+
+  const canSubmit =
+    !submitting &&
+    email.trim() !== "" &&
+    name.trim() !== "" &&
+    companyName.trim() !== "" &&
+    useCase.trim() !== "" &&
+    password.length >= 8 &&
+    password === confirmPassword &&
+    captchaVerified &&
+    captchaPassToken !== "";
 
   return (
     <div className="login-page">
@@ -79,8 +151,48 @@ export function ApplicationFormPage() {
             <span>接入用途</span>
             <textarea rows={4} value={useCase} onChange={(event) => setUseCase(event.target.value)} />
           </label>
+          <label className="field-shell">
+            <span>密码</span>
+            <input
+              type="password"
+              autoComplete="new-password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+            />
+          </label>
+          <label className="field-shell">
+            <span>确认密码</span>
+            <input
+              type="password"
+              autoComplete="new-password"
+              value={confirmPassword}
+              onChange={(event) => setConfirmPassword(event.target.value)}
+            />
+          </label>
+          <label className="field-shell">
+            <span>验证码</span>
+            <input value={captchaCode} onChange={(event) => setCaptchaCode(event.target.value)} />
+          </label>
+          <div className="field-shell">
+            <span>图形验证码</span>
+            {captchaImage ? <img alt="图形验证码" src={captchaImage} /> : <p>正在加载验证码...</p>}
+            <div className="page-actions">
+              <button type="button" className="button-shell" disabled={captchaLoading} onClick={() => void loadCaptcha()}>
+                刷新验证码
+              </button>
+              <button
+                type="button"
+                className="button-shell"
+                disabled={captchaVerifying || captchaLoading || !captchaID || !captchaCode.trim()}
+                onClick={() => void handleVerifyCaptcha()}
+              >
+                验证验证码
+              </button>
+            </div>
+            {captchaMessage ? <p>{captchaMessage}</p> : null}
+          </div>
           {error ? <p className="login-form__error">{error}</p> : null}
-          <button className="button-shell button-shell--primary login-form__submit" disabled={submitting} type="submit">
+          <button className="button-shell button-shell--primary login-form__submit" disabled={!canSubmit} type="submit">
             {submitting ? "提交中..." : "提交申请"}
           </button>
         </form>

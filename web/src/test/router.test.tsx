@@ -124,12 +124,46 @@ describe("控制台路由", () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.toString();
 
+      if (url === "/api/console/captcha" && !init?.method) {
+        return new Response(
+          JSON.stringify({
+            captcha_id: "cap_demo",
+            image_data: "data:image/png;base64,AAAA",
+            expires_at: "2026-04-29T00:00:00Z",
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+
+      if (url === "/api/console/captcha/verify" && init?.method === "POST") {
+        expect(JSON.parse(String(init.body))).toEqual({
+          captcha_id: "cap_demo",
+          captcha_code: "A7KQ",
+        });
+
+        return new Response(
+          JSON.stringify({
+            captcha_pass_token: "cp_demo",
+            expires_at: "2026-04-29T00:00:00Z",
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+
       if (url === "/api/console/applications" && init?.method === "POST") {
         expect(JSON.parse(String(init.body))).toEqual({
           email: "new-user@example.com",
           name: "新用户",
           company_name: "New Co",
           use_case: "测试接入",
+          password: "Example1234",
+          captcha_pass_token: "cp_demo",
         });
 
         return new Response(
@@ -160,6 +194,9 @@ describe("控制台路由", () => {
       <RouterProvider router={createTestRouter(["/apply"])} future={{ v7_startTransition: true }} />,
     );
 
+    expect(await screen.findByAltText("图形验证码")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "提交申请" })).toBeDisabled();
+
     fireEvent.change(await screen.findByLabelText("邮箱"), {
       target: { value: "new-user@example.com" },
     });
@@ -171,6 +208,20 @@ describe("控制台路由", () => {
     });
     fireEvent.change(screen.getByLabelText("接入用途"), {
       target: { value: "测试接入" },
+    });
+    fireEvent.change(screen.getByLabelText("密码"), {
+      target: { value: "Example1234" },
+    });
+    fireEvent.change(screen.getByLabelText("确认密码"), {
+      target: { value: "Example1234" },
+    });
+    fireEvent.change(screen.getByLabelText("验证码"), {
+      target: { value: "A7KQ" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "验证验证码" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "提交申请" })).toBeEnabled();
     });
     fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
 

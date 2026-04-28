@@ -282,6 +282,24 @@ export type CreateApplicationPayload = {
   name: string;
   company_name: string;
   use_case: string;
+  password: string;
+  captcha_pass_token: string;
+};
+
+export type CaptchaChallenge = {
+  captcha_id: string;
+  image_data: string;
+  expires_at: string;
+};
+
+export type VerifyCaptchaPayload = {
+  captcha_id: string;
+  captcha_code: string;
+};
+
+export type CaptchaPassResult = {
+  captcha_pass_token: string;
+  expires_at: string;
 };
 
 type JsonRecord = Record<string, unknown>;
@@ -614,6 +632,18 @@ export function getMemberAuditEvents() {
 
 export function loginConsole(payload: ConsoleLoginRequest) {
   return requestJson<ConsoleSession>("/api/console/session/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function issueCaptcha() {
+  return requestJson<CaptchaChallenge>("/api/console/captcha");
+}
+
+export function verifyCaptcha(payload: VerifyCaptchaPayload) {
+  return requestJson<CaptchaPassResult>("/api/console/captcha/verify", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
