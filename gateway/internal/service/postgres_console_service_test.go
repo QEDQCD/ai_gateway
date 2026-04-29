@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -1173,7 +1174,7 @@ func TestPostgresConsoleServiceAuditUsesUsageLogsAndEvents(t *testing.T) {
 	if payload.Items[0].UsageSource == "" {
 		t.Fatal("expected usage_source to be populated")
 	}
-	if payload.Items[0].FirstTokenLatencyMS == nil || *payload.Items[0].FirstTokenLatencyMS != 41 {
+	if payload.Items[0].FirstTokenLatencyMS != 41 {
 		t.Fatalf("expected first_token_latency_ms 41, got %#v", payload.Items[0].FirstTokenLatencyMS)
 	}
 }
@@ -2347,7 +2348,7 @@ func TestPostgresConsoleServiceUsageRequests(t *testing.T) {
 	if item.UsageSource != "估算" {
 		t.Fatalf("expected usage_source 估算, got %q", item.UsageSource)
 	}
-	if item.FirstTokenLatencyMS == nil || *item.FirstTokenLatencyMS != 40 {
+	if item.FirstTokenLatencyMS != 40 {
 		t.Fatalf("expected first_token_latency_ms 40, got %#v", item.FirstTokenLatencyMS)
 	}
 }
@@ -2423,6 +2424,85 @@ func TestPostgresConsoleServiceUsageRequestsUsesRequestStartedAtWindow(t *testin
 	}
 	if payload.Items[0].RequestID != "llmreq_demo_delayed_request" {
 		t.Fatalf("expected delayed request to be selected by request_started_at, got %q", payload.Items[0].RequestID)
+	}
+}
+
+func TestPostgresConsoleServiceUsageRequestsDefaultsFirstTokenLatencyToZero(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	if _, err := conn.Exec(ctx, `
+		insert into llm_request_logs (
+			id,
+			tenant_id,
+			platform_api_key_id,
+			platform_api_key_name,
+			provider_credential_id,
+			route_id,
+			request_path,
+			request_model,
+			upstream_model,
+			usage_source,
+			usage_status,
+			status_code,
+			latency_ms,
+			prompt_tokens,
+			completion_tokens,
+			total_tokens,
+			error_code,
+			error_message,
+			request_started_at,
+			request_completed_at,
+			created_at
+		) values (
+			'llmreq_demo_zero_first_token',
+			'tenant_demo',
+			'pak_demo',
+			'demo key',
+			'provider_openai_demo',
+			'route:provider_openai_demo:default',
+			'/v1/chat/completions',
+			'gpt-4o-mini',
+			'gpt-4o-mini',
+			'upstream',
+			'success',
+			200,
+			88,
+			12,
+			4,
+			16,
+			'',
+			'',
+			timestamptz '2026-04-24T10:16:00Z',
+			timestamptz '2026-04-24T10:16:00.088Z',
+			timestamptz '2026-04-24T10:16:01Z'
+		)
+	`); err != nil {
+		t.Fatalf("insert zero first-token request log failed: %v", err)
+	}
+
+	payload, err := console.UsageRequests(ctx, service.UsageQuery{
+		From: mustParseUsageTime(t, "2026-04-24T10:15:00Z"),
+		To:   mustParseUsageTime(t, "2026-04-24T10:17:00Z"),
+	})
+	if err != nil {
+		t.Fatalf("UsageRequests failed: %v", err)
+	}
+	if len(payload.Items) != 1 {
+		t.Fatalf("expected 1 request item, got %d", len(payload.Items))
+	}
+
+	item := payload.Items[0]
+	itemJSON, err := json.Marshal(item)
+	if err != nil {
+		t.Fatalf("json.Marshal item failed: %v", err)
+	}
+	if !strings.Contains(string(itemJSON), `"first_token_latency_ms":0`) {
+		t.Fatalf("expected first_token_latency_ms to marshal as 0, got %s", string(itemJSON))
 	}
 }
 

@@ -1161,7 +1161,7 @@ func (s postgresConsoleService) Audit(ctx context.Context) (AuditPageData, error
 		var item AuditItem
 		var status string
 		var latencyMS int64
-		var firstTokenLatencyMS *int64
+		var firstTokenLatencyMS int64
 		var usageSource string
 		if err := rows.Scan(
 			&item.Time,
@@ -1724,7 +1724,7 @@ func (s postgresConsoleService) UsageRequests(ctx context.Context, query UsageQu
 		var status string
 		var totalTokens int
 		var latencyMS int64
-		var firstTokenLatencyMS *int64
+		var firstTokenLatencyMS int64
 		var usageSource string
 		if err := rows.Scan(&item.RequestID, &item.Tenant, &item.Endpoint, &item.Model, &status, &totalTokens, &latencyMS, &firstTokenLatencyMS, &usageSource); err != nil {
 			return UsageRequestsPageData{}, err

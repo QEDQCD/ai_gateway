@@ -205,7 +205,7 @@ type AuditItem struct {
 	Status              string `json:"status"`
 	RouteLabel          string `json:"route_label"`
 	Latency             string `json:"latency"`
-	FirstTokenLatencyMS *int64 `json:"first_token_latency_ms,omitempty"`
+	FirstTokenLatencyMS int64  `json:"first_token_latency_ms"`
 	UsageSource         string `json:"usage_source"`
 }
 
@@ -291,7 +291,7 @@ type UsageRequestItem struct {
 	Status              string `json:"status"`
 	TotalTokens         string `json:"total_tokens"`
 	Latency             string `json:"latency"`
-	FirstTokenLatencyMS *int64 `json:"first_token_latency_ms,omitempty"`
+	FirstTokenLatencyMS int64  `json:"first_token_latency_ms"`
 	UsageSource         string `json:"usage_source"`
 }
 

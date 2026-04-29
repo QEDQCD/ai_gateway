@@ -37,7 +37,7 @@ type UsageRecord struct {
 	UsageSource          UsageSource
 	StatusCode           int
 	LatencyMS            int64
-	FirstTokenLatencyMS  *int64
+	FirstTokenLatencyMS  int64
 	PromptTokens         int
 	CompletionTokens     int
 	TotalTokens          int
@@ -207,7 +207,7 @@ func insertUsageRecord(ctx context.Context, db store.DBTX, record UsageRecord) e
 		string(record.Status),
 		record.StatusCode,
 		record.LatencyMS,
-		nullableInt64Value(record.FirstTokenLatencyMS),
+		record.FirstTokenLatencyMS,
 		record.PromptTokens,
 		record.CompletionTokens,
 		record.TotalTokens,
@@ -217,13 +217,6 @@ func insertUsageRecord(ctx context.Context, db store.DBTX, record UsageRecord) e
 		record.RequestCompletedAt,
 	)
 	return err
-}
-
-func nullableInt64Value(value *int64) any {
-	if value == nil {
-		return nil
-	}
-	return *value
 }
 
 func insertUsageLifecycleEvent(ctx context.Context, db store.DBTX, record UsageRecord, eventType string, detail string) error {
