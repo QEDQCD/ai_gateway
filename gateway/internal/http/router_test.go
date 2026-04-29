@@ -156,6 +156,39 @@ func TestConsoleLoginRouteReturnsSessionPayload(t *testing.T) {
 	}
 }
 
+func TestConsoleLoginRouteReturnsChineseUnauthorizedMessage(t *testing.T) {
+	t.Parallel()
+
+	app := apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+		AuthService: stubConsoleAuthService{
+			err: fmt.Errorf("%w: invalid console credentials", service.ErrUnauthorized),
+		},
+	})
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/console/session/login",
+		strings.NewReader(`{"email":"123@qq.com","password":"wrong-password"}`),
+	)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("io.ReadAll failed: %v", err)
+	}
+	if string(body) != "邮箱或密码错误" {
+		t.Fatalf("expected body %q, got %q", "邮箱或密码错误", string(body))
+	}
+}
+
 func TestConsoleApplicationSubmitRouteReturnsPendingPayload(t *testing.T) {
 	t.Parallel()
 

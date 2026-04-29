@@ -586,6 +586,70 @@ func TestPostgresConsoleServiceCreateApplicationRequiresPasswordAndCaptchaToken(
 	}
 }
 
+func TestPostgresConsoleServiceCreateApplicationRejectsEmailWithoutAt(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, _ := newUsageConsoleService(t, ctx)
+
+	_, err := console.CreateApplication(ctx, service.CreateApplicationRequest{
+		Email:            "invalid-email",
+		Name:             "新用户",
+		CompanyName:      "New Co",
+		UseCase:          "测试接入",
+		Password:         "Example1234",
+		CaptchaPassToken: "cp_demo",
+	})
+	if err == nil {
+		t.Fatal("expected CreateApplication to reject email without @")
+	}
+
+	var statusErr service.StatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("expected StatusError, got %T", err)
+	}
+	if statusErr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", statusErr.Code)
+	}
+	if statusErr.Message != "邮箱格式不合法，请输入包含 @ 的邮箱地址。" {
+		t.Fatalf("expected chinese email validation message, got %q", statusErr.Message)
+	}
+}
+
+func TestPostgresConsoleServiceCreateApplicationReturnsChinesePasswordRuleError(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, _ := newUsageConsoleService(t, ctx)
+
+	_, err := console.CreateApplication(ctx, service.CreateApplicationRequest{
+		Email:            "new-user@example.com",
+		Name:             "新用户",
+		CompanyName:      "New Co",
+		UseCase:          "测试接入",
+		Password:         "12345678",
+		CaptchaPassToken: "cp_demo",
+	})
+	if err == nil {
+		t.Fatal("expected CreateApplication to reject password without letters")
+	}
+
+	var statusErr service.StatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("expected StatusError, got %T", err)
+	}
+	if statusErr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", statusErr.Code)
+	}
+	if statusErr.Message != "密码需同时包含字母和数字。" {
+		t.Fatalf("expected chinese password validation message, got %q", statusErr.Message)
+	}
+}
+
 func TestPostgresConsoleServiceCreateApplicationRejectsExistingActiveUserEmail(t *testing.T) {
 	t.Parallel()
 

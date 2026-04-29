@@ -173,7 +173,7 @@ func validateConsolePassword(password string) error {
 	if len(password) < 8 || len(password) > 72 {
 		return StatusError{
 			Code:    http.StatusBadRequest,
-			Message: "password must be between 8 and 72 characters",
+			Message: "密码长度需在 8 到 72 位之间。",
 		}
 	}
 
@@ -190,7 +190,7 @@ func validateConsolePassword(password string) error {
 	if !hasLetter || !hasDigit {
 		return StatusError{
 			Code:    http.StatusBadRequest,
-			Message: "password must include letters and digits",
+			Message: "密码需同时包含字母和数字。",
 		}
 	}
 

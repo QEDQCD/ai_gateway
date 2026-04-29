@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"errors"
+
 	"github.com/example/ai_gateway/gateway/internal/service"
 	"github.com/gofiber/fiber/v2"
 )
@@ -21,6 +23,9 @@ func ConsoleLogin(auth service.ConsoleAuthService) fiber.Handler {
 
 		payload, err := auth.AuthenticateConsoleSession(c.UserContext(), req.Email, req.Password)
 		if err != nil {
+			if errors.Is(err, service.ErrUnauthorized) {
+				return fiber.NewError(fiber.StatusUnauthorized, "邮箱或密码错误")
+			}
 			return consoleError(err)
 		}
 		return c.JSON(payload)

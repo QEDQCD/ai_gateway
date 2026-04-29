@@ -262,6 +262,12 @@ func (s postgresConsoleService) CreateApplication(ctx context.Context, req Creat
 			Message: "email is required",
 		}
 	}
+	if !strings.Contains(email, "@") {
+		return ApplicationMutationResult{}, StatusError{
+			Code:    http.StatusBadRequest,
+			Message: "邮箱格式不合法，请输入包含 @ 的邮箱地址。",
+		}
+	}
 	if name == "" {
 		return ApplicationMutationResult{}, StatusError{
 			Code:    http.StatusBadRequest,
