@@ -30,6 +30,7 @@ type ChatMessage struct {
 type ChatRequest struct {
 	Model    string        `json:"model"`
 	Messages []ChatMessage `json:"messages"`
+	Stream   bool          `json:"stream,omitempty"`
 }
 
 type ChatChoice struct {
@@ -40,6 +41,12 @@ type ChatResponse struct {
 	Model   string       `json:"model,omitempty"`
 	Usage   *TokenUsage  `json:"usage,omitempty"`
 	Choices []ChatChoice `json:"choices"`
+}
+
+type ChatCompletionStream struct {
+	StatusCode  int
+	ContentType string
+	Run         func(emit func([]byte) error) (ChatResponse, error)
 }
 
 type EmbeddingsRequest struct {
@@ -59,6 +66,7 @@ type EmbeddingsResponse struct {
 
 type UpstreamChatClient interface {
 	Complete(ctx context.Context, target domain.ProviderTarget, req ChatRequest) (ChatResponse, int, error)
+	StreamComplete(ctx context.Context, target domain.ProviderTarget, req ChatRequest) (ChatCompletionStream, int, error)
 }
 
 type UpstreamEmbeddingClient interface {
@@ -67,6 +75,7 @@ type UpstreamEmbeddingClient interface {
 
 type ChatProxyService interface {
 	Complete(ctx context.Context, req ChatRequest, resolved any) (ChatResponse, error)
+	Stream(ctx context.Context, req ChatRequest, resolved any) (ChatCompletionStream, error)
 	RecordFailure(ctx context.Context, resolved any, statusCode int)
 }
 
@@ -157,6 +166,51 @@ func (s chatProxyService) Complete(ctx context.Context, req ChatRequest, resolve
 	return resp, nil
 }
 
+func (s chatProxyService) Stream(ctx context.Context, req ChatRequest, resolved any) (ChatCompletionStream, error) {
+	requestContext, ok := resolvedRequestContext(resolved)
+	if !ok {
+		return ChatCompletionStream{}, StatusError{
+			Code:    http.StatusUnauthorized,
+			Message: "unauthorized",
+			Err:     fmt.Errorf("%w: request context is missing", ErrUnauthorized),
+		}
+	}
+	if err := validateProviderTarget(requestContext); err != nil {
+		now := time.Now().UTC()
+		s.record(ctx, NewChatUsageRecord(requestIDFromContext(ctx), requestContext, req, ChatResponse{}, http.StatusBadGateway, now, now, err))
+		return ChatCompletionStream{}, err
+	}
+
+	requestID := requestIDFromContext(ctx)
+	start := time.Now().UTC()
+	upstreamStream, statusCode, err := s.client.StreamComplete(ctx, requestContext.ProviderTarget, req)
+	if err != nil {
+		record := NewChatUsageRecord(requestID, requestContext, req, ChatResponse{}, statusCode, start, time.Now().UTC(), err)
+		s.record(ctx, record)
+		return ChatCompletionStream{}, StatusError{
+			Code:    defaultStatusCode(statusCode),
+			Message: "upstream request failed",
+			Err:     err,
+		}
+	}
+
+	return ChatCompletionStream{
+		StatusCode:  defaultStatusCode(upstreamStream.StatusCode),
+		ContentType: upstreamStream.ContentType,
+		Run: func(emit func([]byte) error) (ChatResponse, error) {
+			resp, streamErr := upstreamStream.Run(emit)
+			finalStatusCode := defaultStatusCode(upstreamStream.StatusCode)
+			if streamErr != nil && finalStatusCode >= 200 && finalStatusCode < 300 {
+				finalStatusCode = http.StatusInternalServerError
+			}
+
+			record := NewChatUsageRecord(requestID, requestContext, req, resp, finalStatusCode, start, time.Now().UTC(), streamErr)
+			s.record(ctx, record)
+			return resp, streamErr
+		},
+	}, nil
+}
+
 func (s embeddingProxyService) Create(ctx context.Context, req EmbeddingsRequest, resolved any) (EmbeddingsResponse, error) {
 	requestContext, ok := resolvedRequestContext(resolved)
 	if !ok {
@@ -229,6 +283,14 @@ func (s embeddingProxyService) record(ctx context.Context, record UsageRecord) {
 
 func (unavailableChatProxyService) Complete(context.Context, ChatRequest, any) (ChatResponse, error) {
 	return ChatResponse{}, StatusError{
+		Code:    http.StatusNotImplemented,
+		Message: "chat proxy unavailable",
+		Err:     fmt.Errorf("%w: chat proxy", ErrProxyUnavailable),
+	}
+}
+
+func (unavailableChatProxyService) Stream(context.Context, ChatRequest, any) (ChatCompletionStream, error) {
+	return ChatCompletionStream{}, StatusError{
 		Code:    http.StatusNotImplemented,
 		Message: "chat proxy unavailable",
 		Err:     fmt.Errorf("%w: chat proxy", ErrProxyUnavailable),

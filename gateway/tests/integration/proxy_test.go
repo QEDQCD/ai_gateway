@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/example/ai_gateway/gateway/internal/domain"
@@ -301,6 +302,85 @@ func TestChatCompletionProxyPassesPlatformKeyNameAndRouteIDThroughRequestContext
 	}
 }
 
+func TestChatCompletionProxyStreamsSSEAndPublishesUsage(t *testing.T) {
+	t.Parallel()
+
+	providerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+
+		var payload struct {
+			Model   string `json:"model"`
+			Stream  bool   `json:"stream"`
+			Message []struct {
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("json.NewDecoder failed: %v", err)
+		}
+		if !payload.Stream {
+			t.Fatal("expected upstream stream=true request")
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Fatal("expected response writer to implement http.Flusher")
+		}
+		_, _ = io.WriteString(w, "data: {\"model\":\"gpt-4o-mini\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"stub\"}}]}\n\n")
+		flusher.Flush()
+		_, _ = io.WriteString(w, "data: {\"model\":\"gpt-4o-mini\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"-answer\"}}]}\n\n")
+		flusher.Flush()
+		_, _ = io.WriteString(w, "data: {\"model\":\"gpt-4o-mini\",\"choices\":[],\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":7,\"total_tokens\":18}}\n\n")
+		flusher.Flush()
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	}))
+	t.Cleanup(providerServer.Close)
+
+	app, usagePublisher := newGatewayApp(t, providerServer.URL+"/v1", providerServer.URL)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"model":"gpt-4o-mini","stream":true,"messages":[{"role":"user","content":"hello"}]}`))
+	req.Header.Set("Authorization", "Bearer platform-live-key")
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := app.Test(req, -1)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Content-Type"); got != "text/event-stream; charset=utf-8" {
+		t.Fatalf("expected stream content type, got %q", got)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("io.ReadAll failed: %v", err)
+	}
+	if !strings.Contains(string(body), "data: [DONE]") {
+		t.Fatalf("expected stream response to include [DONE], got %q", string(body))
+	}
+	if !strings.Contains(string(body), `"content":"stub"`) || !strings.Contains(string(body), `"content":"-answer"`) {
+		t.Fatalf("expected stream response to include both stream chunks, got %q", string(body))
+	}
+
+	events := usagePublisher.Events()
+	if len(events) != 1 {
+		t.Fatalf("expected 1 usage event, got %d", len(events))
+	}
+	if events[0].Status != "success" {
+		t.Fatalf("expected status %q, got %q", "success", events[0].Status)
+	}
+	if events[0].UsageSource != "upstream" {
+		t.Fatalf("expected usage source %q, got %q", "upstream", events[0].UsageSource)
+	}
+	if events[0].TotalTokens != 18 {
+		t.Fatalf("expected total tokens 18, got %d", events[0].TotalTokens)
+	}
+}
+
 func newGatewayApp(t *testing.T, providerBaseURL string, ragBaseURL string) (*fiber.App, *queue.RecordingUsagePublisher) {
 	t.Helper()
 
@@ -380,6 +460,28 @@ func (s *capturingChatProxyService) Complete(_ context.Context, _ service.ChatRe
 	return service.ChatResponse{
 		Choices: []service.ChatChoice{
 			{Message: service.ChatMessage{Role: "assistant", Content: "captured"}},
+		},
+	}, nil
+}
+
+func (s *capturingChatProxyService) Stream(_ context.Context, _ service.ChatRequest, resolved any) (service.ChatCompletionStream, error) {
+	requestContext, ok := resolved.(domain.RequestContext)
+	if !ok {
+		return service.ChatCompletionStream{}, service.StatusError{Code: http.StatusUnauthorized, Message: "unauthorized"}
+	}
+	s.requestContext = requestContext
+	return service.ChatCompletionStream{
+		StatusCode:  200,
+		ContentType: "text/event-stream; charset=utf-8",
+		Run: func(emit func([]byte) error) (service.ChatResponse, error) {
+			if err := emit([]byte("data: [DONE]\n\n")); err != nil {
+				return service.ChatResponse{}, err
+			}
+			return service.ChatResponse{
+				Choices: []service.ChatChoice{
+					{Message: service.ChatMessage{Role: "assistant", Content: "captured"}},
+				},
+			}, nil
 		},
 	}, nil
 }
