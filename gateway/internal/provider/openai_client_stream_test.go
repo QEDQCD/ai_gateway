@@ -182,3 +182,69 @@ func TestOpenAIClientStreamCompleteMarksClientAbortAfterFirstContentToken(t *tes
 		t.Fatalf("expected partial response content %q, got %q", "你", got)
 	}
 }
+
+func TestOpenAIClientStreamCompleteDoesNotTriggerFirstTokenForRoleOrUsageOnlyChunks(t *testing.T) {
+	t.Parallel()
+
+	providerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Fatal("expected response writer to implement http.Flusher")
+		}
+
+		_, _ = io.WriteString(w, "data: {\"model\":\"qwen-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"}}]}\n\n")
+		flusher.Flush()
+		_, _ = io.WriteString(w, "data: {\"model\":\"qwen-flash\",\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":0,\"total_tokens\":10}}\n\n")
+		flusher.Flush()
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	}))
+	t.Cleanup(providerServer.Close)
+
+	client := NewOpenAIClient(http.DefaultClient)
+	stream, _, err := client.StreamComplete(
+		context.Background(),
+		domain.ProviderTarget{
+			BaseURL: providerServer.URL,
+			APIKey:  "provider-secret-key",
+		},
+		service.ChatRequest{
+			Model:  "qwen-flash",
+			Stream: true,
+			Messages: []service.ChatMessage{
+				{Role: "user", Content: "你好"},
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("StreamComplete returned unexpected error: %v", err)
+	}
+
+	firstTokenCallbacks := 0
+	result, err := stream.Run(func([]byte) error {
+		return nil
+	}, func() {
+		firstTokenCallbacks++
+	})
+	if err != nil {
+		t.Fatalf("stream.Run returned unexpected error: %v", err)
+	}
+	if firstTokenCallbacks != 0 {
+		t.Fatalf("expected no first token callback, got %d", firstTokenCallbacks)
+	}
+	if result.SawContentToken {
+		t.Fatal("expected no content token signal for role/usage-only stream")
+	}
+	if result.ClientAborted {
+		t.Fatal("expected completed stream not to report client abort")
+	}
+	if got := len(result.Response.Choices); got != 1 {
+		t.Fatalf("expected 1 accumulated choice, got %d", got)
+	}
+	if got := result.Response.Choices[0].Message.Content; got != "" {
+		t.Fatalf("expected empty content, got %q", got)
+	}
+}

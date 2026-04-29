@@ -218,13 +218,14 @@ func (s chatProxyService) Stream(ctx context.Context, req ChatRequest, resolved 
 					onFirstToken()
 				}
 			})
+			clientAbortedAfterContent := result.ClientAborted && result.SawContentToken
 			finalStatusCode := defaultStatusCode(upstreamStream.StatusCode)
-			if streamErr != nil && !result.ClientAborted && finalStatusCode >= 200 && finalStatusCode < 300 {
+			if streamErr != nil && !clientAbortedAfterContent && finalStatusCode >= 200 && finalStatusCode < 300 {
 				finalStatusCode = http.StatusInternalServerError
 			}
 
 			recordErr := streamErr
-			if result.ClientAborted {
+			if clientAbortedAfterContent {
 				recordErr = nil
 			}
 			record := NewChatUsageRecord(requestID, requestContext, req, result.Response, finalStatusCode, start, time.Now().UTC(), recordErr)
@@ -233,7 +234,7 @@ func (s chatProxyService) Stream(ctx context.Context, req ChatRequest, resolved 
 			}
 
 			events := []usageRecordEvent(nil)
-			if result.ClientAborted && result.SawContentToken {
+			if clientAbortedAfterContent {
 				events = append(events, usageRecordEvent{
 					eventType: "client_aborted",
 					detail:    "client disconnected after first content token",

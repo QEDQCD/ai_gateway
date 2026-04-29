@@ -218,6 +218,65 @@ func TestChatProxyStreamRecordsFirstTokenLatencyAndClientAbortEvent(t *testing.T
 	}
 }
 
+func TestChatProxyStreamDoesNotTreatPreTokenAbortAsSuccess(t *testing.T) {
+	t.Parallel()
+
+	recorder := &stubUsageRecorder{}
+	clientAbortErr := errors.New("client disconnected before content")
+	proxy := service.NewChatProxyService(
+		stubChatClient{
+			streamRun: func(func([]byte) error, func()) (service.ChatStreamResult, error) {
+				return service.ChatStreamResult{
+					ClientAborted: true,
+				}, clientAbortErr
+			},
+		},
+		queue.NewNoopUsagePublisher(),
+		recorder,
+	)
+
+	stream, err := proxy.Stream(context.Background(), service.ChatRequest{
+		Model:  "gpt-4o-mini",
+		Stream: true,
+		Messages: []service.ChatMessage{
+			{Role: "user", Content: "hello"},
+		},
+	}, domain.RequestContext{
+		TenantID:           "tenant_demo",
+		PlatformAPIKeyID:   "pak_demo",
+		PlatformAPIKeyName: "demo key",
+		RouteID:            "route:provider_openai_demo:default",
+		ProviderTarget: domain.ProviderTarget{
+			CredentialID: "provider_openai_demo",
+			Provider:     "openai",
+			BaseURL:      "https://api.openai.example/v1",
+			APIKey:       "provider-secret",
+		},
+	})
+	if err != nil {
+		t.Fatalf("proxy.Stream returned unexpected error: %v", err)
+	}
+
+	_, err = stream.Run(func([]byte) error {
+		return clientAbortErr
+	}, nil)
+	if !errors.Is(err, clientAbortErr) {
+		t.Fatalf("expected client abort error %v, got %v", clientAbortErr, err)
+	}
+	if recorder.recordCalls != 1 {
+		t.Fatalf("expected 1 usage record write, got %d", recorder.recordCalls)
+	}
+	if recorder.lastRecord.Status == service.UsageStatusSuccess {
+		t.Fatalf("expected pre-token abort not to be recorded as success, got %q", recorder.lastRecord.Status)
+	}
+	if recorder.lastRecord.FirstTokenLatencyMS != 0 {
+		t.Fatalf("expected zero first token latency before content token, got %d", recorder.lastRecord.FirstTokenLatencyMS)
+	}
+	if recorder.eventCalls != 0 {
+		t.Fatalf("expected no client_aborted event before content token, got %d", recorder.eventCalls)
+	}
+}
+
 type stubChatClient struct {
 	response  service.ChatResponse
 	err       error
