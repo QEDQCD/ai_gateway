@@ -812,7 +812,7 @@ func TestAdminApproveApplicationCreatesUserMembershipAndAudit(t *testing.T) {
 	req := httptest.NewRequest(
 		http.MethodPost,
 		"/admin/applications/app_router_pending/approve",
-		strings.NewReader(`{"actor_id":"user_admin_demo","comment":"approved via route","tenant_id":"tenant_demo"}`),
+		strings.NewReader(`{"actor_id":"user_admin_demo","comment":"approved via route","tenant_id":"tenant_demo","token_limit":3456789}`),
 	)
 	req.Header.Set("Content-Type", "application/json")
 	req.SetBasicAuth("test-console-user", "test-console-password")
@@ -844,6 +844,9 @@ func TestAdminApproveApplicationCreatesUserMembershipAndAudit(t *testing.T) {
 	}
 	if capturedReq.TenantID != "tenant_demo" {
 		t.Fatalf("expected tenant_id %q, got %q", "tenant_demo", capturedReq.TenantID)
+	}
+	if capturedReq.TokenLimit != 3456789 {
+		t.Fatalf("expected token_limit %d, got %d", 3456789, capturedReq.TokenLimit)
 	}
 }
 

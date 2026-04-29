@@ -1289,6 +1289,7 @@ describe("控制台路由", () => {
           actor_id: "user_admin_demo",
           comment: "通过控制台审批",
           tenant_id: "tenant_demo",
+          token_limit: 10000000,
         });
 
         return new Response(
@@ -1320,6 +1321,7 @@ describe("控制台路由", () => {
     expect((await screen.findAllByText("待审批用户")).length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole("button", { name: "选择 待审批用户" }));
     fireEvent.change(screen.getByLabelText("租户 ID"), { target: { value: "tenant_demo" } });
+    fireEvent.change(screen.getByLabelText("Token 上限"), { target: { value: "10000000" } });
     fireEvent.click(screen.getByRole("button", { name: "审批通过" }));
 
     expect(await screen.findByText("审批已完成")).toBeInTheDocument();
@@ -1444,6 +1446,7 @@ describe("控制台路由", () => {
           actor_id: "user_admin_demo",
           comment: "通过控制台审批",
           tenant_id: "tenant_alice",
+          token_limit: 10000000,
         });
 
         return new Promise<Response>((resolve) => {
@@ -1479,6 +1482,7 @@ describe("控制台路由", () => {
 
     expect(await screen.findByRole("button", { name: "选择 Alice" })).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("租户 ID"), { target: { value: "tenant_alice" } });
+    fireEvent.change(screen.getByLabelText("Token 上限"), { target: { value: "10000000" } });
     fireEvent.click(screen.getByRole("button", { name: "审批通过" }));
 
     await waitFor(() => {

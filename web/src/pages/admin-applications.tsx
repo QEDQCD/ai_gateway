@@ -25,6 +25,8 @@ function buildDefaultTenantID(item: ApplicationItem | null) {
   return normalized ? `tenant_${normalized}` : `tenant_${item.id}`;
 }
 
+const defaultApprovalTokenLimit = 10_000_000;
+
 type ApprovalResultState = {
   action: "approved" | "rejected";
   item: ApplicationItem;
@@ -38,6 +40,7 @@ export function AdminApplicationsPage() {
   const [items, setItems] = useState<ApplicationItem[]>([]);
   const [selectedID, setSelectedID] = useState<string | null>(null);
   const [tenantID, setTenantID] = useState("tenant_demo");
+  const [tokenLimit, setTokenLimit] = useState(String(defaultApprovalTokenLimit));
   const [comment, setComment] = useState("通过控制台审批");
   const [submitting, setSubmitting] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -61,6 +64,7 @@ export function AdminApplicationsPage() {
 
   useEffect(() => {
     setTenantID(buildDefaultTenantID(selectedItem));
+    setTokenLimit(String(defaultApprovalTokenLimit));
     setComment("通过控制台审批");
     setActionError(null);
   }, [selectedItem]);
@@ -80,7 +84,13 @@ export function AdminApplicationsPage() {
 
     const approvalItem = selectedItem;
     const approvalTenantID = tenantID.trim();
+    const approvalTokenLimit = Number(tokenLimit.trim());
     const approvalComment = comment.trim() || "通过控制台审批";
+
+    if (!Number.isFinite(approvalTokenLimit) || approvalTokenLimit <= 0) {
+      setActionError("请输入大于 0 的 Token 上限。");
+      return;
+    }
 
     try {
       setSubmitting(true);
@@ -89,6 +99,7 @@ export function AdminApplicationsPage() {
         actor_id: session.user_id,
         comment: approvalComment,
         tenant_id: approvalTenantID,
+        token_limit: approvalTokenLimit,
       });
       setItems((current) =>
         current.map((item) => (item.id === approvalItem.id ? result.item : item)),
@@ -203,6 +214,16 @@ export function AdminApplicationsPage() {
                 />
               </label>
               <label className="field-shell">
+                Token 上限
+                <input
+                  type="number"
+                  min={1}
+                  value={tokenLimit}
+                  disabled={submitting}
+                  onChange={(event) => setTokenLimit(event.target.value)}
+                />
+              </label>
+              <label className="field-shell">
                 审批备注
                 <textarea
                   rows={3}
@@ -235,6 +256,7 @@ export function AdminApplicationsPage() {
                   disabled={submitting}
                   onClick={() => {
                     setTenantID(buildDefaultTenantID(selectedItem));
+                    setTokenLimit(String(defaultApprovalTokenLimit));
                     setComment("通过控制台审批");
                     setActionError(null);
                   }}

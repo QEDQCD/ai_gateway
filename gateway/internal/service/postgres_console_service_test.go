@@ -1175,6 +1175,63 @@ func TestPostgresConsoleServiceApproveApplicationRequiresTenantID(t *testing.T) 
 	}
 }
 
+func TestPostgresConsoleServiceApproveApplicationRequiresTokenLimit(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte("Example1234"), bcrypt.DefaultCost)
+	if err != nil {
+		t.Fatalf("GenerateFromPassword failed: %v", err)
+	}
+
+	if _, err := conn.Exec(ctx, `
+		insert into account_applications (
+			id,
+			email,
+			email_normalized,
+			name,
+			company_name,
+			use_case,
+			password_hash,
+			status,
+			created_at
+		) values (
+			'app_pending_missing_token_limit',
+			'missing-token-limit@example.com',
+			'missing-token-limit@example.com',
+			'缺少额度用户',
+			'Token Co',
+			'租户接入',
+			$1,
+			'pending',
+			timestamptz '2026-04-25T01:02:03Z'
+		)
+	`, string(passwordHash)); err != nil {
+		t.Fatalf("seed approve application failed: %v", err)
+	}
+
+	_, err = console.ApproveApplication(ctx, "app_pending_missing_token_limit", service.ApproveApplicationRequest{
+		ActorID:  "user_admin_demo",
+		Comment:  "approved without token limit",
+		TenantID: "tenant_demo",
+	})
+	if err == nil {
+		t.Fatal("expected ApproveApplication to require token_limit")
+	}
+
+	var statusErr service.StatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("expected StatusError, got %T", err)
+	}
+	if statusErr.Code != 400 {
+		t.Fatalf("expected bad request status, got %d", statusErr.Code)
+	}
+}
+
 func TestPostgresConsoleServiceApproveApplicationCreatesUserMembershipAndAudit(t *testing.T) {
 	t.Parallel()
 
@@ -1239,9 +1296,10 @@ func TestPostgresConsoleServiceApproveApplicationCreatesUserMembershipAndAudit(t
 	}
 
 	result, err := console.ApproveApplication(ctx, "app_service_pending", service.ApproveApplicationRequest{
-		ActorID:  "user_admin_demo",
-		Comment:  "approved via service",
-		TenantID: "tenant_demo",
+		ActorID:    "user_admin_demo",
+		Comment:    "approved via service",
+		TenantID:   "tenant_demo",
+		TokenLimit: 23456789,
 	})
 	if err != nil {
 		t.Fatalf("ApproveApplication failed: %v", err)
@@ -1357,6 +1415,18 @@ func TestPostgresConsoleServiceApproveApplicationCreatesUserMembershipAndAudit(t
 	if auditCount != 1 {
 		t.Fatalf("expected 1 approval audit event, got %d", auditCount)
 	}
+
+	var tokenLimit int64
+	if err := conn.QueryRow(ctx, `
+		select token_limit
+		from tenant_quota_policies
+		where tenant_id = 'tenant_demo'
+	`).Scan(&tokenLimit); err != nil {
+		t.Fatalf("select tenant quota policy failed: %v", err)
+	}
+	if tokenLimit != 23456789 {
+		t.Fatalf("expected token_limit %d, got %d", 23456789, tokenLimit)
+	}
 }
 
 func TestPostgresConsoleServiceApproveApplicationCreatesTenantWhenMissing(t *testing.T) {
@@ -1399,9 +1469,10 @@ func TestPostgresConsoleServiceApproveApplicationCreatesTenantWhenMissing(t *tes
 	}
 
 	result, err := console.ApproveApplication(ctx, "app_create_tenant_pending", service.ApproveApplicationRequest{
-		ActorID:  "user_admin_demo",
-		Comment:  "approved with new tenant",
-		TenantID: "tenant_create_tenant_co",
+		ActorID:    "user_admin_demo",
+		Comment:    "approved with new tenant",
+		TenantID:   "tenant_create_tenant_co",
+		TokenLimit: 8765432,
 	})
 	if err != nil {
 		t.Fatalf("ApproveApplication failed: %v", err)
@@ -1439,6 +1510,22 @@ func TestPostgresConsoleServiceApproveApplicationCreatesTenantWhenMissing(t *tes
 	}
 	if membershipCount != 1 {
 		t.Fatalf("expected 1 active membership for created tenant, got %d", membershipCount)
+	}
+
+	var requestLimit int64
+	var tokenLimit int64
+	if err := conn.QueryRow(ctx, `
+		select request_limit, token_limit
+		from tenant_quota_policies
+		where tenant_id = 'tenant_create_tenant_co'
+	`).Scan(&requestLimit, &tokenLimit); err != nil {
+		t.Fatalf("select created tenant quota policy failed: %v", err)
+	}
+	if requestLimit <= 0 {
+		t.Fatalf("expected positive request_limit, got %d", requestLimit)
+	}
+	if tokenLimit != 8765432 {
+		t.Fatalf("expected token_limit %d, got %d", 8765432, tokenLimit)
 	}
 }
 

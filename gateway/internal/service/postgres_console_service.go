@@ -497,6 +497,7 @@ func (s postgresConsoleService) ApproveApplication(ctx context.Context, id strin
 	actorID := strings.TrimSpace(req.ActorID)
 	comment := strings.TrimSpace(req.Comment)
 	tenantID := strings.TrimSpace(req.TenantID)
+	tokenLimit := req.TokenLimit
 	if applicationID == "" {
 		return ApplicationMutationResult{}, StatusError{
 			Code:    http.StatusBadRequest,
@@ -513,6 +514,12 @@ func (s postgresConsoleService) ApproveApplication(ctx context.Context, id strin
 		return ApplicationMutationResult{}, StatusError{
 			Code:    http.StatusBadRequest,
 			Message: "tenant_id is required",
+		}
+	}
+	if tokenLimit <= 0 {
+		return ApplicationMutationResult{}, StatusError{
+			Code:    http.StatusBadRequest,
+			Message: "token_limit is required",
 		}
 	}
 
@@ -564,6 +571,40 @@ func (s postgresConsoleService) ApproveApplication(ctx context.Context, id strin
 			from updated_application
 			on conflict (id) do nothing
 		),
+		upserted_quota as (
+			insert into tenant_quota_policies (
+				tenant_id,
+				period_type,
+				request_limit,
+				token_limit,
+				effective_from,
+				created_by
+			)
+			select
+				$5,
+				'monthly',
+				coalesce(
+					(
+						select request_limit
+						from tenant_quota_policies
+						where tenant_id = $5
+						order by effective_from desc
+						limit 1
+					),
+					500000
+				),
+				$7,
+				now(),
+				$2
+			from updated_application
+			on conflict (tenant_id) do update
+			set
+				request_limit = excluded.request_limit,
+				token_limit = excluded.token_limit,
+				effective_from = excluded.effective_from,
+				created_by = excluded.created_by,
+				updated_at = now()
+		),
 		upserted_user as (
 			insert into users (id, email, name, role, status, password_hash)
 			select $4, email, name, 'member', 'active', password_hash
@@ -596,7 +637,7 @@ func (s postgresConsoleService) ApproveApplication(ctx context.Context, id strin
 				detail
 			)
 			select
-				$7,
+				$8,
 				'admin',
 				$2,
 				$5,
@@ -608,7 +649,7 @@ func (s postgresConsoleService) ApproveApplication(ctx context.Context, id strin
 		)
 		select id, email, name, company_name, use_case, status, created_at
 		from updated_application;
-	`, applicationID, actorID, comment, newUserID(), tenantID, newTenantMembershipID(), newAuditEventID())
+	`, applicationID, actorID, comment, newUserID(), tenantID, newTenantMembershipID(), tokenLimit, newAuditEventID())
 
 	item, err := scanApplicationItem(row)
 	if err != nil {

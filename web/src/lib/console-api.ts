@@ -97,6 +97,7 @@ export type ApproveApplicationPayload = {
   actor_id: string;
   comment: string;
   tenant_id: string;
+  token_limit: number;
 };
 
 export type RejectApplicationPayload = {
