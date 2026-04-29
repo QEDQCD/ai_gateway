@@ -195,7 +195,7 @@ describe("控制台路由", () => {
     );
 
     expect(await screen.findByAltText("图形验证码")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "提交申请" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "提交申请" })).toBeEnabled();
 
     fireEvent.change(await screen.findByLabelText("邮箱"), {
       target: { value: "new-user@example.com" },
@@ -227,6 +227,87 @@ describe("控制台路由", () => {
 
     expect(await screen.findByText("申请已提交")).toBeInTheDocument();
     expect(screen.getByText("状态：pending")).toBeInTheDocument();
+  });
+
+  test("验证码通过后提交按钮仍可点击，并给出明确校验错误", async () => {
+    mockAnonymousSession();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+
+      if (url === "/api/console/captcha" && !init?.method) {
+        return new Response(
+          JSON.stringify({
+            captcha_id: "cap_demo",
+            image_data: "data:image/png;base64,AAAA",
+            expires_at: "2026-04-29T00:00:00Z",
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+
+      if (url === "/api/console/captcha/verify" && init?.method === "POST") {
+        return new Response(
+          JSON.stringify({
+            captcha_pass_token: "cp_demo",
+            expires_at: "2026-04-29T00:00:00Z",
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+
+      if (url === "/api/console/applications" && init?.method === "POST") {
+        throw new Error("form validation should block request");
+      }
+
+      throw new Error(`Unexpected fetch url: ${url}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <RouterProvider router={createTestRouter(["/apply"])} future={{ v7_startTransition: true }} />,
+    );
+
+    expect(await screen.findByAltText("图形验证码")).toBeInTheDocument();
+
+    fireEvent.change(await screen.findByLabelText("邮箱"), {
+      target: { value: "new-user@example.com" },
+    });
+    fireEvent.change(screen.getByLabelText("姓名"), {
+      target: { value: "新用户" },
+    });
+    fireEvent.change(screen.getByLabelText("公司"), {
+      target: { value: "New Co" },
+    });
+    fireEvent.change(screen.getByLabelText("接入用途"), {
+      target: { value: "测试接入" },
+    });
+    fireEvent.change(screen.getByLabelText("密码"), {
+      target: { value: "Example1234" },
+    });
+    fireEvent.change(screen.getByLabelText("确认密码"), {
+      target: { value: "Mismatch1234" },
+    });
+    fireEvent.change(screen.getByLabelText("验证码"), {
+      target: { value: "A7KQ" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "验证验证码" }));
+
+    expect(await screen.findByText("验证码已通过")).toBeInTheDocument();
+
+    const submitButton = screen.getByRole("button", { name: "提交申请" });
+    expect(submitButton).toBeEnabled();
+
+    fireEvent.click(submitButton);
+
+    expect(await screen.findByText("两次输入的密码不一致。")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   test("admin session 渲染 admin navigation", async () => {

@@ -30,6 +30,32 @@ export function ApplicationFormPage() {
     void loadCaptcha();
   }, []);
 
+  function validateForm() {
+    if (email.trim() === "") {
+      return "请输入邮箱。";
+    }
+    if (name.trim() === "") {
+      return "请输入姓名。";
+    }
+    if (companyName.trim() === "") {
+      return "请输入公司名称。";
+    }
+    if (useCase.trim() === "") {
+      return "请输入接入用途。";
+    }
+    if (password.length < 8) {
+      return "密码至少需要 8 位。";
+    }
+    if (password !== confirmPassword) {
+      return "两次输入的密码不一致。";
+    }
+    if (!captchaVerified || captchaPassToken === "") {
+      return "请先完成验证码验证。";
+    }
+
+    return "";
+  }
+
   async function loadCaptcha() {
     setCaptchaLoading(true);
     setCaptchaMessage("");
@@ -77,8 +103,15 @@ export function ApplicationFormPage() {
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setSubmitting(true);
     setError("");
+
+    const validationError = validateForm();
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+
+    setSubmitting(true);
 
     try {
       const result = await createApplication({
@@ -100,16 +133,7 @@ export function ApplicationFormPage() {
     }
   }
 
-  const canSubmit =
-    !submitting &&
-    email.trim() !== "" &&
-    name.trim() !== "" &&
-    companyName.trim() !== "" &&
-    useCase.trim() !== "" &&
-    password.length >= 8 &&
-    password === confirmPassword &&
-    captchaVerified &&
-    captchaPassToken !== "";
+  const canSubmit = !submitting;
 
   return (
     <div className="login-page">
