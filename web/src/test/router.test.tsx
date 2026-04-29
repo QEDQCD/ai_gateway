@@ -1737,6 +1737,42 @@ describe("控制台路由", () => {
     expect(scrollIntoView).toHaveBeenCalled();
   });
 
+  test("member 点击新建密钥时会自动滚动到创建面板", async () => {
+    mockSession({ role: "member", tenant_id: "tenant_123", user_id: "user_member_123" });
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: scrollIntoView,
+    });
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+
+      if (url === "/api/me/api-keys" && !init?.method) {
+        return new Response(
+          JSON.stringify({
+            items: [],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+
+      throw new Error(`Unexpected fetch url: ${url}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderRoute("/api-keys");
+
+    fireEvent.click(await screen.findByRole("button", { name: "新建密钥" }));
+
+    expect(await screen.findByRole("heading", { name: "新建密钥" })).toBeInTheDocument();
+    expect(scrollIntoView).toHaveBeenCalled();
+  });
+
   test("member API 密钥页在透明复制受限的浏览器中也能复制完整密钥", async () => {
     const writeText = vi.fn().mockRejectedValue(new Error("NotAllowedError"));
     const execCommand = vi.fn(function (this: unknown, command: string) {

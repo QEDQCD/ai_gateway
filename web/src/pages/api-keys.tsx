@@ -204,6 +204,7 @@ export function APIKeysPage() {
   const [selectedCopyNotice, setSelectedCopyNotice] = useState<string | null>(null);
   const [resultCopyNotice, setResultCopyNotice] = useState<string | null>(null);
   const actionResultRef = useRef<HTMLElement | null>(null);
+  const actionPanelRef = useRef<HTMLElement | null>(null);
   const selectedItem = items.find((item) => item.id === selectedID) ?? null;
   const selectedSecretForItem =
     selectedItem && selectedSecret?.api_key_id === selectedItem.id ? selectedSecret : null;
@@ -235,6 +236,20 @@ export function APIKeysPage() {
       });
     }
   }, [actionNotice, actionResult]);
+
+  useEffect(() => {
+    if (!actionMode) {
+      return;
+    }
+
+    const scrollIntoView = actionPanelRef.current?.scrollIntoView;
+    if (typeof scrollIntoView === "function") {
+      scrollIntoView.call(actionPanelRef.current, {
+        behavior: "smooth",
+        block: "start",
+      });
+    }
+  }, [actionMode]);
 
   useEffect(() => {
     if (!selectedID) {
@@ -635,7 +650,7 @@ export function APIKeysPage() {
       </section>
 
       {actionMode ? (
-        <section className="section-card">
+        <section ref={actionPanelRef} className="section-card">
           <h3>
             {actionMode === "create"
               ? "新建密钥"
