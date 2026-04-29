@@ -1261,7 +1261,7 @@ func TestAdminUsageRequestsRouteReturnsConsoleData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("io.ReadAll failed: %v", err)
 	}
-	expected := `{"items":[{"request_id":"llmreq_demo_002","tenant":"tenant_demo","endpoint":"/v1/embeddings","model":"text-embedding-3-small","status":"限流","total_tokens":"16","latency":"95 ms","usage_source":"估算"}],"total":1,"limit":20,"offset":0}`
+	expected := `{"items":[{"request_id":"llmreq_demo_002","tenant":"tenant_demo","endpoint":"/v1/embeddings","model":"text-embedding-3-small","status":"限流","total_tokens":"16","latency":"95 ms","first_token_latency_ms":0,"usage_source":"估算"}],"total":1,"limit":20,"offset":0}`
 	if string(body) != expected {
 		t.Fatalf("expected body %q, got %q", expected, string(body))
 	}
