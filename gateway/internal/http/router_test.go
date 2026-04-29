@@ -114,6 +114,67 @@ func TestServiceBasicAuthProtectsAdminRoutes(t *testing.T) {
 	}
 }
 
+func TestAdminPlaygroundStreamRouteReturnsSSE(t *testing.T) {
+	t.Parallel()
+
+	var captured service.PlaygroundRunRequest
+	app := apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+		ServiceAuthUsername: "test-console-user",
+		ServiceAuthPassword: "test-console-password",
+		ConsoleService: stubConsoleService{
+			streamPlaygroundReqRef: &captured,
+			streamPlaygroundSession: service.PlaygroundStreamSession{
+				StatusCode:  http.StatusOK,
+				ContentType: "text/event-stream; charset=utf-8",
+				Run: func(emit func([]byte) error) (service.PlaygroundRunResponse, error) {
+					if err := emit([]byte("event: meta\ndata: {\"request_id\":\"req_playground_stream\"}\n\n")); err != nil {
+						return service.PlaygroundRunResponse{}, err
+					}
+					if err := emit([]byte("event: done\ndata: {\"status\":\"200 成功\"}\n\n")); err != nil {
+						return service.PlaygroundRunResponse{}, err
+					}
+					return service.PlaygroundRunResponse{Status: "200 成功"}, nil
+				},
+			},
+		},
+	})
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/admin/playground/chat/stream",
+		strings.NewReader(`{"model":"qwen-flash","prompt":"hello","stream":true}`),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	req.SetBasicAuth("test-console-user", "test-console-password")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, resp.StatusCode)
+	}
+	if got := resp.Header.Get("Content-Type"); !strings.Contains(got, "text/event-stream") {
+		t.Fatalf("expected text/event-stream content type, got %q", got)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("io.ReadAll failed: %v", err)
+	}
+	if !strings.Contains(string(body), "event: meta") {
+		t.Fatalf("expected SSE body to include meta event, got %q", string(body))
+	}
+	if !strings.Contains(string(body), "event: done") {
+		t.Fatalf("expected SSE body to include done event, got %q", string(body))
+	}
+	if !captured.Stream {
+		t.Fatalf("expected playground stream request to preserve stream=true, got %#v", captured)
+	}
+	if captured.Model != "qwen-flash" || captured.Prompt != "hello" {
+		t.Fatalf("expected captured request to match body, got %#v", captured)
+	}
+}
+
 func TestConsoleLoginRouteReturnsSessionPayload(t *testing.T) {
 	t.Parallel()
 
@@ -1656,6 +1717,8 @@ type stubConsoleService struct {
 	usageFailures            service.UsageFailureData
 	usageRequests            service.UsageRequestsPageData
 	usageQueryRef            *service.UsageQuery
+	streamPlaygroundReqRef   *service.PlaygroundRunRequest
+	streamPlaygroundSession  service.PlaygroundStreamSession
 }
 
 type stubMemberConsoleService struct {
@@ -1819,6 +1882,13 @@ func (s stubConsoleService) Playground(context.Context) (service.PlaygroundPageD
 
 func (s stubConsoleService) RunPlayground(context.Context, service.PlaygroundRunRequest) (service.PlaygroundRunResponse, error) {
 	return service.PlaygroundRunResponse{}, nil
+}
+
+func (s stubConsoleService) StreamPlayground(_ context.Context, req service.PlaygroundRunRequest) (service.PlaygroundStreamSession, error) {
+	if s.streamPlaygroundReqRef != nil {
+		*s.streamPlaygroundReqRef = req
+	}
+	return s.streamPlaygroundSession, nil
 }
 
 func (s stubConsoleService) Audit(context.Context) (service.AuditPageData, error) {

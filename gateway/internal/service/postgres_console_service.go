@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -1095,7 +1096,7 @@ func (s postgresConsoleService) RunPlayground(ctx context.Context, req Playgroun
 	}
 
 	latencyMS := durationMilliseconds(time.Since(start))
-	if err := s.insertPlaygroundRun(ctx, resolved, model, prompt, endpoint, responseText, latencyMS); err != nil {
+	if err := s.insertPlaygroundRun(ctx, resolved, model, prompt, endpoint, responseText, http.StatusOK, latencyMS); err != nil {
 		return PlaygroundRunResponse{}, err
 	}
 	if err := s.insertAuditLog(ctx, resolved.TenantID, resolved.PlatformAPIKeyID, model, endpoint, http.StatusOK, resolved.SelectedProviderName, latencyMS); err != nil {
@@ -1110,6 +1111,138 @@ func (s postgresConsoleService) RunPlayground(ctx context.Context, req Playgroun
 		Status:      "200 成功",
 		Response:    responseText,
 		PlatformKey: platformKeyName,
+	}, nil
+}
+
+func (s postgresConsoleService) StreamPlayground(ctx context.Context, req PlaygroundRunRequest) (PlaygroundStreamSession, error) {
+	model := strings.TrimSpace(req.Model)
+	prompt := strings.TrimSpace(req.Prompt)
+	if model == "" || prompt == "" {
+		return PlaygroundStreamSession{}, StatusError{
+			Code:    http.StatusBadRequest,
+			Message: "playground request invalid",
+			Err:     fmt.Errorf("model and prompt are required"),
+		}
+	}
+
+	resolved, err := s.authService.Resolve(ctx, s.seedPlatformKey, model)
+	if err != nil {
+		return PlaygroundStreamSession{}, err
+	}
+
+	var endpoint string
+	if err := s.db.QueryRow(ctx, `select endpoint from route_catalog where requested_model = $1 limit 1;`, model).Scan(&endpoint); err != nil {
+		return PlaygroundStreamSession{}, err
+	}
+	if endpoint == "/v1/rag/query" {
+		return PlaygroundStreamSession{}, StatusError{
+			Code:    http.StatusBadRequest,
+			Message: "playground stream only supports chat routes",
+			Err:     fmt.Errorf("requested model %q resolves to non-chat endpoint %q", model, endpoint),
+		}
+	}
+
+	start := time.Now()
+	stream, err := s.chatProxy.Stream(ctx, ChatRequest{
+		Model: model,
+		Messages: []ChatMessage{
+			{Role: "user", Content: prompt},
+		},
+		Stream: true,
+	}, resolved)
+	if err != nil {
+		return PlaygroundStreamSession{}, err
+	}
+
+	requestID := requestIDFromContext(ctx)
+	platformKeyName := s.lookupPlatformKeyName(ctx, resolved.PlatformAPIKeyID)
+	contentType := strings.TrimSpace(stream.ContentType)
+	if contentType == "" {
+		contentType = "text/event-stream; charset=utf-8"
+	}
+
+	return PlaygroundStreamSession{
+		StatusCode:  stream.StatusCode,
+		ContentType: contentType,
+		Run: func(emit func([]byte) error) (PlaygroundRunResponse, error) {
+			var emitErr error
+			if err := emitPlaygroundStreamEvent(emit, "meta", map[string]any{
+				"request_id": requestID,
+				"model":      model,
+				"endpoint":   "/v1/chat/completions",
+			}); err != nil {
+				emitErr = err
+			}
+
+			firstTokenLatencyMS := int64(0)
+			firstStatsSent := false
+			result, streamErr := stream.Run(func(chunk []byte) error {
+				if emitErr != nil {
+					return emitErr
+				}
+				return emitPlaygroundTokenChunk(emit, chunk)
+			}, func() {
+				if emitErr != nil || firstStatsSent {
+					return
+				}
+				firstTokenLatencyMS = durationMilliseconds(time.Since(start))
+				firstStatsSent = true
+				if err := emitPlaygroundStreamEvent(emit, "stats", map[string]any{
+					"first_token_latency_ms": firstTokenLatencyMS,
+					"status":                 "streaming",
+					"latency_ms":             firstTokenLatencyMS,
+				}); err != nil {
+					emitErr = err
+				}
+			})
+			if streamErr == nil && emitErr != nil {
+				streamErr = emitErr
+			}
+
+			latencyMS := durationMilliseconds(time.Since(start))
+			statusCode := stream.StatusCode
+			if statusCode == 0 {
+				statusCode = http.StatusOK
+			}
+			if streamErr != nil {
+				if result.ClientAborted && result.SawContentToken {
+					statusCode = http.StatusOK
+				} else if statusCode >= http.StatusOK && statusCode < http.StatusMultipleChoices {
+					statusCode = http.StatusInternalServerError
+				}
+			}
+
+			responseText := extractPlaygroundResponseText(result.Response)
+			if err := s.insertPlaygroundRun(ctx, resolved, model, prompt, "/v1/chat/completions", responseText, statusCode, latencyMS); err != nil {
+				return PlaygroundRunResponse{}, err
+			}
+			if err := s.insertAuditLog(ctx, resolved.TenantID, resolved.PlatformAPIKeyID, model, "/v1/chat/completions", statusCode, resolved.SelectedProviderName, latencyMS); err != nil {
+				return PlaygroundRunResponse{}, err
+			}
+
+			finalResponse := PlaygroundRunResponse{
+				RouteLabel:  neutralizeConsoleRouteLabel(resolved.SelectedProviderName),
+				Endpoint:    neutralizeConsoleEndpoint("/v1/chat/completions"),
+				Latency:     fmt.Sprintf("%d ms", latencyMS),
+				Status:      fmt.Sprintf("%d %s", statusCode, mapBool(statusCode < 400, "成功", "失败")),
+				Response:    responseText,
+				PlatformKey: platformKeyName,
+			}
+			if emitErr == nil {
+				_ = emitPlaygroundStreamEvent(emit, "stats", map[string]any{
+					"first_token_latency_ms": firstTokenLatencyMS,
+					"status":                 finalResponse.Status,
+					"latency_ms":             latencyMS,
+				})
+				if streamErr == nil {
+					_ = emitPlaygroundStreamEvent(emit, "done", map[string]any{
+						"status": finalResponse.Status,
+					})
+				}
+			}
+
+			return finalResponse, streamErr
+		},
 	}, nil
 }
 
@@ -1790,7 +1923,7 @@ func (s postgresConsoleService) lookupPlatformKeyName(ctx context.Context, keyID
 	return name
 }
 
-func (s postgresConsoleService) insertPlaygroundRun(ctx context.Context, requestContext domain.RequestContext, model string, prompt string, endpoint string, responseText string, latencyMS int64) error {
+func (s postgresConsoleService) insertPlaygroundRun(ctx context.Context, requestContext domain.RequestContext, model string, prompt string, endpoint string, responseText string, statusCode int, latencyMS int64) error {
 	_, err := s.db.Exec(ctx, `
 		insert into playground_runs (
 			tenant_id,
@@ -1802,9 +1935,41 @@ func (s postgresConsoleService) insertPlaygroundRun(ctx context.Context, request
 			resolved_provider,
 			status_code,
 			latency_ms
-		) values ($1, $2, $3, $4, $5, $6, $7, 200, $8);
-	`, requestContext.TenantID, requestContext.PlatformAPIKeyID, model, prompt, truncateText(responseText, 240), endpoint, requestContext.SelectedProviderName, latencyMS)
+		) values ($1, $2, $3, $4, $5, $6, $7, $8, $9);
+	`, requestContext.TenantID, requestContext.PlatformAPIKeyID, model, prompt, truncateText(responseText, 240), endpoint, requestContext.SelectedProviderName, statusCode, latencyMS)
 	return err
+}
+
+func emitPlaygroundStreamEvent(emit func([]byte) error, event string, payload any) error {
+	if emit == nil {
+		return nil
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	return emit([]byte("event: " + event + "\ndata: " + string(body) + "\n\n"))
+}
+
+func emitPlaygroundTokenChunk(emit func([]byte) error, chunk []byte) error {
+	if emit == nil {
+		return nil
+	}
+	payload := strings.TrimSpace(string(chunk))
+	if payload == "" || payload == "data: [DONE]" {
+		return nil
+	}
+	if !strings.HasPrefix(payload, "data: ") {
+		return nil
+	}
+	return emit([]byte("event: token\n" + payload + "\n\n"))
+}
+
+func extractPlaygroundResponseText(resp ChatResponse) string {
+	if len(resp.Choices) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(resp.Choices[0].Message.Content)
 }
 
 func (s postgresConsoleService) insertAuditLog(ctx context.Context, tenantID string, platformAPIKeyID string, model string, endpoint string, statusCode int, provider string, latencyMS int64) error {

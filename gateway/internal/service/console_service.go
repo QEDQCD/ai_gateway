@@ -168,6 +168,7 @@ type PlaygroundPageData struct {
 type PlaygroundRunRequest struct {
 	Model  string `json:"model"`
 	Prompt string `json:"prompt"`
+	Stream bool   `json:"stream,omitempty"`
 }
 
 type PlaygroundRunResponse struct {
@@ -177,6 +178,12 @@ type PlaygroundRunResponse struct {
 	Status      string `json:"status"`
 	Response    string `json:"response"`
 	PlatformKey string `json:"platform_key"`
+}
+
+type PlaygroundStreamSession struct {
+	ContentType string
+	StatusCode  int
+	Run         func(emit func([]byte) error) (PlaygroundRunResponse, error)
 }
 
 type AuditSummary struct {
@@ -321,6 +328,7 @@ type ConsoleService interface {
 	Routes(ctx context.Context) (RoutesPageData, error)
 	Playground(ctx context.Context) (PlaygroundPageData, error)
 	RunPlayground(ctx context.Context, req PlaygroundRunRequest) (PlaygroundRunResponse, error)
+	StreamPlayground(ctx context.Context, req PlaygroundRunRequest) (PlaygroundStreamSession, error)
 	Audit(ctx context.Context) (AuditPageData, error)
 	UsageOverview(ctx context.Context, query UsageQuery) (UsageOverviewData, error)
 	UsageTrends(ctx context.Context, query UsageQuery) (UsageTrendData, error)
@@ -426,6 +434,10 @@ func (unavailableConsoleService) Playground(context.Context) (PlaygroundPageData
 
 func (unavailableConsoleService) RunPlayground(context.Context, PlaygroundRunRequest) (PlaygroundRunResponse, error) {
 	return PlaygroundRunResponse{}, ErrConsoleServiceUnavailable
+}
+
+func (unavailableConsoleService) StreamPlayground(context.Context, PlaygroundRunRequest) (PlaygroundStreamSession, error) {
+	return PlaygroundStreamSession{}, ErrConsoleServiceUnavailable
 }
 
 func (unavailableConsoleService) Audit(context.Context) (AuditPageData, error) {

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bufio"
 	"errors"
 	"strconv"
 	"time"
@@ -201,6 +202,34 @@ func ConsoleRunPlayground(console service.ConsoleService) fiber.Handler {
 			return consoleError(err)
 		}
 		return c.JSON(payload)
+	}
+}
+
+func ConsoleStreamPlayground(console service.ConsoleService) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		var req service.PlaygroundRunRequest
+		if err := c.BodyParser(&req); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
+		}
+
+		session, err := console.StreamPlayground(c.UserContext(), req)
+		if err != nil {
+			return consoleError(err)
+		}
+
+		c.Status(session.StatusCode)
+		c.Set(fiber.HeaderContentType, session.ContentType)
+		c.Set(fiber.HeaderCacheControl, "no-cache")
+		c.Set(fiber.HeaderConnection, "keep-alive")
+		c.Context().SetBodyStreamWriter(func(w *bufio.Writer) {
+			_, _ = session.Run(func(chunk []byte) error {
+				if _, err := w.Write(chunk); err != nil {
+					return err
+				}
+				return w.Flush()
+			})
+		})
+		return nil
 	}
 }
 
