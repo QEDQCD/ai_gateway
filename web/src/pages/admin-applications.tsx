@@ -67,7 +67,8 @@ export function AdminApplicationsPage() {
     setTokenLimit(String(defaultApprovalTokenLimit));
     setComment("通过控制台审批");
     setActionError(null);
-  }, [selectedItem]);
+    setActionResult(null);
+  }, [selectedID]);
 
   if (loading) {
     return <LoadingSection text="正在加载账号申请..." />;
@@ -95,6 +96,7 @@ export function AdminApplicationsPage() {
     try {
       setSubmitting(true);
       setActionError(null);
+      setActionResult(null);
       const result = await approveApplication(approvalItem.id, {
         actor_id: session.user_id,
         comment: approvalComment,
@@ -127,6 +129,7 @@ export function AdminApplicationsPage() {
     try {
       setSubmitting(true);
       setActionError(null);
+      setActionResult(null);
       const result = await rejectApplication(rejectionItem.id, {
         actor_id: session.user_id,
         comment: rejectionComment,
@@ -259,6 +262,7 @@ export function AdminApplicationsPage() {
                     setTokenLimit(String(defaultApprovalTokenLimit));
                     setComment("通过控制台审批");
                     setActionError(null);
+                    setActionResult(null);
                   }}
                 >
                   重置

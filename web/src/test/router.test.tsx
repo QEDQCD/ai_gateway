@@ -1504,6 +1504,101 @@ describe("控制台路由", () => {
     expect(screen.getByText("租户：tenant_alice")).toBeInTheDocument();
   });
 
+  test("账号申请页重置按钮恢复默认审批表单并清空上一条审批结果", async () => {
+    mockSession({ role: "admin", user_id: "user_admin_demo" });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+
+      if (url === "/api/admin/system/status") {
+        return new Response(JSON.stringify(defaultSystemStatus()), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url === "/api/admin/applications" && !init?.method) {
+        return new Response(
+          JSON.stringify({
+            items: [
+              {
+                id: "app_alice_reset",
+                email: "alice@example.com",
+                name: "Alice",
+                company_name: "Alice Co",
+                use_case: "租户接入",
+                status: "pending",
+                created_at: "2026-04-25T09:02:03+08:00",
+              },
+              {
+                id: "app_bob_reset",
+                email: "bob@example.com",
+                name: "Bob",
+                company_name: "Bob Co",
+                use_case: "分析集成",
+                status: "pending",
+                created_at: "2026-04-25T10:02:03+08:00",
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+      if (url === "/api/admin/applications/app_alice_reset/approve" && init?.method === "POST") {
+        expect(JSON.parse(String(init.body))).toEqual({
+          actor_id: "user_admin_demo",
+          comment: "通过控制台审批",
+          tenant_id: "tenant_alice",
+          token_limit: 10000000,
+        });
+
+        return new Response(
+          JSON.stringify({
+            item: {
+              id: "app_alice_reset",
+              email: "alice@example.com",
+              name: "Alice",
+              company_name: "Alice Co",
+              use_case: "租户接入",
+              status: "approved",
+              created_at: "2026-04-25T09:02:03+08:00",
+            },
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+
+      throw new Error(`Unexpected fetch url: ${url}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderRoute("/applications");
+
+    fireEvent.change(await screen.findByLabelText("租户 ID"), { target: { value: "tenant_alice" } });
+    fireEvent.click(screen.getByRole("button", { name: "审批通过" }));
+
+    expect(await screen.findByText("审批已完成")).toBeInTheDocument();
+    expect(screen.getByText("申请人：Alice")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "选择 Bob" }));
+    fireEvent.change(screen.getByLabelText("租户 ID"), { target: { value: "tenant_custom_bob" } });
+    fireEvent.change(screen.getByLabelText("Token 上限"), { target: { value: "123456" } });
+    fireEvent.change(screen.getByLabelText("审批备注"), { target: { value: "自定义备注" } });
+    fireEvent.click(screen.getByRole("button", { name: "重置" }));
+
+    await waitFor(() => {
+      expect(screen.queryByText("审批已完成")).not.toBeInTheDocument();
+    });
+    expect(screen.getByLabelText("租户 ID")).toHaveValue("tenant_bob_co");
+    expect(screen.getByLabelText("Token 上限")).toHaveValue(10000000);
+    expect(screen.getByLabelText("审批备注")).toHaveValue("通过控制台审批");
+  });
+
   test("租户管理页聚合 overview、api-keys 和 usage overview 数据", async () => {
     const fetchMock = mockFetch({
       "/api/admin/overview": {
