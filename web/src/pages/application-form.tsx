@@ -34,6 +34,9 @@ export function ApplicationFormPage() {
     if (email.trim() === "") {
       return "请输入邮箱。";
     }
+    if (!email.includes("@")) {
+      return "邮箱格式不合法，请输入包含 @ 的邮箱地址。";
+    }
     if (name.trim() === "") {
       return "请输入姓名。";
     }
@@ -45,6 +48,9 @@ export function ApplicationFormPage() {
     }
     if (password.length < 8) {
       return "密码至少需要 8 位。";
+    }
+    if (!/[A-Za-z]/.test(password) || !/[0-9]/.test(password)) {
+      return "密码需同时包含字母和数字。";
     }
     if (password !== confirmPassword) {
       return "两次输入的密码不一致。";
@@ -153,7 +159,7 @@ export function ApplicationFormPage() {
           <h2>申请接入</h2>
           <p>填写基础信息后提交，审批通过前不会分配可用密钥。</p>
         </div>
-        <form className="login-form" onSubmit={handleSubmit}>
+        <form className="login-form" noValidate onSubmit={handleSubmit}>
           <label className="field-shell">
             <span>邮箱</span>
             <input
