@@ -113,9 +113,10 @@ type CreateApplicationRequest struct {
 }
 
 type ApproveApplicationRequest struct {
-	ActorID  string `json:"actor_id"`
-	Comment  string `json:"comment"`
-	TenantID string `json:"tenant_id"`
+	ActorID    string `json:"actor_id"`
+	Comment    string `json:"comment"`
+	TenantID   string `json:"tenant_id"`
+	TokenLimit int64  `json:"token_limit"`
 }
 
 type CaptchaChallenge struct {
