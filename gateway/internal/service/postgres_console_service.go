@@ -1070,7 +1070,8 @@ func (s postgresConsoleService) RunPlayground(ctx context.Context, req Playgroun
 		return PlaygroundRunResponse{}, err
 	}
 
-	if endpoint == "/v1/rag/query" {
+	switch endpoint {
+	case "/v1/rag/query":
 		resp, err := s.ragProxy.Query(ctx, RAGQueryRequest{
 			KnowledgeBaseID: "kb_product_docs",
 			Question:        prompt,
@@ -1079,7 +1080,7 @@ func (s postgresConsoleService) RunPlayground(ctx context.Context, req Playgroun
 			return PlaygroundRunResponse{}, err
 		}
 		responseText = resp.Answer
-	} else {
+	case "/v1/chat/completions":
 		resp, err := s.chatProxy.Complete(ctx, ChatRequest{
 			Model: model,
 			Messages: []ChatMessage{
@@ -1093,6 +1094,12 @@ func (s postgresConsoleService) RunPlayground(ctx context.Context, req Playgroun
 			responseText = resp.Choices[0].Message.Content
 		}
 		endpoint = "/v1/chat/completions"
+	default:
+		return PlaygroundRunResponse{}, StatusError{
+			Code:    http.StatusBadRequest,
+			Message: "playground only supports chat or rag routes",
+			Err:     fmt.Errorf("requested model %q resolves to unsupported endpoint %q", model, endpoint),
+		}
 	}
 
 	latencyMS := durationMilliseconds(time.Since(start))
@@ -1134,7 +1141,7 @@ func (s postgresConsoleService) StreamPlayground(ctx context.Context, req Playgr
 	if err := s.db.QueryRow(ctx, `select endpoint from route_catalog where requested_model = $1 limit 1;`, model).Scan(&endpoint); err != nil {
 		return PlaygroundStreamSession{}, err
 	}
-	if endpoint == "/v1/rag/query" {
+	if endpoint != "/v1/chat/completions" {
 		return PlaygroundStreamSession{}, StatusError{
 			Code:    http.StatusBadRequest,
 			Message: "playground stream only supports chat routes",
@@ -1156,14 +1163,9 @@ func (s postgresConsoleService) StreamPlayground(ctx context.Context, req Playgr
 
 	requestID := requestIDFromContext(ctx)
 	platformKeyName := s.lookupPlatformKeyName(ctx, resolved.PlatformAPIKeyID)
-	contentType := strings.TrimSpace(stream.ContentType)
-	if contentType == "" {
-		contentType = "text/event-stream; charset=utf-8"
-	}
-
 	return PlaygroundStreamSession{
 		StatusCode:  stream.StatusCode,
-		ContentType: contentType,
+		ContentType: "text/event-stream; charset=utf-8",
 		Run: func(emit func([]byte) error) (PlaygroundRunResponse, error) {
 			var emitErr error
 			if err := emitPlaygroundStreamEvent(emit, "meta", map[string]any{
@@ -1213,13 +1215,6 @@ func (s postgresConsoleService) StreamPlayground(ctx context.Context, req Playgr
 			}
 
 			responseText := extractPlaygroundResponseText(result.Response)
-			if err := s.insertPlaygroundRun(ctx, resolved, model, prompt, "/v1/chat/completions", responseText, statusCode, latencyMS); err != nil {
-				return PlaygroundRunResponse{}, err
-			}
-			if err := s.insertAuditLog(ctx, resolved.TenantID, resolved.PlatformAPIKeyID, model, "/v1/chat/completions", statusCode, resolved.SelectedProviderName, latencyMS); err != nil {
-				return PlaygroundRunResponse{}, err
-			}
-
 			finalResponse := PlaygroundRunResponse{
 				RouteLabel:  neutralizeConsoleRouteLabel(resolved.SelectedProviderName),
 				Endpoint:    neutralizeConsoleEndpoint("/v1/chat/completions"),
@@ -1227,6 +1222,28 @@ func (s postgresConsoleService) StreamPlayground(ctx context.Context, req Playgr
 				Status:      fmt.Sprintf("%d %s", statusCode, mapBool(statusCode < 400, "成功", "失败")),
 				Response:    responseText,
 				PlatformKey: platformKeyName,
+			}
+			if err := s.insertPlaygroundRun(ctx, resolved, model, prompt, "/v1/chat/completions", responseText, statusCode, latencyMS); err != nil {
+				finalResponse.Status = fmt.Sprintf("%d %s", http.StatusInternalServerError, "失败")
+				if emitErr == nil {
+					_ = emitPlaygroundStreamEvent(emit, "stats", map[string]any{
+						"first_token_latency_ms": firstTokenLatencyMS,
+						"status":                 finalResponse.Status,
+						"latency_ms":             latencyMS,
+					})
+				}
+				return finalResponse, err
+			}
+			if err := s.insertAuditLog(ctx, resolved.TenantID, resolved.PlatformAPIKeyID, model, "/v1/chat/completions", statusCode, resolved.SelectedProviderName, latencyMS); err != nil {
+				finalResponse.Status = fmt.Sprintf("%d %s", http.StatusInternalServerError, "失败")
+				if emitErr == nil {
+					_ = emitPlaygroundStreamEvent(emit, "stats", map[string]any{
+						"first_token_latency_ms": firstTokenLatencyMS,
+						"status":                 finalResponse.Status,
+						"latency_ms":             latencyMS,
+					})
+				}
+				return finalResponse, err
 			}
 			if emitErr == nil {
 				_ = emitPlaygroundStreamEvent(emit, "stats", map[string]any{

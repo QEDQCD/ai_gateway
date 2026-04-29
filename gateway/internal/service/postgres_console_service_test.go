@@ -11,6 +11,7 @@ import (
 	"time"
 
 	gatewaydb "github.com/example/ai_gateway/gateway/db"
+	"github.com/example/ai_gateway/gateway/internal/domain"
 	"github.com/example/ai_gateway/gateway/internal/secret"
 	"github.com/example/ai_gateway/gateway/internal/service"
 	"github.com/jackc/pgx/v5"
@@ -55,6 +56,363 @@ func TestPostgresConsoleServiceSystemStatus(t *testing.T) {
 	}
 	if !containsString(payload.HiddenModules, "内部检索能力") || !containsString(payload.HiddenModules, "高级路由设置") {
 		t.Fatalf("expected hidden_modules to include 内部检索能力 and 高级路由设置, got %#v", payload.HiddenModules)
+	}
+}
+
+func TestPostgresConsoleServiceStreamPlaygroundRejectsEmbeddingsRoute(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	_, conn := newUsageConsoleService(t, ctx)
+	if _, err := conn.Exec(ctx, `
+		update route_catalog
+		set endpoint = '/v1/embeddings'
+		where requested_model = 'gpt-4o-mini';
+	`); err != nil {
+		t.Fatalf("update route_catalog failed: %v", err)
+	}
+
+	chatProxy := &stubConsoleChatProxy{}
+	console := service.NewPostgresConsoleService(
+		conn,
+		stubConsoleResolveAuthService{
+			requestContext: domain.RequestContext{
+				TenantID:             "tenant_demo",
+				PlatformAPIKeyID:     "pak_demo",
+				SelectedProviderID:   "provider_openai_demo",
+				SelectedProviderName: "OpenAI Demo",
+				RouteID:              "route:provider_openai_demo:default",
+				ProviderTarget: domain.ProviderTarget{
+					CredentialID: "provider_openai_demo",
+					Provider:     "openai-compatible",
+					BaseURL:      "https://example.com/v1",
+					APIKey:       "test-key",
+				},
+			},
+		},
+		chatProxy,
+		nil,
+		"seed-key",
+	)
+
+	_, err := console.StreamPlayground(ctx, service.PlaygroundRunRequest{
+		Model:  "gpt-4o-mini",
+		Prompt: "hello",
+		Stream: true,
+	})
+	if err == nil {
+		t.Fatal("expected StreamPlayground to reject embeddings route")
+	}
+
+	var statusErr service.StatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("expected StatusError, got %T", err)
+	}
+	if statusErr.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, statusErr.Code)
+	}
+	if !strings.Contains(statusErr.Message, "only supports chat routes") {
+		t.Fatalf("expected chat route error message, got %q", statusErr.Message)
+	}
+	if chatProxy.streamCalls != 0 {
+		t.Fatalf("expected chat proxy stream not to be called, got %d calls", chatProxy.streamCalls)
+	}
+}
+
+func TestPostgresConsoleServiceRunPlaygroundRejectsEmbeddingsRoute(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	_, conn := newUsageConsoleService(t, ctx)
+	if _, err := conn.Exec(ctx, `
+		update route_catalog
+		set endpoint = '/v1/embeddings'
+		where requested_model = 'gpt-4o-mini';
+	`); err != nil {
+		t.Fatalf("update route_catalog failed: %v", err)
+	}
+
+	chatProxy := &stubConsoleChatProxy{}
+	console := service.NewPostgresConsoleService(
+		conn,
+		stubConsoleResolveAuthService{
+			requestContext: domain.RequestContext{
+				TenantID:             "tenant_demo",
+				PlatformAPIKeyID:     "pak_demo",
+				SelectedProviderID:   "provider_openai_demo",
+				SelectedProviderName: "OpenAI Demo",
+				RouteID:              "route:provider_openai_demo:default",
+				ProviderTarget: domain.ProviderTarget{
+					CredentialID: "provider_openai_demo",
+					Provider:     "openai-compatible",
+					BaseURL:      "https://example.com/v1",
+					APIKey:       "test-key",
+				},
+			},
+		},
+		chatProxy,
+		nil,
+		"seed-key",
+	)
+
+	_, err := console.RunPlayground(ctx, service.PlaygroundRunRequest{
+		Model:  "gpt-4o-mini",
+		Prompt: "hello",
+	})
+	if err == nil {
+		t.Fatal("expected RunPlayground to reject embeddings route")
+	}
+
+	var statusErr service.StatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("expected StatusError, got %T", err)
+	}
+	if statusErr.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, statusErr.Code)
+	}
+	if !strings.Contains(statusErr.Message, "only supports chat or rag routes") {
+		t.Fatalf("expected route rejection message, got %q", statusErr.Message)
+	}
+	if chatProxy.completeCalls != 0 {
+		t.Fatalf("expected chat proxy complete not to be called, got %d calls", chatProxy.completeCalls)
+	}
+}
+
+func TestPostgresConsoleServiceStreamPlaygroundWritesSSEAndPersistsRun(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	_, conn := newUsageConsoleService(t, ctx)
+	uniquePrompt := "stream-success-prompt"
+
+	var auditCountBefore int
+	if err := conn.QueryRow(ctx, `
+		select count(*)
+		from audit_logs
+		where platform_api_key_id = 'pak_demo'
+		  and requested_model = 'gpt-4o-mini'
+		  and endpoint = '/v1/chat/completions';
+	`).Scan(&auditCountBefore); err != nil {
+		t.Fatalf("count audit_logs before failed: %v", err)
+	}
+
+	chatProxy := &stubConsoleChatProxy{
+		streamResult: service.ChatCompletionStream{
+			StatusCode:  http.StatusOK,
+			ContentType: "text/plain",
+			Run: func(emit func([]byte) error, onFirstToken func()) (service.ChatStreamResult, error) {
+				if onFirstToken != nil {
+					onFirstToken()
+				}
+				if err := emit([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"你\"}}]}\n\n")); err != nil {
+					return service.ChatStreamResult{}, err
+				}
+				if err := emit([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"好\"}}]}\n\n")); err != nil {
+					return service.ChatStreamResult{}, err
+				}
+				return service.ChatStreamResult{
+					Response: service.ChatResponse{
+						Model: "gpt-4o-mini",
+						Choices: []service.ChatChoice{
+							{
+								Message: service.ChatMessage{
+									Role:    "assistant",
+									Content: "你好",
+								},
+							},
+						},
+					},
+					SawContentToken: true,
+				}, nil
+			},
+		},
+	}
+	console := service.NewPostgresConsoleService(
+		conn,
+		stubConsoleResolveAuthService{
+			requestContext: domain.RequestContext{
+				TenantID:             "tenant_demo",
+				PlatformAPIKeyID:     "pak_demo",
+				SelectedProviderID:   "provider_openai_demo",
+				SelectedProviderName: "OpenAI Demo",
+				RouteID:              "route:provider_openai_demo:default",
+				ProviderTarget: domain.ProviderTarget{
+					CredentialID: "provider_openai_demo",
+					Provider:     "openai-compatible",
+					BaseURL:      "https://example.com/v1",
+					APIKey:       "test-key",
+				},
+			},
+		},
+		chatProxy,
+		nil,
+		"seed-key",
+	)
+
+	session, err := console.StreamPlayground(ctx, service.PlaygroundRunRequest{
+		Model:  "gpt-4o-mini",
+		Prompt: uniquePrompt,
+		Stream: true,
+	})
+	if err != nil {
+		t.Fatalf("StreamPlayground failed: %v", err)
+	}
+	if session.ContentType != "text/event-stream; charset=utf-8" {
+		t.Fatalf("expected fixed SSE content type, got %q", session.ContentType)
+	}
+
+	var emitted strings.Builder
+	response, err := session.Run(func(chunk []byte) error {
+		emitted.Write(chunk)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("session.Run failed: %v", err)
+	}
+	if response.Status != "200 成功" {
+		t.Fatalf("expected success status, got %q", response.Status)
+	}
+	if response.Response != "你好" {
+		t.Fatalf("expected response text %q, got %q", "你好", response.Response)
+	}
+
+	output := emitted.String()
+	for _, fragment := range []string{"event: meta", "event: token", "event: stats", "event: done"} {
+		if !strings.Contains(output, fragment) {
+			t.Fatalf("expected emitted stream to include %q, got %q", fragment, output)
+		}
+	}
+
+	var storedExcerpt string
+	var storedStatusCode int
+	if err := conn.QueryRow(ctx, `
+		select response_excerpt, status_code
+		from playground_runs
+		where prompt = $1
+		order by created_at desc
+		limit 1;
+	`, uniquePrompt).Scan(&storedExcerpt, &storedStatusCode); err != nil {
+		t.Fatalf("query playground_runs failed: %v", err)
+	}
+	if storedExcerpt != "你好" {
+		t.Fatalf("expected stored response_excerpt %q, got %q", "你好", storedExcerpt)
+	}
+	if storedStatusCode != http.StatusOK {
+		t.Fatalf("expected stored status_code %d, got %d", http.StatusOK, storedStatusCode)
+	}
+
+	var auditCountAfter int
+	if err := conn.QueryRow(ctx, `
+		select count(*)
+		from audit_logs
+		where platform_api_key_id = 'pak_demo'
+		  and requested_model = 'gpt-4o-mini'
+		  and endpoint = '/v1/chat/completions';
+	`).Scan(&auditCountAfter); err != nil {
+		t.Fatalf("count audit_logs after failed: %v", err)
+	}
+	if auditCountAfter != auditCountBefore+1 {
+		t.Fatalf("expected audit log count to grow by 1, got before=%d after=%d", auditCountBefore, auditCountAfter)
+	}
+	if chatProxy.streamCalls != 1 {
+		t.Fatalf("expected chat proxy stream to be called once, got %d", chatProxy.streamCalls)
+	}
+}
+
+func TestPostgresConsoleServiceStreamPlaygroundEmitsFailureStatsWhenPersistenceFails(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	_, conn := newUsageConsoleService(t, ctx)
+	chatProxy := &stubConsoleChatProxy{
+		streamResult: service.ChatCompletionStream{
+			StatusCode:  http.StatusOK,
+			ContentType: "text/event-stream; charset=utf-8",
+			Run: func(emit func([]byte) error, onFirstToken func()) (service.ChatStreamResult, error) {
+				if onFirstToken != nil {
+					onFirstToken()
+				}
+				if err := emit([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"部\"}}]}\n\n")); err != nil {
+					return service.ChatStreamResult{}, err
+				}
+				return service.ChatStreamResult{
+					Response: service.ChatResponse{
+						Model: "gpt-4o-mini",
+						Choices: []service.ChatChoice{
+							{
+								Message: service.ChatMessage{
+									Role:    "assistant",
+									Content: "部分结果",
+								},
+							},
+						},
+					},
+					SawContentToken: true,
+				}, nil
+			},
+		},
+	}
+	console := service.NewPostgresConsoleService(
+		conn,
+		stubConsoleResolveAuthService{
+			requestContext: domain.RequestContext{
+				TenantID:             "tenant_demo",
+				PlatformAPIKeyID:     "pak_demo",
+				SelectedProviderID:   "provider_openai_demo",
+				SelectedProviderName: "OpenAI Demo",
+				RouteID:              "route:provider_openai_demo:default",
+				ProviderTarget: domain.ProviderTarget{
+					CredentialID: "provider_openai_demo",
+					Provider:     "openai-compatible",
+					BaseURL:      "https://example.com/v1",
+					APIKey:       "test-key",
+				},
+			},
+		},
+		chatProxy,
+		nil,
+		"seed-key",
+	)
+
+	session, err := console.StreamPlayground(ctx, service.PlaygroundRunRequest{
+		Model:  "gpt-4o-mini",
+		Prompt: "stream-persist-failure",
+		Stream: true,
+	})
+	if err != nil {
+		t.Fatalf("StreamPlayground failed: %v", err)
+	}
+
+	if err := conn.Close(ctx); err != nil {
+		t.Fatalf("conn.Close failed: %v", err)
+	}
+
+	var emitted strings.Builder
+	response, err := session.Run(func(chunk []byte) error {
+		emitted.Write(chunk)
+		return nil
+	})
+	if err == nil {
+		t.Fatal("expected session.Run to fail after persistence loss")
+	}
+	if response.Status != "500 失败" {
+		t.Fatalf("expected failure status after persistence error, got %q", response.Status)
+	}
+
+	output := emitted.String()
+	if !strings.Contains(output, "event: stats") {
+		t.Fatalf("expected failure path to emit stats event, got %q", output)
+	}
+	if strings.Contains(output, "event: done") {
+		t.Fatalf("expected failure path to omit done event, got %q", output)
 	}
 }
 
@@ -2638,3 +2996,30 @@ func containsString(items []string, expected string) bool {
 	}
 	return false
 }
+
+type stubConsoleResolveAuthService struct {
+	requestContext domain.RequestContext
+}
+
+func (s stubConsoleResolveAuthService) Resolve(context.Context, string, string) (domain.RequestContext, error) {
+	return s.requestContext, nil
+}
+
+type stubConsoleChatProxy struct {
+	completeCalls int
+	streamCalls  int
+	streamResult service.ChatCompletionStream
+	streamErr    error
+}
+
+func (s *stubConsoleChatProxy) Complete(context.Context, service.ChatRequest, any) (service.ChatResponse, error) {
+	s.completeCalls++
+	return service.ChatResponse{}, nil
+}
+
+func (s *stubConsoleChatProxy) Stream(context.Context, service.ChatRequest, any) (service.ChatCompletionStream, error) {
+	s.streamCalls++
+	return s.streamResult, s.streamErr
+}
+
+func (s *stubConsoleChatProxy) RecordFailure(context.Context, any, int) {}
