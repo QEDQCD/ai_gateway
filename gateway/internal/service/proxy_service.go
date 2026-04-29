@@ -43,10 +43,16 @@ type ChatResponse struct {
 	Choices []ChatChoice `json:"choices"`
 }
 
+type ChatStreamResult struct {
+	Response        ChatResponse
+	SawContentToken bool
+	ClientAborted   bool
+}
+
 type ChatCompletionStream struct {
 	StatusCode  int
 	ContentType string
-	Run         func(emit func([]byte) error) (ChatResponse, error)
+	Run         func(emit func([]byte) error, onFirstToken func()) (ChatStreamResult, error)
 }
 
 type EmbeddingsRequest struct {
@@ -99,6 +105,11 @@ type embeddingProxyService struct {
 type unavailableChatProxyService struct{}
 
 type unavailableEmbeddingProxyService struct{}
+
+type usageRecordEvent struct {
+	eventType string
+	detail    string
+}
 
 func NewChatProxyService(client UpstreamChatClient, publisher queue.UsagePublisher, recorders ...UsageRecorder) ChatProxyService {
 	if client == nil {
@@ -197,16 +208,39 @@ func (s chatProxyService) Stream(ctx context.Context, req ChatRequest, resolved 
 	return ChatCompletionStream{
 		StatusCode:  defaultStatusCode(upstreamStream.StatusCode),
 		ContentType: upstreamStream.ContentType,
-		Run: func(emit func([]byte) error) (ChatResponse, error) {
-			resp, streamErr := upstreamStream.Run(emit)
+		Run: func(emit func([]byte) error, onFirstToken func()) (ChatStreamResult, error) {
+			var firstTokenAt time.Time
+			result, streamErr := upstreamStream.Run(emit, func() {
+				if firstTokenAt.IsZero() {
+					firstTokenAt = time.Now().UTC()
+				}
+				if onFirstToken != nil {
+					onFirstToken()
+				}
+			})
 			finalStatusCode := defaultStatusCode(upstreamStream.StatusCode)
-			if streamErr != nil && finalStatusCode >= 200 && finalStatusCode < 300 {
+			if streamErr != nil && !result.ClientAborted && finalStatusCode >= 200 && finalStatusCode < 300 {
 				finalStatusCode = http.StatusInternalServerError
 			}
 
-			record := NewChatUsageRecord(requestID, requestContext, req, resp, finalStatusCode, start, time.Now().UTC(), streamErr)
-			s.record(ctx, record)
-			return resp, streamErr
+			recordErr := streamErr
+			if result.ClientAborted {
+				recordErr = nil
+			}
+			record := NewChatUsageRecord(requestID, requestContext, req, result.Response, finalStatusCode, start, time.Now().UTC(), recordErr)
+			if !firstTokenAt.IsZero() {
+				record.FirstTokenLatencyMS = durationMilliseconds(firstTokenAt.Sub(start))
+			}
+
+			events := []usageRecordEvent(nil)
+			if result.ClientAborted && result.SawContentToken {
+				events = append(events, usageRecordEvent{
+					eventType: "client_aborted",
+					detail:    "client disconnected after first content token",
+				})
+			}
+			s.recordWithEvents(ctx, record, events...)
+			return result, streamErr
 		},
 	}, nil
 }
@@ -242,9 +276,18 @@ func (s embeddingProxyService) Create(ctx context.Context, req EmbeddingsRequest
 }
 
 func (s chatProxyService) record(ctx context.Context, record UsageRecord) {
+	s.recordWithEvents(ctx, record)
+}
+
+func (s chatProxyService) recordWithEvents(ctx context.Context, record UsageRecord, events ...usageRecordEvent) {
 	if err := s.recorder.Record(ctx, record); err != nil {
 		logUsageFailure("record", record, err)
 		return
+	}
+	for _, event := range events {
+		if err := s.recorder.RecordEvent(ctx, record, event.eventType, event.detail); err != nil {
+			logUsageFailure(event.eventType, record, err)
+		}
 	}
 	if err := s.publisher.Publish(ctx, record.UsageEvent()); err != nil {
 		publishErr := queue.PublishFailure(err)

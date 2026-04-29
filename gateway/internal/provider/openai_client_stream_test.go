@@ -3,6 +3,7 @@ package provider
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -70,16 +71,29 @@ func TestOpenAIClientStreamCompleteForwardsSSEAndBuildsFinalResponse(t *testing.
 	}
 
 	var chunks bytes.Buffer
-	resp, err := stream.Run(func(chunk []byte) error {
+	firstTokenCallbacks := 0
+	result, err := stream.Run(func(chunk []byte) error {
 		_, writeErr := chunks.Write(chunk)
 		return writeErr
+	}, func() {
+		firstTokenCallbacks++
 	})
 	if err != nil {
 		t.Fatalf("stream.Run returned unexpected error: %v", err)
 	}
+	resp := result.Response
 
 	if got := chunks.String(); !strings.Contains(got, "data: [DONE]") {
 		t.Fatalf("expected stream output to include [DONE], got %q", got)
+	}
+	if firstTokenCallbacks != 1 {
+		t.Fatalf("expected first token callback to be invoked once, got %d", firstTokenCallbacks)
+	}
+	if !result.SawContentToken {
+		t.Fatal("expected stream result to report content token")
+	}
+	if result.ClientAborted {
+		t.Fatal("expected successful stream not to report client abort")
 	}
 	if got := len(resp.Choices); got != 1 {
 		t.Fatalf("expected 1 choice, got %d", got)
@@ -95,5 +109,76 @@ func TestOpenAIClientStreamCompleteForwardsSSEAndBuildsFinalResponse(t *testing.
 	}
 	if resp.Usage.TotalTokens != 12 {
 		t.Fatalf("expected total tokens 12, got %d", resp.Usage.TotalTokens)
+	}
+}
+
+func TestOpenAIClientStreamCompleteMarksClientAbortAfterFirstContentToken(t *testing.T) {
+	t.Parallel()
+
+	providerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Fatal("expected response writer to implement http.Flusher")
+		}
+
+		_, _ = io.WriteString(w, "data: {\"model\":\"qwen-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"}}]}\n\n")
+		flusher.Flush()
+		_, _ = io.WriteString(w, "data: {\"model\":\"qwen-flash\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"你\"}}]}\n\n")
+		flusher.Flush()
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	}))
+	t.Cleanup(providerServer.Close)
+
+	client := NewOpenAIClient(http.DefaultClient)
+	stream, _, err := client.StreamComplete(
+		context.Background(),
+		domain.ProviderTarget{
+			BaseURL: providerServer.URL,
+			APIKey:  "provider-secret-key",
+		},
+		service.ChatRequest{
+			Model:  "qwen-flash",
+			Stream: true,
+			Messages: []service.ChatMessage{
+				{Role: "user", Content: "你好"},
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("StreamComplete returned unexpected error: %v", err)
+	}
+
+	emitErr := errors.New("client disconnected")
+	firstTokenCallbacks := 0
+	result, err := stream.Run(func(chunk []byte) error {
+		if strings.Contains(string(chunk), `"content":"你"`) {
+			return emitErr
+		}
+		return nil
+	}, func() {
+		firstTokenCallbacks++
+	})
+	if !errors.Is(err, emitErr) {
+		t.Fatalf("expected emit error %v, got %v", emitErr, err)
+	}
+
+	if firstTokenCallbacks != 1 {
+		t.Fatalf("expected first token callback to be invoked once, got %d", firstTokenCallbacks)
+	}
+	if !result.SawContentToken {
+		t.Fatal("expected stream result to report content token before abort")
+	}
+	if !result.ClientAborted {
+		t.Fatal("expected stream result to report client abort")
+	}
+	if got := len(result.Response.Choices); got != 1 {
+		t.Fatalf("expected 1 accumulated choice, got %d", got)
+	}
+	if got := result.Response.Choices[0].Message.Content; got != "你" {
+		t.Fatalf("expected partial response content %q, got %q", "你", got)
 	}
 }

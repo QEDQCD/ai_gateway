@@ -66,9 +66,9 @@ func (c *OpenAIClient) StreamComplete(ctx context.Context, target domain.Provide
 	return service.ChatCompletionStream{
 		StatusCode:  resp.StatusCode,
 		ContentType: contentType,
-		Run: func(emit func([]byte) error) (service.ChatResponse, error) {
+		Run: func(emit func([]byte) error, onFirstToken func()) (service.ChatStreamResult, error) {
 			defer resp.Body.Close()
-			return consumeChatCompletionStream(resp.Body, emit)
+			return consumeChatCompletionStream(resp.Body, emit, onFirstToken)
 		},
 	}, resp.StatusCode, nil
 }
@@ -131,38 +131,70 @@ type openAIChoiceAccumulator struct {
 	Content strings.Builder
 }
 
-func consumeChatCompletionStream(body io.Reader, emit func([]byte) error) (service.ChatResponse, error) {
+func consumeChatCompletionStream(body io.Reader, emit func([]byte) error, onFirstToken func()) (service.ChatStreamResult, error) {
 	reader := bufio.NewReader(body)
 	accumulators := map[int]*openAIChoiceAccumulator{}
 	choiceOrder := map[int]struct{}{}
-	finalResponse := service.ChatResponse{}
+	result := service.ChatStreamResult{}
+
+	buildResponse := func() service.ChatResponse {
+		finalResponse := result.Response
+		indexes := make([]int, 0, len(choiceOrder))
+		for index := range choiceOrder {
+			indexes = append(indexes, index)
+		}
+		sort.Ints(indexes)
+		finalResponse.Choices = make([]service.ChatChoice, 0, len(indexes))
+		for _, index := range indexes {
+			accumulator := accumulators[index]
+			role := strings.TrimSpace(accumulator.Role)
+			if role == "" {
+				role = "assistant"
+			}
+			finalResponse.Choices = append(finalResponse.Choices, service.ChatChoice{
+				Message: service.ChatMessage{
+					Role:    role,
+					Content: accumulator.Content.String(),
+				},
+			})
+		}
+		return finalResponse
+	}
 
 	for {
 		line, err := reader.ReadString('\n')
 		if err != nil && !errors.Is(err, io.EOF) {
-			return service.ChatResponse{}, err
+			result.Response = buildResponse()
+			return result, err
 		}
 
 		trimmed := strings.TrimRight(line, "\r\n")
 		if strings.HasPrefix(trimmed, "data: ") {
 			payload := strings.TrimSpace(strings.TrimPrefix(trimmed, "data: "))
 			if payload == "[DONE]" {
-				if emitErr := emit([]byte("data: [DONE]\n\n")); emitErr != nil {
-					return service.ChatResponse{}, emitErr
+				if emit != nil {
+					if emitErr := emit([]byte("data: [DONE]\n\n")); emitErr != nil {
+						if result.SawContentToken {
+							result.ClientAborted = true
+						}
+						result.Response = buildResponse()
+						return result, emitErr
+					}
 				}
 				break
 			}
 
 			var chunk openAIChatCompletionChunk
 			if unmarshalErr := json.Unmarshal([]byte(payload), &chunk); unmarshalErr != nil {
-				return service.ChatResponse{}, unmarshalErr
+				result.Response = buildResponse()
+				return result, unmarshalErr
 			}
 			if strings.TrimSpace(chunk.Model) != "" {
-				finalResponse.Model = strings.TrimSpace(chunk.Model)
+				result.Response.Model = strings.TrimSpace(chunk.Model)
 			}
 			if chunk.Usage != nil {
 				usageCopy := *chunk.Usage
-				finalResponse.Usage = &usageCopy
+				result.Response.Usage = &usageCopy
 			}
 			for _, choice := range chunk.Choices {
 				accumulator := accumulators[choice.Index]
@@ -175,10 +207,22 @@ func consumeChatCompletionStream(body io.Reader, emit func([]byte) error) (servi
 					accumulator.Role = strings.TrimSpace(choice.Delta.Role)
 				}
 				accumulator.Content.WriteString(choice.Delta.Content)
+				if !result.SawContentToken && choice.Delta.Content != "" {
+					result.SawContentToken = true
+					if onFirstToken != nil {
+						onFirstToken()
+					}
+				}
 			}
 
-			if emitErr := emit([]byte("data: " + payload + "\n\n")); emitErr != nil {
-				return service.ChatResponse{}, emitErr
+			if emit != nil {
+				if emitErr := emit([]byte("data: " + payload + "\n\n")); emitErr != nil {
+					if result.SawContentToken {
+						result.ClientAborted = true
+					}
+					result.Response = buildResponse()
+					return result, emitErr
+				}
 			}
 		}
 
@@ -187,25 +231,6 @@ func consumeChatCompletionStream(body io.Reader, emit func([]byte) error) (servi
 		}
 	}
 
-	indexes := make([]int, 0, len(choiceOrder))
-	for index := range choiceOrder {
-		indexes = append(indexes, index)
-	}
-	sort.Ints(indexes)
-	finalResponse.Choices = make([]service.ChatChoice, 0, len(indexes))
-	for _, index := range indexes {
-		accumulator := accumulators[index]
-		role := strings.TrimSpace(accumulator.Role)
-		if role == "" {
-			role = "assistant"
-		}
-		finalResponse.Choices = append(finalResponse.Choices, service.ChatChoice{
-			Message: service.ChatMessage{
-				Role:    role,
-				Content: accumulator.Content.String(),
-			},
-		})
-	}
-
-	return finalResponse, nil
+	result.Response = buildResponse()
+	return result, nil
 }

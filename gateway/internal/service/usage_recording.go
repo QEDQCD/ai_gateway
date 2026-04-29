@@ -51,6 +51,7 @@ type UsageRecorder interface {
 	Record(ctx context.Context, record UsageRecord) error
 	RecordFailure(ctx context.Context, input UsageFailureInput) error
 	RecordPublishFailure(ctx context.Context, record UsageRecord, publishErr error) error
+	RecordEvent(ctx context.Context, record UsageRecord, eventType string, detail string) error
 }
 
 type noopUsageRecorder struct{}
@@ -162,6 +163,10 @@ func (noopUsageRecorder) RecordFailure(context.Context, UsageFailureInput) error
 }
 
 func (noopUsageRecorder) RecordPublishFailure(context.Context, UsageRecord, error) error {
+	return nil
+}
+
+func (noopUsageRecorder) RecordEvent(context.Context, UsageRecord, string, string) error {
 	return nil
 }
 
@@ -287,6 +292,25 @@ func (r sqlUsageRecorder) RecordPublishFailure(ctx context.Context, record Usage
 		string(record.Status),
 		record.StatusCode,
 		detail,
+		record.RequestCompletedAt,
+	)
+	return err
+}
+
+func (r sqlUsageRecorder) RecordEvent(ctx context.Context, record UsageRecord, eventType string, detail string) error {
+	record.ensureDefaults()
+	recordCtx, cancel := newUsageRecordContext(ctx)
+	defer cancel()
+
+	_, err := r.db.Exec(recordCtx, insertUsageLifecycleEventSQL,
+		uuid.NewString(),
+		record.RequestID,
+		record.TenantID,
+		strings.TrimSpace(eventType),
+		string(record.UsageSource),
+		string(record.Status),
+		record.StatusCode,
+		strings.TrimSpace(detail),
 		record.RequestCompletedAt,
 	)
 	return err

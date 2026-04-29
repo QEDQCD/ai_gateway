@@ -473,13 +473,15 @@ func (s *capturingChatProxyService) Stream(_ context.Context, _ service.ChatRequ
 	return service.ChatCompletionStream{
 		StatusCode:  200,
 		ContentType: "text/event-stream; charset=utf-8",
-		Run: func(emit func([]byte) error) (service.ChatResponse, error) {
+		Run: func(emit func([]byte) error, _ func()) (service.ChatStreamResult, error) {
 			if err := emit([]byte("data: [DONE]\n\n")); err != nil {
-				return service.ChatResponse{}, err
+				return service.ChatStreamResult{}, err
 			}
-			return service.ChatResponse{
-				Choices: []service.ChatChoice{
-					{Message: service.ChatMessage{Role: "assistant", Content: "captured"}},
+			return service.ChatStreamResult{
+				Response: service.ChatResponse{
+					Choices: []service.ChatChoice{
+						{Message: service.ChatMessage{Role: "assistant", Content: "captured"}},
+					},
 				},
 			}, nil
 		},

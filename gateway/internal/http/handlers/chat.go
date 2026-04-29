@@ -31,7 +31,7 @@ func ChatCompletion(proxy service.ChatProxyService) fiber.Handler {
 						return err
 					}
 					return w.Flush()
-				})
+				}, nil)
 			})
 			return nil
 		}

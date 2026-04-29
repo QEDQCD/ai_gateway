@@ -130,6 +130,34 @@ func TestUsageRecorderRecordWritesFailureLifecycleEvent(t *testing.T) {
 	}
 }
 
+func TestUsageRecorderRecordEventWritesAdditionalLifecycleEvent(t *testing.T) {
+	t.Parallel()
+
+	db := newRecordingTxDB()
+	recorder := service.NewUsageRecorder(db)
+	record := newUsageRecord(service.UsageStatusSuccess, service.UsageSourceUpstream)
+
+	if err := recorder.RecordEvent(context.Background(), record, "client_aborted", "client disconnected after first content token"); err != nil {
+		t.Fatalf("recorder.RecordEvent failed: %v", err)
+	}
+
+	if db.beginCalls != 0 {
+		t.Fatalf("expected no transaction begin for standalone event write, got %d", db.beginCalls)
+	}
+	if len(db.execCalls) != 1 {
+		t.Fatalf("expected 1 standalone event insert, got %d", len(db.execCalls))
+	}
+	if !strings.Contains(db.execCalls[0].query, "llm_request_events") {
+		t.Fatalf("expected event insert into llm_request_events, got %q", db.execCalls[0].query)
+	}
+	if got := db.execCalls[0].args[3]; got != "client_aborted" {
+		t.Fatalf("expected event_type %q, got %#v", "client_aborted", got)
+	}
+	if got := db.execCalls[0].args[7]; got != "client disconnected after first content token" {
+		t.Fatalf("expected detail to be preserved, got %#v", got)
+	}
+}
+
 func TestUsageRecorderRecordUsesIndependentContextWhenParentContextIsDone(t *testing.T) {
 	t.Parallel()
 

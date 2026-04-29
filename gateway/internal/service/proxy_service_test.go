@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/example/ai_gateway/gateway/internal/domain"
 	"github.com/example/ai_gateway/gateway/internal/queue"
@@ -103,13 +104,14 @@ func TestChatProxyStreamRecordsUsageAfterSuccessfulStream(t *testing.T) {
 	}
 
 	var chunks bytes.Buffer
-	resp, err := stream.Run(func(chunk []byte) error {
+	result, err := stream.Run(func(chunk []byte) error {
 		_, writeErr := chunks.Write(chunk)
 		return writeErr
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("stream.Run returned unexpected error: %v", err)
 	}
+	resp := result.Response
 	if resp.Usage == nil || resp.Usage.TotalTokens != 18 {
 		t.Fatalf("expected upstream usage 18, got %#v", resp.Usage)
 	}
@@ -125,11 +127,101 @@ func TestChatProxyStreamRecordsUsageAfterSuccessfulStream(t *testing.T) {
 	if recorder.lastRecord.TotalTokens != 18 {
 		t.Fatalf("expected recorded total tokens 18, got %d", recorder.lastRecord.TotalTokens)
 	}
+	if recorder.lastRecord.FirstTokenLatencyMS != 0 {
+		t.Fatalf("expected zero first token latency without callback, got %d", recorder.lastRecord.FirstTokenLatencyMS)
+	}
+	if recorder.eventCalls != 0 {
+		t.Fatalf("expected no extra lifecycle events, got %d", recorder.eventCalls)
+	}
+}
+
+func TestChatProxyStreamRecordsFirstTokenLatencyAndClientAbortEvent(t *testing.T) {
+	t.Parallel()
+
+	recorder := &stubUsageRecorder{}
+	clientAbortErr := errors.New("client disconnected")
+	proxy := service.NewChatProxyService(
+		stubChatClient{
+			streamRun: func(emit func([]byte) error, onFirstToken func()) (service.ChatStreamResult, error) {
+				time.Sleep(2 * time.Millisecond)
+				if onFirstToken != nil {
+					onFirstToken()
+				}
+				resp := service.ChatResponse{
+					Model: "gpt-4o-mini",
+					Choices: []service.ChatChoice{
+						{Message: service.ChatMessage{Role: "assistant", Content: "streamed answer"}},
+					},
+				}
+				if err := emit([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"streamed answer\"}}]}\n\n")); err != nil {
+					return service.ChatStreamResult{
+						Response:        resp,
+						SawContentToken: true,
+						ClientAborted:   true,
+					}, err
+				}
+				return service.ChatStreamResult{
+					Response:        resp,
+					SawContentToken: true,
+				}, nil
+			},
+		},
+		queue.NewNoopUsagePublisher(),
+		recorder,
+	)
+
+	stream, err := proxy.Stream(context.Background(), service.ChatRequest{
+		Model:  "gpt-4o-mini",
+		Stream: true,
+		Messages: []service.ChatMessage{
+			{Role: "user", Content: "hello"},
+		},
+	}, domain.RequestContext{
+		TenantID:           "tenant_demo",
+		PlatformAPIKeyID:   "pak_demo",
+		PlatformAPIKeyName: "demo key",
+		RouteID:            "route:provider_openai_demo:default",
+		ProviderTarget: domain.ProviderTarget{
+			CredentialID: "provider_openai_demo",
+			Provider:     "openai",
+			BaseURL:      "https://api.openai.example/v1",
+			APIKey:       "provider-secret",
+		},
+	})
+	if err != nil {
+		t.Fatalf("proxy.Stream returned unexpected error: %v", err)
+	}
+
+	_, err = stream.Run(func([]byte) error {
+		return clientAbortErr
+	}, nil)
+	if !errors.Is(err, clientAbortErr) {
+		t.Fatalf("expected client abort error %v, got %v", clientAbortErr, err)
+	}
+	if recorder.recordCalls != 1 {
+		t.Fatalf("expected 1 usage record write, got %d", recorder.recordCalls)
+	}
+	if recorder.lastRecord.Status != service.UsageStatusSuccess {
+		t.Fatalf("expected success status despite client abort, got %q", recorder.lastRecord.Status)
+	}
+	if recorder.lastRecord.FirstTokenLatencyMS <= 0 {
+		t.Fatalf("expected first token latency to be recorded, got %d", recorder.lastRecord.FirstTokenLatencyMS)
+	}
+	if recorder.eventCalls != 1 {
+		t.Fatalf("expected 1 extra lifecycle event, got %d", recorder.eventCalls)
+	}
+	if recorder.lastEventType != "client_aborted" {
+		t.Fatalf("expected client_aborted event, got %q", recorder.lastEventType)
+	}
+	if recorder.lastEventRecord.RequestID != recorder.lastRecord.RequestID {
+		t.Fatalf("expected event request id %q, got %q", recorder.lastRecord.RequestID, recorder.lastEventRecord.RequestID)
+	}
 }
 
 type stubChatClient struct {
-	response service.ChatResponse
-	err      error
+	response  service.ChatResponse
+	err       error
+	streamRun func(emit func([]byte) error, onFirstToken func()) (service.ChatStreamResult, error)
 }
 
 func (c stubChatClient) Complete(context.Context, domain.ProviderTarget, service.ChatRequest) (service.ChatResponse, int, error) {
@@ -146,13 +238,16 @@ func (c stubChatClient) StreamComplete(context.Context, domain.ProviderTarget, s
 	return service.ChatCompletionStream{
 		StatusCode:  200,
 		ContentType: "text/event-stream; charset=utf-8",
-		Run: func(emit func([]byte) error) (service.ChatResponse, error) {
+		Run: func(emit func([]byte) error, onFirstToken func()) (service.ChatStreamResult, error) {
+			if c.streamRun != nil {
+				return c.streamRun(emit, onFirstToken)
+			}
 			if emit != nil {
 				if err := emit([]byte("data: [DONE]\n\n")); err != nil {
-					return service.ChatResponse{}, err
+					return service.ChatStreamResult{}, err
 				}
 			}
-			return c.response, nil
+			return service.ChatStreamResult{Response: c.response}, nil
 		},
 	}, 200, nil
 }
@@ -169,6 +264,10 @@ type stubUsageRecorder struct {
 	recordCalls         int
 	publishFailureCalls int
 	lastRecord          service.UsageRecord
+	eventCalls          int
+	lastEventRecord     service.UsageRecord
+	lastEventType       string
+	lastEventDetail     string
 }
 
 func (r *stubUsageRecorder) Record(_ context.Context, record service.UsageRecord) error {
@@ -183,5 +282,13 @@ func (r *stubUsageRecorder) RecordFailure(context.Context, service.UsageFailureI
 
 func (r *stubUsageRecorder) RecordPublishFailure(context.Context, service.UsageRecord, error) error {
 	r.publishFailureCalls++
+	return nil
+}
+
+func (r *stubUsageRecorder) RecordEvent(_ context.Context, record service.UsageRecord, eventType string, detail string) error {
+	r.eventCalls++
+	r.lastEventRecord = record
+	r.lastEventType = eventType
+	r.lastEventDetail = detail
 	return nil
 }
