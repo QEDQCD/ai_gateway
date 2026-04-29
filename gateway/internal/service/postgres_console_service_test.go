@@ -59,6 +59,57 @@ func TestPostgresConsoleServiceSystemStatus(t *testing.T) {
 	}
 }
 
+func TestPostgresConsoleServiceOverviewIncludesTenantPostureAndPlatformMetrics(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	if _, err := conn.Exec(ctx, `
+		insert into tenants (id, name, status)
+		values ('tenant_alpha', 'Alpha Tenant', 'active')
+		on conflict (id) do update set name = excluded.name, status = excluded.status;
+
+		insert into users (id, email, name, role, status)
+		values ('user_alpha_member', 'alpha-member@example.com', 'Alpha Member', 'member', 'active')
+		on conflict (id) do nothing;
+
+		insert into tenant_memberships (id, tenant_id, user_id, role, status)
+		values ('tm_alpha_member', 'tenant_alpha', 'user_alpha_member', 'member', 'active')
+		on conflict (tenant_id, user_id) do update set status = excluded.status;
+
+		insert into tenant_quota_policies (tenant_id, period_type, request_limit, token_limit, effective_from)
+		values ('tenant_alpha', 'monthly', 120000, 3456789, now())
+		on conflict (tenant_id) do update set
+			request_limit = excluded.request_limit,
+			token_limit = excluded.token_limit,
+			effective_from = excluded.effective_from,
+			updated_at = now();
+	`); err != nil {
+		t.Fatalf("seed overview tenant posture failed: %v", err)
+	}
+
+	payload, err := console.Overview(ctx)
+	if err != nil {
+		t.Fatalf("Overview failed: %v", err)
+	}
+
+	if len(payload.PlatformMetrics) == 0 {
+		t.Fatal("expected platform metrics to be populated")
+	}
+	if len(payload.TenantPosture) < 2 {
+		t.Fatalf("expected at least 2 tenant posture rows, got %d", len(payload.TenantPosture))
+	}
+	if !containsMetric(payload.PlatformMetrics, "活跃租户数") {
+		t.Fatalf("expected 活跃租户数 metric, got %#v", payload.PlatformMetrics)
+	}
+	if !containsTableRowValue(payload.TenantPosture, "tenant_alpha") {
+		t.Fatalf("expected tenant posture to include tenant_alpha, got %#v", payload.TenantPosture)
+	}
+}
+
 func TestPostgresConsoleServiceStreamPlaygroundRejectsEmbeddingsRoute(t *testing.T) {
 	t.Parallel()
 
@@ -2997,6 +3048,26 @@ func containsString(items []string, expected string) bool {
 	return false
 }
 
+func containsMetric(items []service.KeyMetric, label string) bool {
+	for _, item := range items {
+		if item.Label == label {
+			return true
+		}
+	}
+	return false
+}
+
+func containsTableRowValue(items []service.TableRow, expected string) bool {
+	for _, item := range items {
+		for _, column := range item.Columns {
+			if column == expected {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 type stubConsoleResolveAuthService struct {
 	requestContext domain.RequestContext
 }
@@ -3007,9 +3078,9 @@ func (s stubConsoleResolveAuthService) Resolve(context.Context, string, string) 
 
 type stubConsoleChatProxy struct {
 	completeCalls int
-	streamCalls  int
-	streamResult service.ChatCompletionStream
-	streamErr    error
+	streamCalls   int
+	streamResult  service.ChatCompletionStream
+	streamErr     error
 }
 
 func (s *stubConsoleChatProxy) Complete(context.Context, service.ChatRequest, any) (service.ChatResponse, error) {

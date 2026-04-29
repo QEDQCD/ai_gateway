@@ -26,6 +26,16 @@ export function DashboardPage() {
           <StatCard key={item.label} label={item.label} value={item.value} />
         ))}
       </div>
+      <div className="stats-grid">
+        {data.platform_metrics.map((item) => (
+          <StatCard key={item.label} label={item.label} value={item.value} />
+        ))}
+      </div>
+      <TableSection
+        title="租户态势"
+        columns={["租户 ID", "网关健康", "活跃成员", "启用密钥", "Token 上限", "Token 使用"]}
+        rows={data.tenant_posture.map((row) => row.columns)}
+      />
       <div className="two-column-grid">
         <TableSection
           title="路由健康"

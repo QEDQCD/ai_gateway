@@ -98,6 +98,106 @@ func (s postgresConsoleService) Overview(ctx context.Context) (OverviewPageData,
 		quotaUsage = math.Min(100, (float64(quotaSummary.RequestsUsed)*100.0)/float64(quotaSummary.RequestLimit))
 	}
 
+	var activeTenantCount int64
+	var activeMemberCount int64
+	var quotaTenantCount int64
+	var totalTokenLimit int64
+	if err := s.db.QueryRow(ctx, `
+		with latest_policies as (
+			select distinct on (tenant_id)
+				tenant_id,
+				token_limit
+			from tenant_quota_policies
+			where period_type = 'monthly'
+			  and effective_from <= now()
+			order by tenant_id, effective_from desc
+		)
+		select
+			(select count(*) from tenants where status = 'active'),
+			(
+				select count(*)
+				from tenant_memberships
+				where status = 'active'
+			),
+			(select count(*) from latest_policies),
+			(select coalesce(sum(token_limit), 0) from latest_policies);
+	`).Scan(&activeTenantCount, &activeMemberCount, &quotaTenantCount, &totalTokenLimit); err != nil {
+		return OverviewPageData{}, err
+	}
+
+	platformMetrics := []KeyMetric{
+		{Label: "活跃租户数", Value: fmt.Sprintf("%d", activeTenantCount)},
+		{Label: "活跃成员数", Value: fmt.Sprintf("%d", activeMemberCount)},
+		{Label: "已配置额度租户", Value: fmt.Sprintf("%d", quotaTenantCount)},
+		{Label: "平台月 Token 上限", Value: formatLargeNumber(int(totalTokenLimit))},
+	}
+
+	tenantPostureRows, err := s.collectTableRows(ctx, `
+		with latest_policies as (
+			select distinct on (tenant_id)
+				tenant_id,
+				token_limit
+			from tenant_quota_policies
+			where period_type = 'monthly'
+			  and effective_from <= now()
+			order by tenant_id, effective_from desc
+		),
+		current_usage as (
+			select
+				tenant_id,
+				tokens_used
+			from tenant_quota_usage_periods
+			where period_start = (date_trunc('month', now() at time zone 'Asia/Shanghai') at time zone 'Asia/Shanghai')
+			  and period_end = ((date_trunc('month', now() at time zone 'Asia/Shanghai') + interval '1 month') at time zone 'Asia/Shanghai')
+		),
+		key_counts as (
+			select
+				tenant_id,
+				count(*) filter (where status = 'active') as active_key_count
+			from platform_api_keys
+			group by tenant_id
+		),
+		member_counts as (
+			select
+				tenant_id,
+				count(*) filter (where status = 'active') as active_member_count
+			from tenant_memberships
+			group by tenant_id
+		),
+		request_health as (
+			select
+				tenant_id,
+				sum(case when usage_status = 'success' then 1 else 0 end) as success_count,
+				count(*) as total_count
+			from llm_request_logs
+			where request_started_at >= now() - interval '24 hours'
+			group by tenant_id
+		)
+		select
+			t.id,
+			case
+				when coalesce(h.total_count, 0) = 0 then '待观测'
+				when h.success_count = h.total_count then '健康'
+				when h.success_count = 0 then '降级'
+				else '告警'
+			end,
+			coalesce(m.active_member_count, 0)::text,
+			coalesce(k.active_key_count, 0)::text,
+			coalesce(p.token_limit, 0)::text,
+			coalesce(u.tokens_used, 0)::text || ' / ' || coalesce(p.token_limit, 0)::text
+		from tenants t
+		left join latest_policies p on p.tenant_id = t.id
+		left join current_usage u on u.tenant_id = t.id
+		left join key_counts k on k.tenant_id = t.id
+		left join member_counts m on m.tenant_id = t.id
+		left join request_health h on h.tenant_id = t.id
+		where t.status = 'active'
+		order by t.id asc;
+	`)
+	if err != nil {
+		return OverviewPageData{}, err
+	}
+
 	routeHealthRows, err := s.collectTableRows(ctx, `
 		with recent as (
 			select
@@ -191,11 +291,13 @@ func (s postgresConsoleService) Overview(ctx context.Context) (OverviewPageData,
 			{Label: "配额使用率", Value: formatPercentage(quotaUsage)},
 			{Label: "活跃 API 密钥", Value: fmt.Sprintf("%d", activeAPIKeys)},
 		},
-		RouteHealth:   routeHealthRows,
-		TopModels:     topModelsRows,
-		RecentAlerts:  recentAlertRows,
-		AuditSnapshot: auditSnapshotRows,
-		QuotaSummary:  quotaSummary,
+		PlatformMetrics: platformMetrics,
+		TenantPosture:   tenantPostureRows,
+		RouteHealth:     routeHealthRows,
+		TopModels:       topModelsRows,
+		RecentAlerts:    recentAlertRows,
+		AuditSnapshot:   auditSnapshotRows,
+		QuotaSummary:    quotaSummary,
 	}, nil
 }
 

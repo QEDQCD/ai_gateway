@@ -546,6 +546,10 @@ describe("控制台路由", () => {
         top_models: [{ columns: ["gpt-4o-mini", "612k", "48%", "对话"] }],
         recent_alerts: [{ columns: ["09:42", "配额告警", "tenant_beta"] }],
         audit_snapshot: [{ columns: ["tenant_alpha", "/v1/chat/completions", "200"] }],
+        platform_metrics: [{ label: "活跃租户数", value: "3" }],
+        tenant_posture: [
+          { columns: ["tenant_alpha", "健康", "3", "2", "3456789", "120000 / 3456789"] },
+        ],
       },
     });
 
@@ -554,6 +558,8 @@ describe("控制台路由", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "总览" })).toBeInTheDocument();
     expect(screen.getByText("24 小时请求量")).toBeInTheDocument();
     expect(screen.getByText("平台默认线路")).toBeInTheDocument();
+    expect(screen.getByText("活跃租户数")).toBeInTheDocument();
+    expect(screen.getAllByText("tenant_alpha").length).toBeGreaterThan(0);
     expect(fetchMock).toHaveBeenCalledWith("/api/admin/overview");
   });
 

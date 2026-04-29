@@ -11,6 +11,8 @@ export type TableRow = {
 
 export type OverviewPageData = {
   stats: KeyMetric[];
+  platform_metrics: KeyMetric[];
+  tenant_posture: TableRow[];
   route_health: TableRow[];
   top_models: TableRow[];
   recent_alerts: TableRow[];
