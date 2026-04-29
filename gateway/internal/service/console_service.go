@@ -197,15 +197,16 @@ type AuditEvent struct {
 }
 
 type AuditItem struct {
-	Time          string `json:"time"`
-	Tenant        string `json:"tenant"`
-	Endpoint      string `json:"endpoint"`
-	RequestModel  string `json:"request_model"`
-	UpstreamModel string `json:"upstream_model"`
-	Status        string `json:"status"`
-	RouteLabel    string `json:"route_label"`
-	Latency       string `json:"latency"`
-	UsageSource   string `json:"usage_source"`
+	Time                string `json:"time"`
+	Tenant              string `json:"tenant"`
+	Endpoint            string `json:"endpoint"`
+	RequestModel        string `json:"request_model"`
+	UpstreamModel       string `json:"upstream_model"`
+	Status              string `json:"status"`
+	RouteLabel          string `json:"route_label"`
+	Latency             string `json:"latency"`
+	FirstTokenLatencyMS *int64 `json:"first_token_latency_ms,omitempty"`
+	UsageSource         string `json:"usage_source"`
 }
 
 type AuditPageData struct {
@@ -283,14 +284,15 @@ type UsageFailureData struct {
 }
 
 type UsageRequestItem struct {
-	RequestID   string `json:"request_id"`
-	Tenant      string `json:"tenant"`
-	Endpoint    string `json:"endpoint"`
-	Model       string `json:"model"`
-	Status      string `json:"status"`
-	TotalTokens string `json:"total_tokens"`
-	Latency     string `json:"latency"`
-	UsageSource string `json:"usage_source"`
+	RequestID           string `json:"request_id"`
+	Tenant              string `json:"tenant"`
+	Endpoint            string `json:"endpoint"`
+	Model               string `json:"model"`
+	Status              string `json:"status"`
+	TotalTokens         string `json:"total_tokens"`
+	Latency             string `json:"latency"`
+	FirstTokenLatencyMS *int64 `json:"first_token_latency_ms,omitempty"`
+	UsageSource         string `json:"usage_source"`
 }
 
 type UsageRequestsPageData struct {

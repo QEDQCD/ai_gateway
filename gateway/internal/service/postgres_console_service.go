@@ -1144,6 +1144,7 @@ func (s postgresConsoleService) Audit(ctx context.Context) (AuditPageData, error
 			l.usage_status,
 			coalesce(pc.display_name, l.provider_credential_id),
 			l.latency_ms,
+			l.first_token_latency_ms,
 			l.usage_source
 		from llm_request_logs l
 		left join provider_credentials pc on pc.id = l.provider_credential_id
@@ -1160,6 +1161,7 @@ func (s postgresConsoleService) Audit(ctx context.Context) (AuditPageData, error
 		var item AuditItem
 		var status string
 		var latencyMS int64
+		var firstTokenLatencyMS *int64
 		var usageSource string
 		if err := rows.Scan(
 			&item.Time,
@@ -1170,6 +1172,7 @@ func (s postgresConsoleService) Audit(ctx context.Context) (AuditPageData, error
 			&status,
 			&item.RouteLabel,
 			&latencyMS,
+			&firstTokenLatencyMS,
 			&usageSource,
 		); err != nil {
 			return AuditPageData{}, err
@@ -1178,6 +1181,7 @@ func (s postgresConsoleService) Audit(ctx context.Context) (AuditPageData, error
 		item.RouteLabel = neutralizeConsoleRouteLabel(item.RouteLabel)
 		item.Status = translateUsageStatus(status)
 		item.Latency = fmt.Sprintf("%d ms", latencyMS)
+		item.FirstTokenLatencyMS = firstTokenLatencyMS
 		item.UsageSource = translateUsageSource(usageSource)
 		items = append(items, item)
 	}
@@ -1700,6 +1704,7 @@ func (s postgresConsoleService) UsageRequests(ctx context.Context, query UsageQu
 			l.usage_status,
 			l.total_tokens,
 			l.latency_ms,
+			l.first_token_latency_ms,
 			l.usage_source
 		from llm_request_logs l
 		left join route_catalog r on r.id = l.route_id
@@ -1719,14 +1724,16 @@ func (s postgresConsoleService) UsageRequests(ctx context.Context, query UsageQu
 		var status string
 		var totalTokens int
 		var latencyMS int64
+		var firstTokenLatencyMS *int64
 		var usageSource string
-		if err := rows.Scan(&item.RequestID, &item.Tenant, &item.Endpoint, &item.Model, &status, &totalTokens, &latencyMS, &usageSource); err != nil {
+		if err := rows.Scan(&item.RequestID, &item.Tenant, &item.Endpoint, &item.Model, &status, &totalTokens, &latencyMS, &firstTokenLatencyMS, &usageSource); err != nil {
 			return UsageRequestsPageData{}, err
 		}
 		item.Endpoint = neutralizeConsoleEndpoint(item.Endpoint)
 		item.Status = translateUsageStatus(status)
 		item.TotalTokens = formatLargeNumber(totalTokens)
 		item.Latency = fmt.Sprintf("%d ms", latencyMS)
+		item.FirstTokenLatencyMS = firstTokenLatencyMS
 		item.UsageSource = translateUsageSource(usageSource)
 		items = append(items, item)
 	}

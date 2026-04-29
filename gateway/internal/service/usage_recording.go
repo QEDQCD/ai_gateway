@@ -37,6 +37,7 @@ type UsageRecord struct {
 	UsageSource          UsageSource
 	StatusCode           int
 	LatencyMS            int64
+	FirstTokenLatencyMS  *int64
 	PromptTokens         int
 	CompletionTokens     int
 	TotalTokens          int
@@ -80,6 +81,7 @@ insert into llm_request_logs (
 	usage_status,
 	status_code,
 	latency_ms,
+	first_token_latency_ms,
 	prompt_tokens,
 	completion_tokens,
 	total_tokens,
@@ -89,7 +91,7 @@ insert into llm_request_logs (
 	request_completed_at
 ) values (
 	$1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-	$11, $12, $13, $14, $15, $16, $17, $18, $19, $20
+	$11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21
 )`
 
 const insertUsagePublishFailureEventSQL = `
@@ -205,6 +207,7 @@ func insertUsageRecord(ctx context.Context, db store.DBTX, record UsageRecord) e
 		string(record.Status),
 		record.StatusCode,
 		record.LatencyMS,
+		nullableInt64Value(record.FirstTokenLatencyMS),
 		record.PromptTokens,
 		record.CompletionTokens,
 		record.TotalTokens,
@@ -214,6 +217,13 @@ func insertUsageRecord(ctx context.Context, db store.DBTX, record UsageRecord) e
 		record.RequestCompletedAt,
 	)
 	return err
+}
+
+func nullableInt64Value(value *int64) any {
+	if value == nil {
+		return nil
+	}
+	return *value
 }
 
 func insertUsageLifecycleEvent(ctx context.Context, db store.DBTX, record UsageRecord, eventType string, detail string) error {

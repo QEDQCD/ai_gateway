@@ -29,6 +29,8 @@ func TestUsageRecorderRecordWritesSuccessLifecycleEvent(t *testing.T) {
 	db := newRecordingTxDB()
 	recorder := service.NewUsageRecorder(db)
 	record := newUsageRecord(service.UsageStatusSuccess, service.UsageSourceUpstream)
+	firstTokenLatencyMS := int64(42)
+	record.FirstTokenLatencyMS = &firstTokenLatencyMS
 
 	if err := recorder.Record(context.Background(), record); err != nil {
 		t.Fatalf("recorder.Record failed: %v", err)
@@ -57,6 +59,9 @@ func TestUsageRecorderRecordWritesSuccessLifecycleEvent(t *testing.T) {
 	}
 	if got := db.tx.execCalls[1].args[3]; got != "response_received" {
 		t.Fatalf("expected lifecycle event_type %q, got %#v", "response_received", got)
+	}
+	if got := db.tx.execCalls[0].args[13]; got != int64(42) {
+		t.Fatalf("expected first_token_latency_ms arg 42, got %#v", got)
 	}
 }
 

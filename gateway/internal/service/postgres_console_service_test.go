@@ -1173,6 +1173,9 @@ func TestPostgresConsoleServiceAuditUsesUsageLogsAndEvents(t *testing.T) {
 	if payload.Items[0].UsageSource == "" {
 		t.Fatal("expected usage_source to be populated")
 	}
+	if payload.Items[0].FirstTokenLatencyMS == nil || *payload.Items[0].FirstTokenLatencyMS != 41 {
+		t.Fatalf("expected first_token_latency_ms 41, got %#v", payload.Items[0].FirstTokenLatencyMS)
+	}
 }
 
 func TestPostgresConsoleServiceAuditFallsBackToAuditLogsWhenUsageDataMissing(t *testing.T) {
@@ -2344,6 +2347,9 @@ func TestPostgresConsoleServiceUsageRequests(t *testing.T) {
 	if item.UsageSource != "估算" {
 		t.Fatalf("expected usage_source 估算, got %q", item.UsageSource)
 	}
+	if item.FirstTokenLatencyMS == nil || *item.FirstTokenLatencyMS != 40 {
+		t.Fatalf("expected first_token_latency_ms 40, got %#v", item.FirstTokenLatencyMS)
+	}
 }
 
 func TestPostgresConsoleServiceUsageRequestsUsesRequestStartedAtWindow(t *testing.T) {
@@ -2449,6 +2455,17 @@ func newUsageConsoleService(t *testing.T, ctx context.Context) (service.ConsoleS
 		if _, err := conn.Exec(ctx, statement); err != nil {
 			t.Fatalf("conn.Exec seed failed: %v", err)
 		}
+	}
+	if _, err := conn.Exec(ctx, `
+		update llm_request_logs
+		set first_token_latency_ms = case id
+			when 'llmreq_demo_001' then 41
+			when 'llmreq_demo_002' then 40
+			else first_token_latency_ms
+		end
+		where id in ('llmreq_demo_001', 'llmreq_demo_002');
+	`); err != nil {
+		t.Fatalf("seed first_token_latency_ms failed: %v", err)
 	}
 
 	codec, err := secret.NewCodec("0123456789abcdef0123456789abcdef")
