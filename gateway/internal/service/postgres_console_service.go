@@ -67,24 +67,13 @@ func (s postgresConsoleService) Overview(ctx context.Context) (OverviewPageData,
 	if err := s.db.QueryRow(ctx, `
 		with recent as (
 			select status_code
-			from audit_logs
-			where created_at >= now() - interval '24 hours'
-		),
-		managed_keys as (
-			select distinct target_id
-			from audit_events
-			where event_type = 'api_key_created'
-			  and target_type = 'platform_api_key'
+			from llm_request_logs
+			where request_started_at >= now() - interval '24 hours'
 		)
 		select
 			(select count(*) from recent),
 			coalesce((select avg(case when status_code between 200 and 399 then 100.0 else 0 end) from recent), 0),
-			(
-				select count(*)
-				from platform_api_keys
-				where status = 'active'
-				  and id in (select target_id from managed_keys)
-			);
+			(select count(*) from platform_api_keys where status = 'active');
 	`).Scan(&requests24h, &successRate, &activeAPIKeys); err != nil {
 		return OverviewPageData{}, err
 	}
@@ -275,9 +264,16 @@ func (s postgresConsoleService) Overview(ctx context.Context) (OverviewPageData,
 	}
 
 	auditSnapshotRows, err := s.collectTableRows(ctx, `
-		select tenant_id, endpoint, status_code::text
-		from audit_logs
-		order by created_at desc
+		select
+			tenant_id,
+			request_path,
+			case
+				when status_code between 200 and 399 then '成功'
+				when status_code = 429 or usage_status = 'rate_limited' then '限流'
+				else '失败'
+			end
+		from llm_request_logs
+		order by request_started_at desc, id desc
 		limit 3;
 	`)
 	if err != nil {

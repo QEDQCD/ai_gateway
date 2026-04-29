@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -107,6 +108,81 @@ func TestPostgresConsoleServiceOverviewIncludesTenantPostureAndPlatformMetrics(t
 	}
 	if !containsTableRowValue(payload.TenantPosture, "tenant_alpha") {
 		t.Fatalf("expected tenant posture to include tenant_alpha, got %#v", payload.TenantPosture)
+	}
+}
+
+func TestPostgresConsoleServiceOverviewUsesLLMLogsWithoutAuditLogs(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	if _, err := conn.Exec(ctx, `
+		delete from audit_logs;
+
+		insert into platform_api_keys (
+			id,
+			tenant_id,
+			name,
+			key_hash,
+			status,
+			created_at,
+			expires_at
+		)
+		values (
+			'pak_overview_extra',
+			'tenant_demo',
+			'overview-extra',
+			'sha256:overview-extra',
+			'active',
+			now() - interval '20 minutes',
+			now() + interval '29 days'
+		)
+		on conflict (id) do update set
+			status = excluded.status,
+			expires_at = excluded.expires_at;
+
+		update llm_request_logs
+		set
+			request_started_at = now() - interval '10 minutes',
+			request_completed_at = now() - interval '10 minutes' + interval '182 milliseconds',
+			created_at = now() - interval '10 minutes',
+			status_code = 200,
+			usage_status = 'success';
+	`); err != nil {
+		t.Fatalf("prepare overview fallback data failed: %v", err)
+	}
+
+	var recentLogCount int
+	if err := conn.QueryRow(ctx, `
+		select count(*)
+		from llm_request_logs
+		where request_started_at >= now() - interval '24 hours'
+	`).Scan(&recentLogCount); err != nil {
+		t.Fatalf("count recent llm_request_logs failed: %v", err)
+	}
+
+	payload, err := console.Overview(ctx)
+	if err != nil {
+		t.Fatalf("Overview failed: %v", err)
+	}
+
+	if metricValue(payload.Stats, "24 小时请求量") != strconv.Itoa(recentLogCount) {
+		t.Fatalf("expected 24 小时请求量 %q, got %#v", strconv.Itoa(recentLogCount), payload.Stats)
+	}
+	if metricValue(payload.Stats, "成功率") != "100.00%" {
+		t.Fatalf("expected 成功率 %q, got %#v", "100.00%", payload.Stats)
+	}
+	if metricValue(payload.Stats, "活跃 API 密钥") != "2" {
+		t.Fatalf("expected 活跃 API 密钥 %q, got %#v", "2", payload.Stats)
+	}
+	if len(payload.AuditSnapshot) == 0 {
+		t.Fatal("expected audit snapshot to be populated from llm_request_logs")
+	}
+	if !containsTableRowValue(payload.AuditSnapshot, "tenant_demo") {
+		t.Fatalf("expected audit snapshot to include tenant_demo, got %#v", payload.AuditSnapshot)
 	}
 }
 
@@ -3142,6 +3218,15 @@ func containsMetric(items []service.KeyMetric, label string) bool {
 		}
 	}
 	return false
+}
+
+func metricValue(items []service.KeyMetric, label string) string {
+	for _, item := range items {
+		if item.Label == label {
+			return item.Value
+		}
+	}
+	return ""
 }
 
 func containsTableRowValue(items []service.TableRow, expected string) bool {
