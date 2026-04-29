@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -1144,7 +1143,8 @@ func TestPostgresConsoleServiceAuditUsesUsageLogsAndEvents(t *testing.T) {
 		set
 			request_started_at = now() - interval '30 minutes',
 			request_completed_at = now() - interval '30 minutes' + interval '182 milliseconds',
-			created_at = now() - interval '30 minutes'
+			created_at = now() - interval '30 minutes',
+			first_token_latency_ms = 41
 		where id = 'llmreq_demo_001';
 
 		update llm_request_events
@@ -2309,7 +2309,15 @@ func TestPostgresConsoleServiceUsageRequests(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	console, _ := newUsageConsoleService(t, ctx)
+	console, conn := newUsageConsoleService(t, ctx)
+
+	if _, err := conn.Exec(ctx, `
+		update llm_request_logs
+		set first_token_latency_ms = 40
+		where id = 'llmreq_demo_002';
+	`); err != nil {
+		t.Fatalf("seed usage request first_token_latency_ms failed: %v", err)
+	}
 
 	payload, err := console.UsageRequests(ctx, service.UsageQuery{
 		From:   mustParseUsageTime(t, "2026-04-24T09:00:00Z"),
@@ -2485,6 +2493,18 @@ func TestPostgresConsoleServiceUsageRequestsDefaultsFirstTokenLatencyToZero(t *t
 		t.Fatalf("insert zero first-token request log failed: %v", err)
 	}
 
+	var firstTokenLatencyMS int64
+	if err := conn.QueryRow(ctx, `
+		select first_token_latency_ms
+		from llm_request_logs
+		where id = 'llmreq_demo_zero_first_token'
+	`).Scan(&firstTokenLatencyMS); err != nil {
+		t.Fatalf("QueryRow llm_request_logs first_token_latency_ms failed: %v", err)
+	}
+	if firstTokenLatencyMS != 0 {
+		t.Fatalf("expected DB default first_token_latency_ms 0, got %d", firstTokenLatencyMS)
+	}
+
 	payload, err := console.UsageRequests(ctx, service.UsageQuery{
 		From: mustParseUsageTime(t, "2026-04-24T10:15:00Z"),
 		To:   mustParseUsageTime(t, "2026-04-24T10:17:00Z"),
@@ -2497,12 +2517,8 @@ func TestPostgresConsoleServiceUsageRequestsDefaultsFirstTokenLatencyToZero(t *t
 	}
 
 	item := payload.Items[0]
-	itemJSON, err := json.Marshal(item)
-	if err != nil {
-		t.Fatalf("json.Marshal item failed: %v", err)
-	}
-	if !strings.Contains(string(itemJSON), `"first_token_latency_ms":0`) {
-		t.Fatalf("expected first_token_latency_ms to marshal as 0, got %s", string(itemJSON))
+	if item.FirstTokenLatencyMS != 0 {
+		t.Fatalf("expected query chain to return DB default first_token_latency_ms 0, got %d", item.FirstTokenLatencyMS)
 	}
 }
 
@@ -2535,17 +2551,6 @@ func newUsageConsoleService(t *testing.T, ctx context.Context) (service.ConsoleS
 		if _, err := conn.Exec(ctx, statement); err != nil {
 			t.Fatalf("conn.Exec seed failed: %v", err)
 		}
-	}
-	if _, err := conn.Exec(ctx, `
-		update llm_request_logs
-		set first_token_latency_ms = case id
-			when 'llmreq_demo_001' then 41
-			when 'llmreq_demo_002' then 40
-			else first_token_latency_ms
-		end
-		where id in ('llmreq_demo_001', 'llmreq_demo_002');
-	`); err != nil {
-		t.Fatalf("seed first_token_latency_ms failed: %v", err)
 	}
 
 	codec, err := secret.NewCodec("0123456789abcdef0123456789abcdef")

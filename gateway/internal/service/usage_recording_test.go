@@ -80,6 +80,23 @@ func TestUsageRecorderRecordDefaultsFirstTokenLatencyToZero(t *testing.T) {
 	}
 }
 
+func TestUsageRecorderRecordNormalizesNegativeFirstTokenLatencyToZero(t *testing.T) {
+	t.Parallel()
+
+	db := newRecordingTxDB()
+	recorder := service.NewUsageRecorder(db)
+	record := newUsageRecord(service.UsageStatusSuccess, service.UsageSourceUpstream)
+	record.FirstTokenLatencyMS = -9
+
+	if err := recorder.Record(context.Background(), record); err != nil {
+		t.Fatalf("recorder.Record failed: %v", err)
+	}
+
+	if got := db.tx.execCalls[0].args[13]; got != int64(0) {
+		t.Fatalf("expected negative first_token_latency_ms to normalize to 0, got %#v", got)
+	}
+}
+
 func TestUsageRecorderRecordWritesFailureLifecycleEvent(t *testing.T) {
 	t.Parallel()
 

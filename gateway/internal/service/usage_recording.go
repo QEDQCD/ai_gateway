@@ -467,6 +467,9 @@ func (r *UsageRecord) ensureDefaults() {
 	if r.LatencyMS <= 0 {
 		r.LatencyMS = durationMilliseconds(r.RequestCompletedAt.Sub(r.RequestStartedAt))
 	}
+	if r.FirstTokenLatencyMS < 0 {
+		r.FirstTokenLatencyMS = 0
+	}
 }
 
 func lifecycleEventForRecord(record UsageRecord) (string, string) {
