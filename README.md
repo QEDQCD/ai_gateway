@@ -95,6 +95,35 @@ GATEWAY_MODEL_TOKEN_PRICING_QWEN_FLASH_CACHED_MICROYUAN_PER_MILLION=
 
 如果你不是直接运行 `gateway` 二进制，而是走容器编排，请确认这些变量已经被实际注入到 `gateway` 容器环境；仅写入宿主机 `.env.local` 但未透传到容器时，网关进程不会看到这些值。
 
+### 智能路由配置
+
+`POST /v1/chat/completions` 已支持首版规则智能路由。当前由 `gateway` 进程读取以下配置：
+
+- `GATEWAY_CHAT_FAST_MODEL`
+- `GATEWAY_CHAT_REASONING_MODEL`
+- `GATEWAY_SMART_ROUTING_CODING_KEYWORDS`
+- `GATEWAY_SMART_ROUTING_LONG_PROMPT_THRESHOLD`
+
+示例：
+
+```dotenv
+GATEWAY_CHAT_FAST_MODEL=qwen-flash
+GATEWAY_CHAT_REASONING_MODEL=qwen-flash
+GATEWAY_SMART_ROUTING_CODING_KEYWORDS=写代码,实现,重构,debug,报错,异常,单元测试,架构设计
+GATEWAY_SMART_ROUTING_LONG_PROMPT_THRESHOLD=240
+```
+
+说明：
+
+- 默认部署值把 `fast` 和 `reasoning` 都指向 `qwen-flash`，优先保证当前 DashScope key 可直接上线
+- 如果你的账号已开通更强模型，例如 `qwen-plus`，只需要把 `GATEWAY_CHAT_REASONING_MODEL` 改成对应模型即可，无需改代码
+
+当前策略只对 `chat/completions` 生效：
+
+- 普通问答默认走快模型档位
+- 命中编码关键词、代码块、报错/堆栈等信号时切到强模型档位
+- 调用观测与审计会记录 `task_class`、`target_model_tier`、`routing_reason`、`resolved_model`
+
 ### 2. 准备 secrets 目录
 
 ```bash
@@ -139,6 +168,16 @@ docker compose --env-file deploy/compose/.env.local -f deploy/compose/compose.ym
 - RabbitMQ AMQP：`127.0.0.1:32361`
 - RabbitMQ 管理台：`http://127.0.0.1:32704`
 
+## 公开页 SEO / GEO
+
+公开站点当前已提供以下可抓取资产：
+
+- `GET /robots.txt`
+- `GET /sitemap.xml`
+- `GET /llms.txt`
+
+公开页面 `GET /login` 与 `GET /apply` 已补齐页面标题、描述、canonical 与 AI 可读摘要，控制台登录后页面仍不作为本轮抓取目标。
+
 ## 部署后验证
 
 ### 查看容器状态
@@ -151,6 +190,15 @@ docker compose --env-file deploy/compose/.env.local -f deploy/compose/compose.ym
 
 ```bash
 curl http://127.0.0.1:32658/healthz
+```
+
+### 公开页与抓取资产检查
+
+```bash
+curl -I http://127.0.0.1:31873/login
+curl http://127.0.0.1:31873/robots.txt
+curl http://127.0.0.1:31873/sitemap.xml
+curl http://127.0.0.1:31873/llms.txt
 ```
 
 内部检索支撑服务不映射宿主机端口，如需排查可使用：
@@ -182,6 +230,27 @@ curl -u <GATEWAY_SERVICE_AUTH_USERNAME>:<GATEWAY_SERVICE_AUTH_PASSWORD> \
   -H "X-Console-Session: ${SESSION_TOKEN}" \
   http://127.0.0.1:32658/admin/api-keys
 ```
+
+### 智能路由验证
+
+准备一个平台 API Key 后，可以直接用复杂编码请求验证是否命中强模型档位：
+
+```bash
+curl -sS http://127.0.0.1:32658/v1/chat/completions \
+  -H "Authorization: Bearer <platform-key>" \
+  -H "Content-Type: application/json" \
+  --data '{"model":"qwen-flash","messages":[{"role":"user","content":"请帮我 debug 这段 panic 代码 ```go\npanic(\"x\")\n```"}]}'
+```
+
+期望结果：
+
+- 请求可正常返回
+- 网关会按规则把请求切到强模型档位
+- `GET /admin/usage/requests` 与 `GET /admin/audit` 中能看到：
+  - `task_class=coding_complex`
+  - `target_model_tier=gateway-chat-reasoning`
+  - 非空 `routing_reason`
+  - 最终 `resolved_model`
 
 ### 费用展示与验证
 

@@ -615,6 +615,46 @@ member 页只保留平台级表达：
 4. member 仍然只看到平台级统一接口能力，不看到内部 provider 细节。
 5. 熔断/降级能力被明确记录为下一阶段扩展，而不是半实现状态。
 
+## 实施收口说明
+
+截至本轮收口，设计已对应落地到以下结果：
+
+1. 公开页已补齐：
+   - `/login`
+   - `/apply`
+   - `/robots.txt`
+   - `/sitemap.xml`
+   - `/llms.txt`
+2. `chat/completions` 已在请求链路前半段完成规则分类，再按内部模型档位解析真实上游模型。
+3. usage / audit 持久化并回传以下字段：
+   - `task_class`
+   - `routing_reason`
+   - `target_model_tier`
+   - `resolved_model`
+4. 控制台展示已分层：
+   - admin `调用观测` 展示任务分类、目标档位、路由原因、实际模型
+   - admin `审计` 展示请求模型、实际模型、上游模型与路由字段
+   - member `调用观测` 只展示任务类型、平台策略、实际模型，不暴露 provider 凭据
+5. 当前已完成的最小验证口径：
+   - 前端路由测试通过
+   - Web 构建通过
+   - README 已补充公开资产检查与智能路由验证命令
+
+## 验证建议
+
+建议按以下顺序验证整轮能力：
+
+1. 公开页：
+   - `curl -I http://127.0.0.1:31873/login`
+   - `curl http://127.0.0.1:31873/robots.txt`
+   - `curl http://127.0.0.1:31873/sitemap.xml`
+   - `curl http://127.0.0.1:31873/llms.txt`
+2. 网关健康：
+   - `curl http://127.0.0.1:32658/healthz`
+3. 智能路由：
+   - 用复杂编码 prompt 调用 `POST /v1/chat/completions`
+   - 再检查 `admin/usage/requests` 与 `admin/audit` 是否出现 `coding_complex`、`gateway-chat-reasoning` 和最终 `resolved_model`
+
 ## 后续扩展
 
 下一阶段可以在本设计基础上继续扩展：
