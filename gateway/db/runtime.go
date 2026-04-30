@@ -398,7 +398,7 @@ func escapeLiteral(value string) string {
 func seededModels(provider string) (chatModel string, embeddingModel string, supportedModels []string) {
 	switch strings.ToLower(strings.TrimSpace(provider)) {
 	case "dashscope":
-		return "qwen-flash", "text-embedding-v4", []string{"qwen-flash", "text-embedding-v4"}
+		return "qwen-flash", "text-embedding-v4", []string{"qwen-flash", "qwen-plus", "text-embedding-v4"}
 	default:
 		return "gpt-4o-mini", "text-embedding-3-small", []string{"gpt-4o-mini", "text-embedding-3-small"}
 	}
