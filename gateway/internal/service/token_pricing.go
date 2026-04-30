@@ -59,14 +59,18 @@ func (r ModelPricingResolver) Resolve(model string) (ModelTokenPrice, error) {
 	return ModelTokenPrice{}, errors.New("service: default model pricing not configured")
 }
 
-func ComputeUsageCosts(price ModelTokenPrice, usage TokenUsageBreakdown) UsageCosts {
+func ComputeUsageCosts(price ModelTokenPrice, usage TokenUsageBreakdown) (UsageCosts, error) {
+	if err := validateUsageTokenPrice(price); err != nil {
+		return UsageCosts{}, err
+	}
+
 	costs := UsageCosts{
 		InputCostMicroyuan:  roundMicroyuanCost(uncachedInputTokens(usage), price.InputMicroyuanPerMillion),
 		OutputCostMicroyuan: roundMicroyuanCost(usage.OutputTokens, price.OutputMicroyuanPerMillion),
 		CachedCostMicroyuan: roundMicroyuanCost(usage.CachedTokens, price.CachedMicroyuanPerMillion),
 	}
 	costs.TotalCostMicroyuan = costs.InputCostMicroyuan + costs.OutputCostMicroyuan + costs.CachedCostMicroyuan
-	return costs
+	return costs, nil
 }
 
 func roundMicroyuanCost(tokens int64, price int64) int64 {
@@ -84,14 +88,22 @@ func uncachedInputTokens(usage TokenUsageBreakdown) int64 {
 }
 
 func validateModelTokenPrice(model string, price ModelTokenPrice) error {
+	return validateTokenPrice(price, fmt.Sprintf("service: model pricing %q", model))
+}
+
+func validateUsageTokenPrice(price ModelTokenPrice) error {
+	return validateTokenPrice(price, "service: usage pricing")
+}
+
+func validateTokenPrice(price ModelTokenPrice, subject string) error {
 	if price.InputMicroyuanPerMillion < 0 {
-		return fmt.Errorf("service: model pricing %q input price must be >= 0", model)
+		return fmt.Errorf("%s input price must be >= 0", subject)
 	}
 	if price.OutputMicroyuanPerMillion < 0 {
-		return fmt.Errorf("service: model pricing %q output price must be >= 0", model)
+		return fmt.Errorf("%s output price must be >= 0", subject)
 	}
 	if price.CachedMicroyuanPerMillion < 0 {
-		return fmt.Errorf("service: model pricing %q cached price must be >= 0", model)
+		return fmt.Errorf("%s cached price must be >= 0", subject)
 	}
 	return nil
 }

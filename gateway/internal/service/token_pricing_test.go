@@ -101,11 +101,14 @@ func TestNewModelPricingResolverRejectsNegativePrices(t *testing.T) {
 }
 
 func TestComputeUsageCostsRoundsHalfUp(t *testing.T) {
-	costs := service.ComputeUsageCosts(service.ModelTokenPrice{
+	costs, err := service.ComputeUsageCosts(service.ModelTokenPrice{
 		InputMicroyuanPerMillion: 500_000,
 	}, service.TokenUsageBreakdown{
 		InputTokens: 1,
 	})
+	if err != nil {
+		t.Fatalf("ComputeUsageCosts failed: %v", err)
+	}
 
 	if costs.InputCostMicroyuan != 1 {
 		t.Fatalf("expected rounded input cost 1 microyuan, got %d", costs.InputCostMicroyuan)
@@ -116,7 +119,7 @@ func TestComputeUsageCostsRoundsHalfUp(t *testing.T) {
 }
 
 func TestComputeUsageCostsTreatsCachedTokensAsSubsetOfInput(t *testing.T) {
-	costs := service.ComputeUsageCosts(service.ModelTokenPrice{
+	costs, err := service.ComputeUsageCosts(service.ModelTokenPrice{
 		InputMicroyuanPerMillion:  2_000_000,
 		OutputMicroyuanPerMillion: 20_000_000,
 		CachedMicroyuanPerMillion: 500_000,
@@ -125,6 +128,9 @@ func TestComputeUsageCostsTreatsCachedTokensAsSubsetOfInput(t *testing.T) {
 		OutputTokens: 7,
 		CachedTokens: 5,
 	})
+	if err != nil {
+		t.Fatalf("ComputeUsageCosts failed: %v", err)
+	}
 
 	if costs != (service.UsageCosts{
 		InputCostMicroyuan:  12,
@@ -133,5 +139,19 @@ func TestComputeUsageCostsTreatsCachedTokensAsSubsetOfInput(t *testing.T) {
 		TotalCostMicroyuan:  155,
 	}) {
 		t.Fatalf("expected full cost breakdown, got %#v", costs)
+	}
+}
+
+func TestComputeUsageCostsRejectsNegativePrices(t *testing.T) {
+	_, err := service.ComputeUsageCosts(service.ModelTokenPrice{
+		InputMicroyuanPerMillion: -1,
+	}, service.TokenUsageBreakdown{
+		InputTokens: 1,
+	})
+	if err == nil {
+		t.Fatal("expected negative price to fail")
+	}
+	if !strings.Contains(err.Error(), "input price") {
+		t.Fatalf("expected input price error, got %v", err)
 	}
 }
