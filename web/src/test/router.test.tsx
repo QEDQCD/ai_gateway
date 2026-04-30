@@ -95,6 +95,19 @@ function createUsageRequestMock(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function createAdminOverviewMock(overrides: Record<string, unknown> = {}) {
+  return {
+    stats: [],
+    route_health: [],
+    top_models: [],
+    recent_alerts: [],
+    audit_snapshot: [],
+    platform_metrics: [],
+    tenant_posture: [],
+    ...overrides,
+  };
+}
+
 function mockSession(session: Partial<ConsoleSession> = {}) {
   useConsoleSessionMock.mockReturnValue({
     ...defaultConsoleSession,
@@ -589,7 +602,7 @@ describe("控制台路由", () => {
 
   test("总览页使用 /api/admin/overview 数据", async () => {
     const fetchMock = mockFetch({
-      "/api/admin/overview": {
+      "/api/admin/overview": createAdminOverviewMock({
         stats: [
           { label: "24 小时请求量", value: "128 万" },
           { label: "成功率", value: "99.42%" },
@@ -604,7 +617,7 @@ describe("控制台路由", () => {
         tenant_posture: [
           { columns: ["tenant_alpha", "健康", "3", "2", "3456789", "120000 / 3456789"] },
         ],
-      },
+      }),
     });
 
     renderRoute();
@@ -619,13 +632,7 @@ describe("控制台路由", () => {
 
   test("控制台导航不再展示已收口模块入口", async () => {
     mockFetch({
-      "/api/admin/overview": {
-        stats: [],
-        route_health: [],
-        top_models: [],
-        recent_alerts: [],
-        audit_snapshot: [],
-      },
+      "/api/admin/overview": createAdminOverviewMock(),
       "/api/admin/system/status": defaultSystemStatus(),
     });
 
@@ -637,13 +644,7 @@ describe("控制台路由", () => {
 
   test("侧栏隐藏左下状态块但顶部 badge 继续展示系统状态", async () => {
     const fetchMock = mockFetch({
-      "/api/admin/overview": {
-        stats: [],
-        route_health: [],
-        top_models: [],
-        recent_alerts: [],
-        audit_snapshot: [],
-      },
+      "/api/admin/overview": createAdminOverviewMock(),
       "/api/admin/system/status": defaultSystemStatus(),
     });
 
