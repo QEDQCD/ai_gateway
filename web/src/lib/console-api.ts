@@ -174,6 +174,7 @@ export type AuditItem = {
   route_label: string;
   latency: string;
   usage_source: string;
+  total_cost: string;
 };
 
 export type AuditPageData = {
@@ -183,12 +184,27 @@ export type AuditPageData = {
   summaries: AuditSummary[];
 };
 
+export type PricingModelItem = {
+  model: string;
+  input_price: string;
+  output_price: string;
+  cached_price: string;
+};
+
 export type UsageOverviewData = {
   total_requests: number;
   success_rate: string;
   total_tokens: string;
+  input_tokens: string;
+  output_tokens: string;
+  cached_tokens: string;
   average_latency: string;
   estimated_share: string;
+  input_cost: string;
+  output_cost: string;
+  cached_cost: string;
+  total_cost: string;
+  pricing_models: PricingModelItem[];
 };
 
 export type UsageTrendPoint = {
@@ -200,6 +216,7 @@ export type UsageTrendData = {
   requests: UsageTrendPoint[];
   tokens: UsageTrendPoint[];
   success: UsageTrendPoint[];
+  costs: UsageTrendPoint[];
 };
 
 export type UsageLatencyCell = {
@@ -240,8 +257,18 @@ export type UsageRequestItem = {
   model: string;
   status: string;
   total_tokens: string;
+  input_tokens: string;
+  output_tokens: string;
+  cached_tokens: string;
   latency: string;
   usage_source: string;
+  input_cost: string;
+  output_cost: string;
+  cached_cost: string;
+  total_cost: string;
+  input_price: string;
+  output_price: string;
+  cached_price: string;
 };
 
 export type UsageRequestsPageData = {
@@ -316,6 +343,11 @@ function readString(record: JsonRecord, key: string) {
   return typeof value === "string" ? value : "";
 }
 
+function readNumber(record: JsonRecord, key: string) {
+  const value = record[key];
+  return typeof value === "number" ? value : 0;
+}
+
 function readStringArray(record: JsonRecord, key: string) {
   const value = record[key];
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
@@ -323,6 +355,95 @@ function readStringArray(record: JsonRecord, key: string) {
 
 function readRouteLabel(record: JsonRecord) {
   return readString(record, "route_label");
+}
+
+function toPricingModelItem(value: unknown): PricingModelItem {
+  const record = asRecord(value);
+
+  return {
+    model: readString(record, "model"),
+    input_price: readString(record, "input_price"),
+    output_price: readString(record, "output_price"),
+    cached_price: readString(record, "cached_price"),
+  };
+}
+
+function toUsageOverviewData(value: unknown): UsageOverviewData {
+  const record = asRecord(value);
+
+  return {
+    total_requests: readNumber(record, "total_requests"),
+    success_rate: readString(record, "success_rate"),
+    total_tokens: readString(record, "total_tokens"),
+    input_tokens: readString(record, "input_tokens"),
+    output_tokens: readString(record, "output_tokens"),
+    cached_tokens: readString(record, "cached_tokens"),
+    average_latency: readString(record, "average_latency"),
+    estimated_share: readString(record, "estimated_share"),
+    input_cost: readString(record, "input_cost"),
+    output_cost: readString(record, "output_cost"),
+    cached_cost: readString(record, "cached_cost"),
+    total_cost: readString(record, "total_cost"),
+    pricing_models: Array.isArray(record.pricing_models)
+      ? record.pricing_models.map(toPricingModelItem)
+      : [],
+  };
+}
+
+function toUsageTrendPoint(value: unknown): UsageTrendPoint {
+  const record = asRecord(value);
+
+  return {
+    label: readString(record, "label"),
+    value: readString(record, "value"),
+  };
+}
+
+function toUsageTrendData(value: unknown): UsageTrendData {
+  const record = asRecord(value);
+
+  return {
+    requests: Array.isArray(record.requests) ? record.requests.map(toUsageTrendPoint) : [],
+    tokens: Array.isArray(record.tokens) ? record.tokens.map(toUsageTrendPoint) : [],
+    success: Array.isArray(record.success) ? record.success.map(toUsageTrendPoint) : [],
+    costs: Array.isArray(record.costs) ? record.costs.map(toUsageTrendPoint) : [],
+  };
+}
+
+function toUsageRequestItem(value: unknown): UsageRequestItem {
+  const record = asRecord(value);
+
+  return {
+    request_id: readString(record, "request_id"),
+    tenant: readString(record, "tenant"),
+    endpoint: readString(record, "endpoint"),
+    model: readString(record, "model"),
+    status: readString(record, "status"),
+    total_tokens: readString(record, "total_tokens"),
+    input_tokens: readString(record, "input_tokens"),
+    output_tokens: readString(record, "output_tokens"),
+    cached_tokens: readString(record, "cached_tokens"),
+    latency: readString(record, "latency"),
+    usage_source: readString(record, "usage_source"),
+    input_cost: readString(record, "input_cost"),
+    output_cost: readString(record, "output_cost"),
+    cached_cost: readString(record, "cached_cost"),
+    total_cost: readString(record, "total_cost"),
+    input_price: readString(record, "input_price"),
+    output_price: readString(record, "output_price"),
+    cached_price: readString(record, "cached_price"),
+  };
+}
+
+function toUsageRequestsPageData(value: unknown): UsageRequestsPageData {
+  const record = asRecord(value);
+
+  return {
+    items: Array.isArray(record.items) ? record.items.map(toUsageRequestItem) : [],
+    total: readNumber(record, "total"),
+    limit: readNumber(record, "limit"),
+    offset: readNumber(record, "offset"),
+  };
 }
 
 function toRouteItem(value: unknown): RouteItem {
@@ -556,6 +677,7 @@ export function getAudit() {
             route_label: readRouteLabel(record),
             latency: readString(record, "latency"),
             usage_source: readString(record, "usage_source"),
+            total_cost: readString(record, "total_cost"),
           };
         })
       : [],
@@ -564,11 +686,11 @@ export function getAudit() {
 }
 
 export function getUsageOverview() {
-  return requestJson<UsageOverviewData>("/api/admin/usage/overview");
+  return requestJson<JsonRecord>("/api/admin/usage/overview").then(toUsageOverviewData);
 }
 
 export function getUsageTrends() {
-  return requestJson<UsageTrendData>("/api/admin/usage/trends");
+  return requestJson<JsonRecord>("/api/admin/usage/trends").then(toUsageTrendData);
 }
 
 export function getUsageLatencyWall(window: "6h" | "24h" | "7d" = "24h") {
@@ -612,17 +734,19 @@ function createUsageRequestsSearch(query: UsageRequestsQuery) {
 }
 
 export function getUsageRequests(query: UsageRequestsQuery) {
-  return requestJson<UsageRequestsPageData>(
-    `/api/admin/usage/requests?${createUsageRequestsSearch(query)}`,
+  return requestJson<JsonRecord>(`/api/admin/usage/requests?${createUsageRequestsSearch(query)}`).then(
+    toUsageRequestsPageData,
   );
 }
 
 export function getMemberUsageOverview() {
-  return requestJson<UsageOverviewData>("/api/me/usage/overview");
+  return requestJson<JsonRecord>("/api/me/usage/overview").then(toUsageOverviewData);
 }
 
 export function getMemberUsageRequests(query: UsageRequestsQuery) {
-  return requestJson<UsageRequestsPageData>(`/api/me/usage/requests?${createUsageRequestsSearch(query)}`);
+  return requestJson<JsonRecord>(`/api/me/usage/requests?${createUsageRequestsSearch(query)}`).then(
+    toUsageRequestsPageData,
+  );
 }
 
 export function getMemberFailures() {

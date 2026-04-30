@@ -58,7 +58,18 @@ export function AuditPage() {
       <section className="section-card">
         <h2>审计明细</h2>
         <DataTable
-          columns={["时间", "租户", "端点", "请求模型", "上游模型", "状态", "平台线路", "延迟", "计量来源"]}
+          columns={[
+            "时间",
+            "租户",
+            "端点",
+            "请求模型",
+            "上游模型",
+            "状态",
+            "平台线路",
+            "延迟",
+            "计量来源",
+            "总费用",
+          ]}
           rows={items.map((item) => [
             item.time,
             item.tenant,
@@ -69,6 +80,7 @@ export function AuditPage() {
             neutralizeLineLabel(item.route_label),
             item.latency,
             item.usage_source,
+            item.total_cost,
           ])}
         />
       </section>

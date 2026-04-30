@@ -18,6 +18,14 @@ function formatNumber(value: number | undefined) {
   return numberFormatter.format(value ?? 0);
 }
 
+function formatValue(value: string | undefined) {
+  return value || "-";
+}
+
+function formatTokenCost(tokens: string, cost: string) {
+  return `${formatValue(tokens)} / ${formatValue(cost)}`;
+}
+
 function buildTenantSummaries(items: Awaited<ReturnType<typeof getAPIKeys>>["items"]): TenantSummary[] {
   const map = new Map<string, TenantSummary>();
 
@@ -92,6 +100,7 @@ export function AdminTenantsPage() {
         />
         <StatCard label="总调用数" value={String(data.usageOverview.total_requests)} />
         <StatCard label="成功率" value={data.usageOverview.success_rate} />
+        <StatCard label="总费用" value={formatValue(data.usageOverview.total_cost)} />
       </div>
 
       <section className="section-card">
@@ -120,7 +129,23 @@ export function AdminTenantsPage() {
           <div className="detail-list">
             <div className="detail-list__row">
               <dt>总 Token</dt>
-              <dd>{data.usageOverview.total_tokens}</dd>
+              <dd>{formatValue(data.usageOverview.total_tokens)}</dd>
+            </div>
+            <div className="detail-list__row">
+              <dt>输入 Token / 费用</dt>
+              <dd>{formatTokenCost(data.usageOverview.input_tokens, data.usageOverview.input_cost)}</dd>
+            </div>
+            <div className="detail-list__row">
+              <dt>输出 Token / 费用</dt>
+              <dd>{formatTokenCost(data.usageOverview.output_tokens, data.usageOverview.output_cost)}</dd>
+            </div>
+            <div className="detail-list__row">
+              <dt>缓存 Token / 费用</dt>
+              <dd>{formatTokenCost(data.usageOverview.cached_tokens, data.usageOverview.cached_cost)}</dd>
+            </div>
+            <div className="detail-list__row">
+              <dt>总费用</dt>
+              <dd>{formatValue(data.usageOverview.total_cost)}</dd>
             </div>
             <div className="detail-list__row">
               <dt>平均延迟</dt>
@@ -151,6 +176,26 @@ export function AdminTenantsPage() {
           </div>
         </section>
       </div>
+
+      {data.usageOverview.pricing_models.length > 0 ? (
+        <section className="section-card">
+          <div className="section-card__header">
+            <div>
+              <h3>模型定价口径</h3>
+              <p>当前观测窗口内出现过的模型单价。</p>
+            </div>
+          </div>
+          <DataTable
+            columns={["模型", "输入单价", "输出单价", "缓存单价"]}
+            rows={data.usageOverview.pricing_models.map((item) => [
+              item.model,
+              formatValue(item.input_price),
+              formatValue(item.output_price),
+              formatValue(item.cached_price),
+            ])}
+          />
+        </section>
+      ) : null}
 
       {data.overview.quota_summary?.configured ? (
         <section className="quota-summary-grid">

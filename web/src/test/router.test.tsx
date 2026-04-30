@@ -41,6 +41,60 @@ function defaultSystemStatus() {
   };
 }
 
+function createPricingModelsMock() {
+  return [
+    {
+      model: "gpt-4o-mini",
+      input_price: "2.00 ￥/M",
+      output_price: "20.00 ￥/M",
+      cached_price: "0.50 ￥/M",
+    },
+  ];
+}
+
+function createUsageOverviewMock(overrides: Record<string, unknown> = {}) {
+  return {
+    total_requests: 128,
+    success_rate: "98.40%",
+    total_tokens: "24,560",
+    input_tokens: "12,100",
+    output_tokens: "12,000",
+    cached_tokens: "460",
+    average_latency: "182 ms",
+    estimated_share: "12.00%",
+    input_cost: "0.12 ￥",
+    output_cost: "0.36 ￥",
+    cached_cost: "0.04 ￥",
+    total_cost: "0.52 ￥",
+    pricing_models: createPricingModelsMock(),
+    ...overrides,
+  };
+}
+
+function createUsageRequestMock(overrides: Record<string, unknown> = {}) {
+  return {
+    request_id: "llmreq_demo_001",
+    tenant: "tenant_demo",
+    endpoint: "/v1/chat/completions",
+    model: "gpt-4o-mini",
+    status: "成功",
+    total_tokens: "1,280",
+    input_tokens: "840",
+    output_tokens: "400",
+    cached_tokens: "40",
+    latency: "210 ms",
+    usage_source: "上游返回",
+    input_cost: "0.08 ￥",
+    output_cost: "0.40 ￥",
+    cached_cost: "0.01 ￥",
+    total_cost: "0.49 ￥",
+    input_price: "2.00 ￥/M",
+    output_price: "20.00 ￥/M",
+    cached_price: "0.50 ￥/M",
+    ...overrides,
+  };
+}
+
 function mockSession(session: Partial<ConsoleSession> = {}) {
   useConsoleSessionMock.mockReturnValue({
     ...defaultConsoleSession,
@@ -1635,11 +1689,20 @@ describe("控制台路由", () => {
         credential_mode: "平台密钥与上游凭证分离管理。",
       },
       "/api/admin/usage/overview": {
-        total_requests: 4200,
-        success_rate: "99.20%",
-        total_tokens: "320 万",
-        average_latency: "184 ms",
-        estimated_share: "37%",
+        ...createUsageOverviewMock({
+          total_requests: 4200,
+          success_rate: "99.20%",
+          total_tokens: "320 万",
+          input_tokens: "180 万",
+          output_tokens: "120 万",
+          cached_tokens: "20 万",
+          average_latency: "184 ms",
+          estimated_share: "37%",
+          input_cost: "1.20 万￥",
+          output_cost: "4.80 万￥",
+          cached_cost: "0.20 万￥",
+          total_cost: "6.20 万￥",
+        }),
       },
     });
 
@@ -1649,6 +1712,8 @@ describe("控制台路由", () => {
     expect(screen.getByText("tenant_alpha")).toBeInTheDocument();
     expect(screen.getByText("生产网关")).toBeInTheDocument();
     expect(screen.getByText("320 万")).toBeInTheDocument();
+    expect(screen.getAllByText("6.20 万￥").length).toBeGreaterThan(0);
+    expect(screen.getByText("gpt-4o-mini")).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith("/api/admin/overview");
     expect(fetchMock).toHaveBeenCalledWith("/api/admin/api-keys");
     expect(fetchMock).toHaveBeenCalledWith("/api/admin/usage/overview");
@@ -2065,25 +2130,33 @@ describe("控制台路由", () => {
   test("member 调用观测页使用 /me usage overview 和 requests 数据", async () => {
     mockSession({ role: "member", tenant_id: "tenant_demo", user_id: "user_member_a" });
     const fetchMock = mockFetch({
-      "/api/me/usage/overview": {
+      "/api/me/usage/overview": createUsageOverviewMock({
         total_requests: 120,
-        success_rate: "98.40%",
         total_tokens: "12 万",
+        input_tokens: "7.2 万",
+        output_tokens: "4.1 万",
+        cached_tokens: "0.7 万",
         average_latency: "228 ms",
         estimated_share: "14%",
-      },
+        input_cost: "0.32 ￥",
+        output_cost: "1.20 ￥",
+        cached_cost: "0.04 ￥",
+        total_cost: "1.56 ￥",
+      }),
       "/api/me/usage/requests?limit=20&offset=0": {
         items: [
-          {
+          createUsageRequestMock({
             request_id: "req_1",
             tenant: "tenant_demo",
-            endpoint: "/v1/chat/completions",
-            model: "gpt-4o-mini",
-            status: "成功",
-            total_tokens: "1280",
-            latency: "210 ms",
             usage_source: "member_key",
-          },
+            input_tokens: "840",
+            output_tokens: "400",
+            cached_tokens: "40",
+            input_cost: "0.32 ￥",
+            output_cost: "0.80 ￥",
+            cached_cost: "0.08 ￥",
+            total_cost: "1.20 ￥",
+          }),
         ],
         total: 1,
         limit: 20,
@@ -2095,6 +2168,10 @@ describe("控制台路由", () => {
 
     expect(await screen.findByText("98.40%")).toBeInTheDocument();
     expect(screen.getByText("req_1")).toBeInTheDocument();
+    expect(screen.getByText("1.56 ￥")).toBeInTheDocument();
+    expect(screen.getByText("840")).toBeInTheDocument();
+    expect(screen.getByText("1.20 ￥")).toBeInTheDocument();
+    expect(screen.getAllByText("2.00 ￥/M").length).toBeGreaterThan(0);
     expect(fetchMock).toHaveBeenCalledWith("/api/me/usage/overview");
     expect(fetchMock).toHaveBeenCalledWith("/api/me/usage/requests?limit=20&offset=0");
   });
@@ -2212,6 +2289,7 @@ describe("控制台路由", () => {
             route_label: "default-route",
             latency: "218 ms",
             usage_source: "上游返回",
+            total_cost: "2.50 ￥",
           },
         ],
         summaries: [
@@ -2229,6 +2307,8 @@ describe("控制台路由", () => {
     expect(screen.getByText("平台上游 限流")).toBeInTheDocument();
     expect(screen.getByText("内部检索能力链路回退到 平台默认线路后恢复成功")).toBeInTheDocument();
     expect(screen.getByText("/v1/chat/completions")).toBeInTheDocument();
+    expect(screen.getAllByText("总费用").length).toBeGreaterThan(0);
+    expect(screen.getByText("2.50 ￥")).toBeInTheDocument();
     expect(screen.queryByText(new RegExp(providerAlias))).not.toBeInTheDocument();
     expect(screen.queryByText(/OpenAI/)).not.toBeInTheDocument();
     expect(screen.queryByText(new RegExp(hiddenKnowledgeTerm))).not.toBeInTheDocument();
@@ -2263,6 +2343,7 @@ describe("控制台路由", () => {
             route_label: "default-route",
             latency: "82 ms",
             usage_source: "上游返回",
+            total_cost: "0.32 ￥",
           },
         ],
         summaries: [{ title: "真实摘要", content: "最近 24 小时共 128 次请求，其中 4 次失败。" }],
@@ -2274,6 +2355,7 @@ describe("控制台路由", () => {
     expect(await screen.findByText("最近 24 小时请求")).toBeInTheDocument();
     expect(screen.getByText("真实摘要")).toBeInTheDocument();
     expect(screen.getAllByText("qwen-flash")).toHaveLength(2);
+    expect(screen.getByText("0.32 ￥")).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith("/api/admin/audit");
   });
 
@@ -2336,13 +2418,7 @@ describe("控制台路由", () => {
 
   test("调用观测页使用 usage 接口数据", async () => {
     const fetchMock = mockFetch({
-      "/api/admin/usage/overview": {
-        total_requests: 128,
-        success_rate: "98.40%",
-        total_tokens: "24,560",
-        average_latency: "182 ms",
-        estimated_share: "12.00%",
-      },
+      "/api/admin/usage/overview": createUsageOverviewMock(),
       "/api/admin/usage/trends": {
         requests: [
           { label: "04-24 18:00", value: "64" },
@@ -2355,6 +2431,10 @@ describe("控制台路由", () => {
         success: [
           { label: "04-24 18:00", value: "97.00%" },
           { label: "04-24 19:00", value: "99.80%" },
+        ],
+        costs: [
+          { label: "04-24 18:00", value: "0.20 ￥" },
+          { label: "04-24 19:00", value: "0.32 ￥" },
         ],
       },
       "/api/admin/usage/latency-wall?window=24h": {
@@ -2381,35 +2461,43 @@ describe("控制台路由", () => {
         recent_events: [`04-24 19:08 · DashScope 限流 · ${hiddenKnowledgeTerm}请求失败（429）`],
       },
       "/api/admin/usage/requests": {
-        items: [
-          {
-            request_id: "llmreq_demo_002",
-            tenant: "tenant_demo",
-            endpoint: "/v1/embeddings",
-            model: "text-embedding-3-small",
-            status: "限流",
-            total_tokens: "16",
-            latency: "95 ms",
-            usage_source: "估算",
-          },
-        ],
+        items: [createUsageRequestMock({
+          request_id: "llmreq_demo_002",
+          endpoint: "/v1/embeddings",
+          model: "text-embedding-3-small",
+          status: "限流",
+          total_tokens: "16",
+          input_tokens: "12",
+          output_tokens: "0",
+          cached_tokens: "4",
+          latency: "95 ms",
+          usage_source: "估算",
+          input_cost: "0.03 ￥",
+          output_cost: "0.00 ￥",
+          cached_cost: "0.01 ￥",
+          total_cost: "0.04 ￥",
+        })],
         total: 1,
         limit: 20,
         offset: 0,
       },
       "/api/admin/usage/requests?limit=20&offset=0": {
-        items: [
-          {
-            request_id: "llmreq_demo_002",
-            tenant: "tenant_demo",
-            endpoint: "/v1/embeddings",
-            model: "text-embedding-3-small",
-            status: "限流",
-            total_tokens: "16",
-            latency: "95 ms",
-            usage_source: "估算",
-          },
-        ],
+        items: [createUsageRequestMock({
+          request_id: "llmreq_demo_002",
+          endpoint: "/v1/embeddings",
+          model: "text-embedding-3-small",
+          status: "限流",
+          total_tokens: "16",
+          input_tokens: "12",
+          output_tokens: "0",
+          cached_tokens: "4",
+          latency: "95 ms",
+          usage_source: "估算",
+          input_cost: "0.03 ￥",
+          output_cost: "0.00 ￥",
+          cached_cost: "0.01 ￥",
+          total_cost: "0.04 ￥",
+        })],
         total: 1,
         limit: 20,
         offset: 0,
@@ -2423,8 +2511,15 @@ describe("控制台路由", () => {
     expect(screen.getByText("模型延时健康墙")).toBeInTheDocument();
     expect(screen.getByText("总调用数")).toBeInTheDocument();
     expect(screen.getByText("趋势概览")).toBeInTheDocument();
+    expect(screen.getAllByText("总费用").length).toBeGreaterThan(0);
+    expect(screen.getByText("0.52 ￥")).toBeInTheDocument();
+    expect(screen.getByText("费用趋势")).toBeInTheDocument();
+    expect(screen.getByText("0.32 ￥")).toBeInTheDocument();
     expect(screen.getByText("04-24 19:08 · 平台上游 限流 · 内部检索能力请求失败（429）")).toBeInTheDocument();
     expect(screen.getByText("llmreq_demo_002")).toBeInTheDocument();
+    expect(screen.getByText("0.04 ￥")).toBeInTheDocument();
+    expect(screen.getAllByText("2.00 ￥/M").length).toBeGreaterThan(0);
+    expect(screen.getByText("gpt-4o-mini")).toBeInTheDocument();
     expect(screen.getByText("平台默认线路")).toBeInTheDocument();
     expect(screen.queryByText(/DashScope/)).not.toBeInTheDocument();
     expect(screen.queryByText(new RegExp(hiddenKnowledgeTerm))).not.toBeInTheDocument();
@@ -2438,13 +2533,7 @@ describe("控制台路由", () => {
 
   test("调用观测页使用可视化组件展示状态、事件流与来源 pill", async () => {
     mockFetch({
-      "/api/admin/usage/overview": {
-        total_requests: 128,
-        success_rate: "98.40%",
-        total_tokens: "24,560",
-        average_latency: "182 ms",
-        estimated_share: "12.00%",
-      },
+      "/api/admin/usage/overview": createUsageOverviewMock(),
       "/api/admin/usage/trends": {
         requests: [
           { label: "04-24 18:00", value: "64" },
@@ -2457,6 +2546,10 @@ describe("控制台路由", () => {
         success: [
           { label: "04-24 18:00", value: "97.00%" },
           { label: "04-24 19:00", value: "99.80%" },
+        ],
+        costs: [
+          { label: "04-24 18:00", value: "0.20 ￥" },
+          { label: "04-24 19:00", value: "0.32 ￥" },
         ],
       },
       "/api/admin/usage/latency-wall?window=24h": {
@@ -2483,18 +2576,22 @@ describe("控制台路由", () => {
         recent_events: [`04-24 19:08 · DashScope 限流 · ${hiddenKnowledgeTerm}请求失败（429）`],
       },
       "/api/admin/usage/requests?limit=20&offset=0": {
-        items: [
-          {
-            request_id: "llmreq_demo_002",
-            tenant: "tenant_demo",
-            endpoint: "/v1/embeddings",
-            model: "text-embedding-3-small",
-            status: "限流",
-            total_tokens: "16",
-            latency: "95 ms",
-            usage_source: "估算",
-          },
-        ],
+        items: [createUsageRequestMock({
+          request_id: "llmreq_demo_002",
+          endpoint: "/v1/embeddings",
+          model: "text-embedding-3-small",
+          status: "限流",
+          total_tokens: "16",
+          input_tokens: "12",
+          output_tokens: "0",
+          cached_tokens: "4",
+          latency: "95 ms",
+          usage_source: "估算",
+          input_cost: "0.03 ￥",
+          output_cost: "0.00 ￥",
+          cached_cost: "0.01 ￥",
+          total_cost: "0.04 ￥",
+        })],
         total: 1,
         limit: 20,
         offset: 0,
@@ -2559,17 +2656,12 @@ describe("控制台路由", () => {
 
   test("调用观测页支持明细翻页", async () => {
     const fetchMock = mockFetch({
-      "/api/admin/usage/overview": {
-        total_requests: 41,
-        success_rate: "98.40%",
-        total_tokens: "24,560",
-        average_latency: "182 ms",
-        estimated_share: "12.00%",
-      },
+      "/api/admin/usage/overview": createUsageOverviewMock({ total_requests: 41 }),
       "/api/admin/usage/trends": {
         requests: [],
         tokens: [],
         success: [],
+        costs: [],
       },
       "/api/admin/usage/latency-wall?window=24h": {
         window_label: "最近 24 小时",
@@ -2581,35 +2673,29 @@ describe("控制台路由", () => {
         recent_events: [],
       },
       "/api/admin/usage/requests?limit=20&offset=0": {
-        items: [
-          {
-            request_id: "llmreq_page_1",
-            tenant: "tenant_demo",
-            endpoint: "/v1/chat/completions",
-            model: "qwen-flash",
-            status: "成功",
-            total_tokens: "32",
-            latency: "80 ms",
-            usage_source: "上游返回",
-          },
-        ],
+        items: [createUsageRequestMock({
+          request_id: "llmreq_page_1",
+          model: "qwen-flash",
+          total_tokens: "32",
+          input_tokens: "18",
+          output_tokens: "10",
+          cached_tokens: "4",
+          latency: "80 ms",
+        })],
         total: 41,
         limit: 20,
         offset: 0,
       },
       "/api/admin/usage/requests?limit=20&offset=20": {
-        items: [
-          {
-            request_id: "llmreq_page_2",
-            tenant: "tenant_demo",
-            endpoint: "/v1/chat/completions",
-            model: "qwen-flash",
-            status: "成功",
-            total_tokens: "28",
-            latency: "76 ms",
-            usage_source: "上游返回",
-          },
-        ],
+        items: [createUsageRequestMock({
+          request_id: "llmreq_page_2",
+          model: "qwen-flash",
+          total_tokens: "28",
+          input_tokens: "16",
+          output_tokens: "8",
+          cached_tokens: "4",
+          latency: "76 ms",
+        })],
         total: 41,
         limit: 20,
         offset: 20,
@@ -2631,17 +2717,12 @@ describe("控制台路由", () => {
 
   test("调用观测页在分页边界正确禁用按钮并支持返回上一页", async () => {
     const fetchMock = mockFetch({
-      "/api/admin/usage/overview": {
-        total_requests: 41,
-        success_rate: "98.40%",
-        total_tokens: "24,560",
-        average_latency: "182 ms",
-        estimated_share: "12.00%",
-      },
+      "/api/admin/usage/overview": createUsageOverviewMock({ total_requests: 41 }),
       "/api/admin/usage/trends": {
         requests: [],
         tokens: [],
         success: [],
+        costs: [],
       },
       "/api/admin/usage/latency-wall?window=24h": {
         window_label: "最近 24 小时",
@@ -2653,35 +2734,29 @@ describe("控制台路由", () => {
         recent_events: [],
       },
       "/api/admin/usage/requests?limit=20&offset=0": {
-        items: [
-          {
-            request_id: "llmreq_page_1",
-            tenant: "tenant_demo",
-            endpoint: "/v1/chat/completions",
-            model: "qwen-flash",
-            status: "成功",
-            total_tokens: "32",
-            latency: "80 ms",
-            usage_source: "上游返回",
-          },
-        ],
+        items: [createUsageRequestMock({
+          request_id: "llmreq_page_1",
+          model: "qwen-flash",
+          total_tokens: "32",
+          input_tokens: "18",
+          output_tokens: "10",
+          cached_tokens: "4",
+          latency: "80 ms",
+        })],
         total: 41,
         limit: 20,
         offset: 0,
       },
       "/api/admin/usage/requests?limit=20&offset=20": {
-        items: [
-          {
-            request_id: "llmreq_page_2",
-            tenant: "tenant_demo",
-            endpoint: "/v1/chat/completions",
-            model: "qwen-flash",
-            status: "成功",
-            total_tokens: "28",
-            latency: "76 ms",
-            usage_source: "上游返回",
-          },
-        ],
+        items: [createUsageRequestMock({
+          request_id: "llmreq_page_2",
+          model: "qwen-flash",
+          total_tokens: "28",
+          input_tokens: "16",
+          output_tokens: "8",
+          cached_tokens: "4",
+          latency: "76 ms",
+        })],
         total: 41,
         limit: 20,
         offset: 20,
