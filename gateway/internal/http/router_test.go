@@ -1675,6 +1675,193 @@ func TestAuthCheckRouteWithInjectedAuthServiceReturnsSuccess(t *testing.T) {
 	}
 }
 
+func TestChatCompletionRouteUsesSmartRoutingDecisionBeforeAuthResolve(t *testing.T) {
+	t.Parallel()
+
+	authService := &capturingAuthService{
+		requestContext: domain.RequestContext{
+			TenantID:             "tenant_123",
+			PlatformAPIKeyID:     "pak_123",
+			PlatformAPIKeyName:   "demo key",
+			SelectedProviderID:   "pc_reasoning",
+			SelectedProviderName: "Reasoning Route",
+			RouteID:              "route:pc_reasoning:default",
+			ProviderTarget: domain.ProviderTarget{
+				CredentialID: "pc_reasoning",
+				Provider:     "openai",
+				BaseURL:      "https://example.com",
+				APIKey:       "upstream-key",
+			},
+		},
+	}
+	chatProxy := &capturingChatProxyService{
+		response: service.ChatResponse{
+			Model: "gateway-chat-reasoning",
+			Choices: []service.ChatChoice{
+				{Message: service.ChatMessage{Role: "assistant", Content: "done"}},
+			},
+		},
+	}
+	app := apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+		AuthService: authService,
+		ChatProxy:   chatProxy,
+		SmartRouter: stubSmartRouter{
+			decision: service.SmartRoutingDecision{
+				TaskClass:       "coding_complex",
+				TargetModelTier: "gateway-chat-reasoning",
+				MatchedRules:    []string{"keyword:debug", "pattern:code_fence"},
+			},
+		},
+	})
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/chat/completions",
+		strings.NewReader("{\"model\":\"qwen-flash\",\"messages\":[{\"role\":\"user\",\"content\":\"please debug this panic ```go\\npanic(\\\"x\\\")\\n```\"}]}"),
+	)
+	req.Header.Set("Authorization", "Bearer platform-live-key")
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if authService.requestedModel != "gateway-chat-reasoning" {
+		t.Fatalf("expected requested model %q, got %q", "gateway-chat-reasoning", authService.requestedModel)
+	}
+	if chatProxy.request.Model != "qwen-flash" {
+		t.Fatalf("expected proxy request model %q, got %q", "qwen-flash", chatProxy.request.Model)
+	}
+	if chatProxy.requestContext.RequestedModel != "qwen-flash" {
+		t.Fatalf("expected request context requested model %q, got %q", "qwen-flash", chatProxy.requestContext.RequestedModel)
+	}
+	if chatProxy.requestContext.ResolvedModel != "gateway-chat-reasoning" {
+		t.Fatalf("expected resolved model %q, got %q", "gateway-chat-reasoning", chatProxy.requestContext.ResolvedModel)
+	}
+	if chatProxy.requestContext.TargetModelTier != "gateway-chat-reasoning" {
+		t.Fatalf("expected target model tier %q, got %q", "gateway-chat-reasoning", chatProxy.requestContext.TargetModelTier)
+	}
+	if chatProxy.requestContext.TaskClass != "coding_complex" {
+		t.Fatalf("expected task class %q, got %q", "coding_complex", chatProxy.requestContext.TaskClass)
+	}
+	if chatProxy.requestContext.RoutingReason != "keyword:debug,pattern:code_fence" {
+		t.Fatalf("expected routing reason to be recorded, got %q", chatProxy.requestContext.RoutingReason)
+	}
+}
+
+func TestNonChatV1RoutesStillUsePlatformAuthMiddleware(t *testing.T) {
+	t.Parallel()
+
+	baseRequestContext := domain.RequestContext{
+		TenantID:             "tenant_123",
+		PlatformAPIKeyID:     "pak_123",
+		PlatformAPIKeyName:   "demo key",
+		SelectedProviderID:   "pc_123",
+		SelectedProviderName: "Default Route",
+		RouteID:              "route:pc_123:default",
+		ProviderTarget: domain.ProviderTarget{
+			CredentialID: "pc_123",
+			Provider:     "openai",
+			BaseURL:      "https://example.com",
+			APIKey:       "upstream-key",
+		},
+	}
+
+	t.Run("auth-check", func(t *testing.T) {
+		t.Parallel()
+
+		authService := &capturingAuthService{requestContext: baseRequestContext}
+		app := apphttp.NewRouterWithAuth(authService)
+		req := httptest.NewRequest(http.MethodGet, "/v1/auth-check?model=gpt-4o-mini", nil)
+		req.Header.Set("Authorization", "Bearer platform-live-key")
+
+		resp, err := app.Test(req)
+		if err != nil {
+			t.Fatalf("app.Test failed: %v", err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200, got %d", resp.StatusCode)
+		}
+		if authService.requestedModel != "gpt-4o-mini" {
+			t.Fatalf("expected requested model %q, got %q", "gpt-4o-mini", authService.requestedModel)
+		}
+	})
+
+	t.Run("embeddings", func(t *testing.T) {
+		t.Parallel()
+
+		authService := &capturingAuthService{requestContext: baseRequestContext}
+		embeddingProxy := &capturingEmbeddingProxyService{
+			response: service.EmbeddingsResponse{
+				Model: "text-embedding-3-small",
+				Data:  []service.EmbeddingsDatum{{Embedding: []float64{0.1, 0.2}}},
+			},
+		}
+		app := apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+			AuthService:    authService,
+			EmbeddingProxy: embeddingProxy,
+		})
+		req := httptest.NewRequest(
+			http.MethodPost,
+			"/v1/embeddings",
+			strings.NewReader(`{"model":"text-embedding-3-small","input":"hello"}`),
+		)
+		req.Header.Set("Authorization", "Bearer platform-live-key")
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := app.Test(req)
+		if err != nil {
+			t.Fatalf("app.Test failed: %v", err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200, got %d", resp.StatusCode)
+		}
+		if authService.requestedModel != "text-embedding-3-small" {
+			t.Fatalf("expected requested model %q, got %q", "text-embedding-3-small", authService.requestedModel)
+		}
+		if embeddingProxy.requestContext != baseRequestContext {
+			t.Fatalf("expected middleware request context %+v, got %+v", baseRequestContext, embeddingProxy.requestContext)
+		}
+	})
+
+	t.Run("internal-search", func(t *testing.T) {
+		t.Parallel()
+
+		authService := &capturingAuthService{requestContext: baseRequestContext}
+		ragProxy := &capturingRAGProxyService{
+			response: service.RAGQueryResponse{Answer: "ok"},
+		}
+		app := apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+			AuthService: authService,
+			RAGProxy:    ragProxy,
+		})
+		req := httptest.NewRequest(
+			http.MethodPost,
+			"/v1/internal-search",
+			strings.NewReader(`{"knowledge_base_id":"kb_demo","question":"hello"}`),
+		)
+		req.Header.Set("Authorization", "Bearer platform-live-key")
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := app.Test(req)
+		if err != nil {
+			t.Fatalf("app.Test failed: %v", err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200, got %d", resp.StatusCode)
+		}
+		if authService.requestedModel != "" {
+			t.Fatalf("expected requested model %q, got %q", "", authService.requestedModel)
+		}
+		if ragProxy.requestContext != baseRequestContext {
+			t.Fatalf("expected middleware request context %+v, got %+v", baseRequestContext, ragProxy.requestContext)
+		}
+	})
+}
+
 type stubAuthService struct {
 	err error
 }
@@ -1695,6 +1882,64 @@ func (s *capturingAuthService) Resolve(ctx context.Context, rawKey string, reque
 	s.rawKey = rawKey
 	s.requestedModel = requestedModel
 	return s.requestContext, nil
+}
+
+type stubSmartRouter struct {
+	decision service.SmartRoutingDecision
+}
+
+func (s stubSmartRouter) Decide(service.ChatRequest) service.SmartRoutingDecision {
+	return s.decision
+}
+
+type capturingChatProxyService struct {
+	request        service.ChatRequest
+	requestContext domain.RequestContext
+	response       service.ChatResponse
+}
+
+func (s *capturingChatProxyService) Complete(_ context.Context, req service.ChatRequest, resolved any) (service.ChatResponse, error) {
+	s.request = req
+	if requestContext, ok := resolved.(domain.RequestContext); ok {
+		s.requestContext = requestContext
+	}
+	return s.response, nil
+}
+
+func (s *capturingChatProxyService) Stream(context.Context, service.ChatRequest, any) (service.ChatCompletionStream, error) {
+	return service.ChatCompletionStream{}, nil
+}
+
+func (s *capturingChatProxyService) RecordFailure(context.Context, any, int) {}
+
+type capturingEmbeddingProxyService struct {
+	request        service.EmbeddingsRequest
+	requestContext domain.RequestContext
+	response       service.EmbeddingsResponse
+}
+
+func (s *capturingEmbeddingProxyService) Create(_ context.Context, req service.EmbeddingsRequest, resolved any) (service.EmbeddingsResponse, error) {
+	s.request = req
+	if requestContext, ok := resolved.(domain.RequestContext); ok {
+		s.requestContext = requestContext
+	}
+	return s.response, nil
+}
+
+func (s *capturingEmbeddingProxyService) RecordFailure(context.Context, any, int) {}
+
+type capturingRAGProxyService struct {
+	request        service.RAGQueryRequest
+	requestContext domain.RequestContext
+	response       service.RAGQueryResponse
+}
+
+func (s *capturingRAGProxyService) Query(_ context.Context, req service.RAGQueryRequest, resolved any) (service.RAGQueryResponse, error) {
+	s.request = req
+	if requestContext, ok := resolved.(domain.RequestContext); ok {
+		s.requestContext = requestContext
+	}
+	return s.response, nil
 }
 
 type stubConsoleAuthService struct {

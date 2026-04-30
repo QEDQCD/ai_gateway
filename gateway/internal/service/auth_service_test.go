@@ -465,6 +465,9 @@ func TestResolveRequestContextUsesPlatformKeyAndProviderCredential(t *testing.T)
 			if tc.wantCredentialLookups > 0 && routeService.ctx != requestContext {
 				t.Fatal("expected route resolution to use the request context")
 			}
+			if tc.wantCredentialLookups > 0 && routeService.model != tc.requestedModel {
+				t.Fatalf("expected requested model %q to be forwarded to route service, got %q", tc.requestedModel, routeService.model)
+			}
 
 			if tc.wantErr != nil {
 				if !errors.Is(err, tc.wantErr) {
@@ -679,10 +682,12 @@ func (f *fakeRedisQuotaClient) Exists(ctx context.Context, key string) (bool, er
 type capturingRouteService struct {
 	delegate service.RouteService
 	ctx      context.Context
+	model    string
 }
 
 func (s *capturingRouteService) Resolve(ctx context.Context, requestedModel string) (domain.ProviderRoute, error) {
 	s.ctx = ctx
+	s.model = requestedModel
 	return s.delegate.Resolve(ctx, requestedModel)
 }
 

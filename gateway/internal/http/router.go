@@ -12,6 +12,7 @@ type RouterDependencies struct {
 	ServiceAuthPassword   string
 	ConsoleSessionEnabled bool
 	AuthService           service.AuthService
+	SmartRouter           service.SmartRouter
 	ChatProxy             service.ChatProxyService
 	EmbeddingProxy        service.EmbeddingProxyService
 	RAGProxy              service.RAGProxyService
@@ -66,6 +67,9 @@ func NewRouterWithDependencies(deps RouterDependencies) *fiber.App {
 	}
 	if deps.ChatProxy == nil {
 		deps.ChatProxy = service.NewUnavailableChatProxyService()
+	}
+	if deps.SmartRouter == nil {
+		deps.SmartRouter = service.NewRuleBasedSmartRouter(service.SmartRoutingConfig{})
 	}
 	if deps.EmbeddingProxy == nil {
 		deps.EmbeddingProxy = service.NewUnavailableEmbeddingProxyService()
@@ -137,12 +141,14 @@ func NewRouterWithDependencies(deps RouterDependencies) *fiber.App {
 	member.Get("/failures", handlers.MemberFailures(deps.MemberConsoleService))
 	member.Get("/audit-events", handlers.MemberAuditEvents(deps.MemberConsoleService))
 
-	v1 := app.Group("/v1", middleware.RequirePlatformAPIKey(deps.AuthService), middleware.RequireResolvedRequestContext())
-	v1.Get("/auth-check", func(c *fiber.Ctx) error {
+	v1 := app.Group("/v1")
+	v1.Post("/chat/completions", handlers.ChatCompletion(deps.ChatProxy, deps.SmartRouter, deps.AuthService))
+
+	v1Protected := v1.Group("/", middleware.RequirePlatformAPIKey(deps.AuthService), middleware.RequireResolvedRequestContext())
+	v1Protected.Get("/auth-check", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{"status": "ok"})
 	})
-	v1.Post("/chat/completions", handlers.ChatCompletion(deps.ChatProxy))
-	v1.Post("/embeddings", handlers.Embeddings(deps.EmbeddingProxy))
-	v1.Post("/internal-search", handlers.RAGQuery(deps.RAGProxy))
+	v1Protected.Post("/embeddings", handlers.Embeddings(deps.EmbeddingProxy))
+	v1Protected.Post("/internal-search", handlers.RAGQuery(deps.RAGProxy))
 	return app
 }

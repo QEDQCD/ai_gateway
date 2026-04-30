@@ -16,6 +16,11 @@ type RequestContext struct {
 	SelectedProviderName string
 	RouteID              string
 	ProviderTarget       ProviderTarget
+	TaskClass            string
+	TargetModelTier      string
+	RoutingReason        string
+	RequestedModel       string
+	ResolvedModel        string
 }
 
 type ProviderRoute struct {
