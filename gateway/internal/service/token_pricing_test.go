@@ -162,6 +162,26 @@ func TestComputeUsageCostsClampsCachedBillingToInputTokens(t *testing.T) {
 	}
 }
 
+func TestComputeUsageCostsNormalizesNegativeCachedTokensBeforeBilling(t *testing.T) {
+	costs, err := service.ComputeUsageCosts(service.ModelTokenPrice{
+		InputMicroyuanPerMillion:  1_000_000,
+		CachedMicroyuanPerMillion: 500_000,
+	}, service.TokenUsageBreakdown{
+		InputTokens:  10,
+		CachedTokens: -3,
+	})
+	if err != nil {
+		t.Fatalf("ComputeUsageCosts failed: %v", err)
+	}
+
+	if costs != (service.UsageCosts{
+		InputCostMicroyuan: 10,
+		TotalCostMicroyuan: 10,
+	}) {
+		t.Fatalf("expected negative cached tokens to normalize to zero before billing, got %#v", costs)
+	}
+}
+
 func TestComputeUsageCostsRejectsNegativePrices(t *testing.T) {
 	_, err := service.ComputeUsageCosts(service.ModelTokenPrice{
 		InputMicroyuanPerMillion: -1,

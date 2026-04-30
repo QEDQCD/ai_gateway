@@ -64,6 +64,8 @@ func ComputeUsageCosts(price ModelTokenPrice, usage TokenUsageBreakdown) (UsageC
 		return UsageCosts{}, err
 	}
 
+	usage = normalizeUsageTokens(usage)
+
 	costs := UsageCosts{
 		InputCostMicroyuan:  roundMicroyuanCost(uncachedInputTokens(usage), price.InputMicroyuanPerMillion),
 		OutputCostMicroyuan: roundMicroyuanCost(usage.OutputTokens, price.OutputMicroyuanPerMillion),
@@ -95,6 +97,19 @@ func billableCachedTokens(usage TokenUsageBreakdown) int64 {
 		return usage.InputTokens
 	}
 	return usage.CachedTokens
+}
+
+func normalizeUsageTokens(usage TokenUsageBreakdown) TokenUsageBreakdown {
+	if usage.InputTokens < 0 {
+		usage.InputTokens = 0
+	}
+	if usage.OutputTokens < 0 {
+		usage.OutputTokens = 0
+	}
+	if usage.CachedTokens < 0 {
+		usage.CachedTokens = 0
+	}
+	return usage
 }
 
 func validateModelTokenPrice(model string, price ModelTokenPrice) error {
