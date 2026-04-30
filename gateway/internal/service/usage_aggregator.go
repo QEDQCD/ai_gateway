@@ -21,9 +21,14 @@ insert into llm_usage_agg_hourly (
 	request_count,
 	prompt_tokens,
 	completion_tokens,
-	total_tokens
+	total_tokens,
+	cached_tokens,
+	input_cost_microyuan,
+	output_cost_microyuan,
+	cached_cost_microyuan,
+	total_cost_microyuan
 ) values (
-	$1, $2, $3, $4, $5, $6, $7, $8, 1, $9, $10, $11
+	$1, $2, $3, $4, $5, $6, $7, $8, 1, $9, $10, $11, $12, $13, $14, $15, $16
 )
 on conflict (
 	bucket_start,
@@ -38,7 +43,12 @@ on conflict (
 	request_count = llm_usage_agg_hourly.request_count + 1,
 	prompt_tokens = llm_usage_agg_hourly.prompt_tokens + excluded.prompt_tokens,
 	completion_tokens = llm_usage_agg_hourly.completion_tokens + excluded.completion_tokens,
-	total_tokens = llm_usage_agg_hourly.total_tokens + excluded.total_tokens
+	total_tokens = llm_usage_agg_hourly.total_tokens + excluded.total_tokens,
+	cached_tokens = llm_usage_agg_hourly.cached_tokens + excluded.cached_tokens,
+	input_cost_microyuan = llm_usage_agg_hourly.input_cost_microyuan + excluded.input_cost_microyuan,
+	output_cost_microyuan = llm_usage_agg_hourly.output_cost_microyuan + excluded.output_cost_microyuan,
+	cached_cost_microyuan = llm_usage_agg_hourly.cached_cost_microyuan + excluded.cached_cost_microyuan,
+	total_cost_microyuan = llm_usage_agg_hourly.total_cost_microyuan + excluded.total_cost_microyuan
 `
 
 const upsertTenantQuotaUsagePeriodSQL = `
@@ -76,6 +86,11 @@ insert into tenant_usage_ledger (
 	input_tokens,
 	output_tokens,
 	total_tokens,
+	cached_tokens,
+	input_cost_microyuan,
+	output_cost_microyuan,
+	cached_cost_microyuan,
+	total_cost_microyuan,
 	request_count,
 	success_count,
 	failure_count,
@@ -87,6 +102,11 @@ select
 	coalesce(sum(prompt_tokens), 0) as input_tokens,
 	coalesce(sum(completion_tokens), 0) as output_tokens,
 	coalesce(sum(total_tokens), 0) as total_tokens,
+	coalesce(sum(cached_tokens), 0) as cached_tokens,
+	coalesce(sum(input_cost_microyuan), 0) as input_cost_microyuan,
+	coalesce(sum(output_cost_microyuan), 0) as output_cost_microyuan,
+	coalesce(sum(cached_cost_microyuan), 0) as cached_cost_microyuan,
+	coalesce(sum(total_cost_microyuan), 0) as total_cost_microyuan,
 	coalesce(sum(request_count), 0) as request_count,
 	coalesce(sum(case when usage_status = 'success' then request_count else 0 end), 0) as success_count,
 	coalesce(sum(case when usage_status <> 'success' then request_count else 0 end), 0) as failure_count,
@@ -98,6 +118,11 @@ on conflict (bucket_start, tenant_id) do update set
 	input_tokens = excluded.input_tokens,
 	output_tokens = excluded.output_tokens,
 	total_tokens = excluded.total_tokens,
+	cached_tokens = excluded.cached_tokens,
+	input_cost_microyuan = excluded.input_cost_microyuan,
+	output_cost_microyuan = excluded.output_cost_microyuan,
+	cached_cost_microyuan = excluded.cached_cost_microyuan,
+	total_cost_microyuan = excluded.total_cost_microyuan,
 	request_count = excluded.request_count,
 	success_count = excluded.success_count,
 	failure_count = excluded.failure_count,
@@ -126,6 +151,11 @@ func (a sqlUsageAggregator) Consume(ctx context.Context, event queue.UsageEvent)
 		max(0, event.PromptTokens),
 		max(0, event.CompletionTokens),
 		max(0, event.TotalTokens),
+		max(0, event.CachedTokens),
+		max(0, event.InputCostMicroyuan),
+		max(0, event.OutputCostMicroyuan),
+		max(0, event.CachedCostMicroyuan),
+		max(0, event.TotalCostMicroyuan),
 	)
 	if err != nil {
 		return err

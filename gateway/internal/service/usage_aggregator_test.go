@@ -73,6 +73,13 @@ func TestUsageAggregatorUpsertsHourlyUsage(t *testing.T) {
 	}
 
 	for _, totalTokens := range []int{24, 6} {
+		cachedTokens := 2
+		if totalTokens == 6 {
+			cachedTokens = 1
+		}
+		inputCost := int64(totalTokens * 10)
+		outputCost := int64(40)
+		cachedCost := int64(cachedTokens * 3)
 		if err := aggregator.Consume(ctx, queue.UsageEvent{
 			RequestID:            fmt.Sprintf("req-%d", totalTokens),
 			TenantID:             "tenant_demo",
@@ -84,6 +91,11 @@ func TestUsageAggregatorUpsertsHourlyUsage(t *testing.T) {
 			PromptTokens:         totalTokens - 4,
 			CompletionTokens:     4,
 			TotalTokens:          totalTokens,
+			CachedTokens:         cachedTokens,
+			InputCostMicroyuan:   inputCost,
+			OutputCostMicroyuan:  outputCost,
+			CachedCostMicroyuan:  cachedCost,
+			TotalCostMicroyuan:   inputCost + outputCost + cachedCost,
 			Endpoint:             "/v1/chat/completions",
 			OccurredAt:           eventTime,
 		}); err != nil {
@@ -95,8 +107,21 @@ func TestUsageAggregatorUpsertsHourlyUsage(t *testing.T) {
 	var promptTokens int
 	var completionTokens int
 	var totalTokens int
+	var cachedTokens int
+	var inputCostMicroyuan int64
+	var outputCostMicroyuan int64
+	var cachedCostMicroyuan int64
+	var totalCostMicroyuan int64
 	if err := conn.QueryRow(ctx, `
-		select request_count, prompt_tokens, completion_tokens, total_tokens
+		select request_count,
+		       prompt_tokens,
+		       completion_tokens,
+		       total_tokens,
+		       cached_tokens,
+		       input_cost_microyuan,
+		       output_cost_microyuan,
+		       cached_cost_microyuan,
+		       total_cost_microyuan
 		from llm_usage_agg_hourly
 		where bucket_start = timestamptz '2026-04-24T11:00:00Z'
 		  and tenant_id = 'tenant_demo'
@@ -106,7 +131,17 @@ func TestUsageAggregatorUpsertsHourlyUsage(t *testing.T) {
 		  and request_path = '/v1/chat/completions'
 		  and usage_source = 'upstream'
 		  and usage_status = 'success'
-	`).Scan(&requestCount, &promptTokens, &completionTokens, &totalTokens); err != nil {
+	`).Scan(
+		&requestCount,
+		&promptTokens,
+		&completionTokens,
+		&totalTokens,
+		&cachedTokens,
+		&inputCostMicroyuan,
+		&outputCostMicroyuan,
+		&cachedCostMicroyuan,
+		&totalCostMicroyuan,
+	); err != nil {
 		t.Fatalf("QueryRow aggregate failed: %v", err)
 	}
 
@@ -121,6 +156,21 @@ func TestUsageAggregatorUpsertsHourlyUsage(t *testing.T) {
 	}
 	if totalTokens != 30 {
 		t.Fatalf("expected total_tokens 30, got %d", totalTokens)
+	}
+	if cachedTokens != 3 {
+		t.Fatalf("expected cached_tokens 3, got %d", cachedTokens)
+	}
+	if inputCostMicroyuan != 300 {
+		t.Fatalf("expected input_cost_microyuan 300, got %d", inputCostMicroyuan)
+	}
+	if outputCostMicroyuan != 80 {
+		t.Fatalf("expected output_cost_microyuan 80, got %d", outputCostMicroyuan)
+	}
+	if cachedCostMicroyuan != 9 {
+		t.Fatalf("expected cached_cost_microyuan 9, got %d", cachedCostMicroyuan)
+	}
+	if totalCostMicroyuan != 389 {
+		t.Fatalf("expected total_cost_microyuan 389, got %d", totalCostMicroyuan)
 	}
 
 	var monthlyRequests int
@@ -522,6 +572,11 @@ func TestUsageAggregatorRollsUpTenantUsageLedger(t *testing.T) {
 			PromptTokens:         10,
 			CompletionTokens:     4,
 			TotalTokens:          14,
+			CachedTokens:         3,
+			InputCostMicroyuan:   100,
+			OutputCostMicroyuan:  40,
+			CachedCostMicroyuan:  9,
+			TotalCostMicroyuan:   149,
 			Endpoint:             "/v1/chat/completions",
 			OccurredAt:           bucketStart.Add(5 * time.Minute),
 		},
@@ -536,6 +591,11 @@ func TestUsageAggregatorRollsUpTenantUsageLedger(t *testing.T) {
 			PromptTokens:         6,
 			CompletionTokens:     0,
 			TotalTokens:          6,
+			CachedTokens:         1,
+			InputCostMicroyuan:   60,
+			OutputCostMicroyuan:  0,
+			CachedCostMicroyuan:  3,
+			TotalCostMicroyuan:   63,
 			Endpoint:             "/v1/chat/completions",
 			OccurredAt:           bucketStart.Add(20 * time.Minute),
 		},
@@ -553,6 +613,11 @@ func TestUsageAggregatorRollsUpTenantUsageLedger(t *testing.T) {
 	var inputTokens int
 	var outputTokens int
 	var totalTokens int
+	var cachedTokens int
+	var inputCostMicroyuan int64
+	var outputCostMicroyuan int64
+	var cachedCostMicroyuan int64
+	var totalCostMicroyuan int64
 	var requestCount int
 	var successCount int
 	var failureCount int
@@ -561,6 +626,11 @@ func TestUsageAggregatorRollsUpTenantUsageLedger(t *testing.T) {
 		select input_tokens,
 		       output_tokens,
 		       total_tokens,
+		       cached_tokens,
+		       input_cost_microyuan,
+		       output_cost_microyuan,
+		       cached_cost_microyuan,
+		       total_cost_microyuan,
 		       request_count,
 		       success_count,
 		       failure_count,
@@ -572,6 +642,11 @@ func TestUsageAggregatorRollsUpTenantUsageLedger(t *testing.T) {
 		&inputTokens,
 		&outputTokens,
 		&totalTokens,
+		&cachedTokens,
+		&inputCostMicroyuan,
+		&outputCostMicroyuan,
+		&cachedCostMicroyuan,
+		&totalCostMicroyuan,
 		&requestCount,
 		&successCount,
 		&failureCount,
@@ -588,6 +663,21 @@ func TestUsageAggregatorRollsUpTenantUsageLedger(t *testing.T) {
 	}
 	if totalTokens != 20 {
 		t.Fatalf("expected total_tokens 20, got %d", totalTokens)
+	}
+	if cachedTokens != 4 {
+		t.Fatalf("expected cached_tokens 4, got %d", cachedTokens)
+	}
+	if inputCostMicroyuan != 160 {
+		t.Fatalf("expected input_cost_microyuan 160, got %d", inputCostMicroyuan)
+	}
+	if outputCostMicroyuan != 40 {
+		t.Fatalf("expected output_cost_microyuan 40, got %d", outputCostMicroyuan)
+	}
+	if cachedCostMicroyuan != 12 {
+		t.Fatalf("expected cached_cost_microyuan 12, got %d", cachedCostMicroyuan)
+	}
+	if totalCostMicroyuan != 212 {
+		t.Fatalf("expected total_cost_microyuan 212, got %d", totalCostMicroyuan)
 	}
 	if requestCount != 2 {
 		t.Fatalf("expected request_count 2, got %d", requestCount)
