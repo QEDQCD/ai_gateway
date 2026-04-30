@@ -922,8 +922,23 @@ func TestAdminUsageOverviewRouteReturnsConsoleData(t *testing.T) {
 				TotalRequests:  12,
 				SuccessRate:    "91.67%",
 				TotalTokens:    "1,280",
+				InputTokens:    "960",
+				OutputTokens:   "320",
+				CachedTokens:   "128",
 				AverageLatency: "182 ms",
 				EstimatedShare: "8.33%",
+				InputCost:      "3.80 ￥",
+				OutputCost:     "1.40 ￥",
+				CachedCost:     "0.40 ￥",
+				TotalCost:      "5.60 ￥",
+				PricingModels: []service.PricingModelItem{
+					{
+						Model:       "gpt-4o-mini",
+						InputPrice:  "2.50 ￥/M",
+						OutputPrice: "5.00 ￥/M",
+						CachedPrice: "0.50 ￥/M",
+					},
+				},
 			},
 		},
 	})
@@ -952,7 +967,7 @@ func TestAdminUsageOverviewRouteReturnsConsoleData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("io.ReadAll failed: %v", err)
 	}
-	expected := `{"total_requests":12,"success_rate":"91.67%","total_tokens":"1,280","average_latency":"182 ms","estimated_share":"8.33%"}`
+	expected := `{"total_requests":12,"success_rate":"91.67%","total_tokens":"1,280","input_tokens":"960","output_tokens":"320","cached_tokens":"128","average_latency":"182 ms","estimated_share":"8.33%","input_cost":"3.80 ￥","output_cost":"1.40 ￥","cached_cost":"0.40 ￥","total_cost":"5.60 ￥","pricing_models":[{"model":"gpt-4o-mini","input_price":"2.50 ￥/M","output_price":"5.00 ￥/M","cached_price":"0.50 ￥/M"}]}`
 	if string(body) != expected {
 		t.Fatalf("expected body %q, got %q", expected, string(body))
 	}
@@ -1172,6 +1187,7 @@ func TestAdminUsageTrendsRouteReturnsConsoleData(t *testing.T) {
 				Requests: []service.UsageTrendPoint{{Label: "04-24 18:00", Value: "12"}},
 				Tokens:   []service.UsageTrendPoint{{Label: "04-24 18:00", Value: "1,280"}},
 				Success:  []service.UsageTrendPoint{{Label: "04-24 18:00", Value: "91.67%"}},
+				Costs:    []service.UsageTrendPoint{{Label: "04-24 18:00", Value: "5.60 ￥"}},
 			},
 		},
 	})
@@ -1191,7 +1207,7 @@ func TestAdminUsageTrendsRouteReturnsConsoleData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("io.ReadAll failed: %v", err)
 	}
-	expected := `{"requests":[{"label":"04-24 18:00","value":"12"}],"tokens":[{"label":"04-24 18:00","value":"1,280"}],"success":[{"label":"04-24 18:00","value":"91.67%"}]}`
+	expected := `{"requests":[{"label":"04-24 18:00","value":"12"}],"tokens":[{"label":"04-24 18:00","value":"1,280"}],"success":[{"label":"04-24 18:00","value":"91.67%"}],"costs":[{"label":"04-24 18:00","value":"5.60 ￥"}]}`
 	if string(body) != expected {
 		t.Fatalf("expected body %q, got %q", expected, string(body))
 	}
@@ -1293,14 +1309,25 @@ func TestAdminUsageRequestsRouteReturnsConsoleData(t *testing.T) {
 			usageRequests: service.UsageRequestsPageData{
 				Items: []service.UsageRequestItem{
 					{
-						RequestID:   "llmreq_demo_002",
-						Tenant:      "tenant_demo",
-						Endpoint:    "/v1/embeddings",
-						Model:       "text-embedding-3-small",
-						Status:      "限流",
-						TotalTokens: "16",
-						Latency:     "95 ms",
-						UsageSource: "估算",
+						RequestID:           "llmreq_demo_002",
+						Tenant:              "tenant_demo",
+						Endpoint:            "/v1/embeddings",
+						Model:               "text-embedding-3-small",
+						Status:              "限流",
+						TotalTokens:         "16",
+						InputTokens:         "16",
+						OutputTokens:        "0",
+						CachedTokens:        "5",
+						Latency:             "95 ms",
+						FirstTokenLatencyMS: 0,
+						UsageSource:         "估算",
+						InputCost:           "1.75 ￥",
+						OutputCost:          "0.00 ￥",
+						CachedCost:          "0.25 ￥",
+						TotalCost:           "2.00 ￥",
+						InputPrice:          "2.50 ￥/M",
+						OutputPrice:         "0.00 ￥/M",
+						CachedPrice:         "0.75 ￥/M",
 					},
 				},
 				Total:  1,
@@ -1325,7 +1352,7 @@ func TestAdminUsageRequestsRouteReturnsConsoleData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("io.ReadAll failed: %v", err)
 	}
-	expected := `{"items":[{"request_id":"llmreq_demo_002","tenant":"tenant_demo","endpoint":"/v1/embeddings","model":"text-embedding-3-small","status":"限流","total_tokens":"16","latency":"95 ms","first_token_latency_ms":0,"usage_source":"估算"}],"total":1,"limit":20,"offset":0}`
+	expected := `{"items":[{"request_id":"llmreq_demo_002","tenant":"tenant_demo","endpoint":"/v1/embeddings","model":"text-embedding-3-small","status":"限流","total_tokens":"16","input_tokens":"16","output_tokens":"0","cached_tokens":"5","latency":"95 ms","first_token_latency_ms":0,"usage_source":"估算","input_cost":"1.75 ￥","output_cost":"0.00 ￥","cached_cost":"0.25 ￥","total_cost":"2.00 ￥","input_price":"2.50 ￥/M","output_price":"0.00 ￥/M","cached_price":"0.75 ￥/M"}],"total":1,"limit":20,"offset":0}`
 	if string(body) != expected {
 		t.Fatalf("expected body %q, got %q", expected, string(body))
 	}
