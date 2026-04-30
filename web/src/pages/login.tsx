@@ -3,9 +3,16 @@ import { Link } from "react-router-dom";
 
 import { BrandMark } from "../components/brand-mark";
 import { loginConsole } from "../lib/console-api";
+import { usePageMeta } from "../lib/page-meta";
 import { saveConsoleSession } from "../lib/session";
 
 export function LoginPage() {
+  usePageMeta({
+    title: "登录 AI Gateway 控制台",
+    description: "登录 AI Gateway 控制台，统一管理平台 API Key、调用观测、审计与租户治理。",
+    canonicalPath: "/login",
+  });
+
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);

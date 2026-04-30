@@ -173,6 +173,23 @@ describe("控制台路由", () => {
     expect(screen.getByLabelText("密码")).toBeInTheDocument();
   });
 
+  test("未登录时登录页写入页面标题与公开摘要", async () => {
+    mockAnonymousSession();
+
+    render(
+      <RouterProvider router={createTestRouter(["/login"])} future={{ v7_startTransition: true }} />,
+    );
+
+    expect(await screen.findByRole("heading", { level: 1, name: "登录 AI Gateway 控制台" })).toBeInTheDocument();
+    expect(document.title).toContain("AI Gateway");
+    expect(
+      screen.getByText(/统一管理平台 API Key、调用日志、失败记录与租户级 Token 消耗/),
+    ).toBeInTheDocument();
+    expect(document.head.querySelector('meta[name="description"]')?.getAttribute("content")).toContain(
+      "统一管理平台 API Key",
+    );
+  });
+
   test("未登录时提供账号申请入口并可跳转到申请页", async () => {
     mockAnonymousSession();
 

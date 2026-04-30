@@ -3,8 +3,15 @@ import { Link } from "react-router-dom";
 
 import { BrandMark } from "../components/brand-mark";
 import { createApplication, issueCaptcha, verifyCaptcha } from "../lib/console-api";
+import { usePageMeta } from "../lib/page-meta";
 
 export function ApplicationFormPage() {
+  usePageMeta({
+    title: "提交 AI Gateway 接入申请",
+    description: "提交 AI Gateway 接入申请，申请租户账号、平台 API Key 与统一的 AI 接入治理能力。",
+    canonicalPath: "/apply",
+  });
+
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
   const [companyName, setCompanyName] = useState("");
