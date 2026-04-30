@@ -138,19 +138,29 @@
 
 ### 2.1 配置模型
 
-后端新增一组按模型的价格配置，逻辑结构如下：
+2026-04-30 的实际实现不是 YAML 配置文件，而是由 `gateway/internal/config/config.go` 解析环境变量。
 
-```yaml
-pricing:
-  default:
-    input_yuan_per_million: 2
-    output_yuan_per_million: 20
-    cached_yuan_per_million: 0
-  qwen-flash:
-    input_yuan_per_million: 2
-    output_yuan_per_million: 20
-    cached_yuan_per_million: 0.5
-```
+实际变量名如下：
+
+- `GATEWAY_MODEL_TOKEN_PRICING_DEFAULT_INPUT_MICROYUAN_PER_MILLION`
+- `GATEWAY_MODEL_TOKEN_PRICING_DEFAULT_OUTPUT_MICROYUAN_PER_MILLION`
+- `GATEWAY_MODEL_TOKEN_PRICING_DEFAULT_CACHED_MICROYUAN_PER_MILLION`
+- `GATEWAY_MODEL_TOKEN_PRICING_QWEN_FLASH_INPUT_MICROYUAN_PER_MILLION`
+- `GATEWAY_MODEL_TOKEN_PRICING_QWEN_FLASH_OUTPUT_MICROYUAN_PER_MILLION`
+- `GATEWAY_MODEL_TOKEN_PRICING_QWEN_FLASH_CACHED_MICROYUAN_PER_MILLION`
+
+默认值与单位：
+
+- 单位统一为“微元 / 百万 Token”
+- `default.input = 2_000_000`，即 `2.00 元 / M`
+- `default.output = 20_000_000`，即 `20.00 元 / M`
+- `default.cached = 500_000`，即 `0.50 元 / M`
+- `qwen-flash` 三项在未显式设置时，逐项回退到 `default`
+
+因此当前可视为内置了两组定价键：
+
+- `default`
+- `qwen-flash`
 
 ### 2.2 查找顺序
 
@@ -158,12 +168,17 @@ pricing:
 
 1. 精确匹配 `model`
 2. 若未命中，回退到 `default`
-3. 若 `default` 也不存在，则服务启动失败
+
+补充实现细节：
+
+- `service.ModelPricingResolver` 要求存在 `default`
+- 但当前 `config.Load()` 会始终构造 `default`，并在环境变量缺失时使用内置默认值
+- 因此在当前实现里，“未配置任何 token pricing 环境变量”不会导致启动失败，而是回退到代码默认值
 
 原因：
 
-- 计价配置缺失不应在运行时静默变成错误金额
-- 启动期失败比上线后写入脏账更安全
+- 请求级模型查找仍然遵循“精确命中优先，未命中回退 default”
+- 通过代码内置默认值保证本地部署与未显式配置场景也能得到稳定金额
 
 ### 2.3 运行时口径
 
@@ -230,9 +245,20 @@ pricing:
 统一采用：
 
 ```text
-type_cost_microyuan = type_tokens * type_price_microyuan_per_million / 1_000_000
+billable_input_tokens = max(input_tokens - cached_tokens, 0)
+billable_cached_tokens = min(max(cached_tokens, 0), max(input_tokens, 0))
+
+input_cost_microyuan = billable_input_tokens * input_price_microyuan_per_million / 1_000_000
+output_cost_microyuan = max(output_tokens, 0) * output_price_microyuan_per_million / 1_000_000
+cached_cost_microyuan = billable_cached_tokens * cached_price_microyuan_per_million / 1_000_000
 total_cost_microyuan = input_cost_microyuan + output_cost_microyuan + cached_cost_microyuan
 ```
+
+说明：
+
+- 当前实现把 `cached_tokens` 视为输入 Token 的子集，避免对缓存命中的输入部分重复按普通输入计费
+- 若 `cached_tokens > input_tokens`，计费时会被钳制到 `input_tokens`
+- 若任一 Token 值为负数，计费前会先归一化为 `0`
 
 ### 4.1 四舍五入
 
@@ -310,6 +336,7 @@ total_cost_microyuan = input_cost_microyuan + output_cost_microyuan + cached_cos
 说明：
 
 - overview 里既返回聚合费用，也返回当前计价规则摘要。
+- 当前实现中的 `pricing_models` 不是直接读取静态配置，而是基于查询窗口内请求日志中出现过的 `(model, input_price, output_price, cached_price)` 去重后返回。
 
 ### `UsageTrendData`
 
@@ -346,19 +373,20 @@ total_cost_microyuan = input_cost_microyuan + output_cost_microyuan + cached_cos
 
 ### `AuditItem`
 
-新增字段：
+当前已实现新增字段：
 
-- `input_tokens`
-- `output_tokens`
-- `cached_tokens`
 - `total_cost`
 
 审计页重点展示结果：
 
 - 谁在什么时间调用了哪个模型
-- 消耗了多少输入 / 输出 / 缓存 Token
 - 产生了多少费用
 - 请求最终成功还是失败
+
+补充说明：
+
+- 三类 Token 与单价快照当前在 `UsageOverview / UsageRequests` 中展示
+- `AuditItem` 当前没有返回 `input_tokens / output_tokens / cached_tokens`
 
 ## 6. HTTP API 合同
 
@@ -450,7 +478,7 @@ total_cost_microyuan = input_cost_microyuan + output_cost_microyuan + cached_cos
 ### 8.2 模型未命中显式定价
 
 - 回退到 `default`
-- 若缺少 `default`，服务启动失败
+- 当前 `default` 由配置加载阶段始终构造；若未配置环境变量，则继续使用代码默认值
 
 ### 8.3 失败请求如何计费
 

@@ -61,6 +61,40 @@ cp deploy/compose/.env.example deploy/compose/.env.local
 
 按需编辑 `deploy/compose/.env.local`，填入本地账号、密码与端口配置。
 
+### 模型计价配置
+
+Token 计价由 `gateway` 进程读取环境变量，单位是“`微元 / 百万 Token`”：
+
+- `2_000_000` 表示 `2.00 元 / 1M tokens`
+- `20_000_000` 表示 `20.00 元 / 1M tokens`
+- `500_000` 表示 `0.50 元 / 1M tokens`
+
+当前代码中的实际变量名与默认值如下：
+
+- `GATEWAY_MODEL_TOKEN_PRICING_DEFAULT_INPUT_MICROYUAN_PER_MILLION=2000000`
+- `GATEWAY_MODEL_TOKEN_PRICING_DEFAULT_OUTPUT_MICROYUAN_PER_MILLION=20000000`
+- `GATEWAY_MODEL_TOKEN_PRICING_DEFAULT_CACHED_MICROYUAN_PER_MILLION=500000`
+- `GATEWAY_MODEL_TOKEN_PRICING_QWEN_FLASH_INPUT_MICROYUAN_PER_MILLION`
+- `GATEWAY_MODEL_TOKEN_PRICING_QWEN_FLASH_OUTPUT_MICROYUAN_PER_MILLION`
+- `GATEWAY_MODEL_TOKEN_PRICING_QWEN_FLASH_CACHED_MICROYUAN_PER_MILLION`
+
+其中 `qwen-flash` 的三项在未显式设置时会回退到 `default` 对应值。
+
+示例：
+
+```dotenv
+GATEWAY_MODEL_TOKEN_PRICING_DEFAULT_INPUT_MICROYUAN_PER_MILLION=2000000
+GATEWAY_MODEL_TOKEN_PRICING_DEFAULT_OUTPUT_MICROYUAN_PER_MILLION=20000000
+GATEWAY_MODEL_TOKEN_PRICING_DEFAULT_CACHED_MICROYUAN_PER_MILLION=500000
+
+# 可选；留空时 qwen-flash 跟随 default
+GATEWAY_MODEL_TOKEN_PRICING_QWEN_FLASH_INPUT_MICROYUAN_PER_MILLION=
+GATEWAY_MODEL_TOKEN_PRICING_QWEN_FLASH_OUTPUT_MICROYUAN_PER_MILLION=
+GATEWAY_MODEL_TOKEN_PRICING_QWEN_FLASH_CACHED_MICROYUAN_PER_MILLION=
+```
+
+如果你不是直接运行 `gateway` 二进制，而是走容器编排，请确认这些变量已经被实际注入到 `gateway` 容器环境；仅写入宿主机 `.env.local` 但未透传到容器时，网关进程不会看到这些值。
+
 ### 2. 准备 secrets 目录
 
 ```bash
@@ -148,6 +182,42 @@ curl -u <GATEWAY_SERVICE_AUTH_USERNAME>:<GATEWAY_SERVICE_AUTH_PASSWORD> \
   -H "X-Console-Session: ${SESSION_TOKEN}" \
   http://127.0.0.1:32658/admin/api-keys
 ```
+
+### 费用展示与验证
+
+完成一次真实模型调用后，可直接检查网关返回的费用相关字段。
+
+admin 侧：
+
+```bash
+curl -s -u <GATEWAY_SERVICE_AUTH_USERNAME>:<GATEWAY_SERVICE_AUTH_PASSWORD> \
+  -H "X-Console-Session: ${SESSION_TOKEN}" \
+  http://127.0.0.1:32658/admin/usage/overview | jq '{input_tokens,output_tokens,cached_tokens,input_cost,output_cost,cached_cost,total_cost,pricing_models}'
+
+curl -s -u <GATEWAY_SERVICE_AUTH_USERNAME>:<GATEWAY_SERVICE_AUTH_PASSWORD> \
+  -H "X-Console-Session: ${SESSION_TOKEN}" \
+  http://127.0.0.1:32658/admin/usage/trends | jq '{costs}'
+
+curl -s -u <GATEWAY_SERVICE_AUTH_USERNAME>:<GATEWAY_SERVICE_AUTH_PASSWORD> \
+  -H "X-Console-Session: ${SESSION_TOKEN}" \
+  http://127.0.0.1:32658/admin/usage/requests | jq '{items: [.items[] | {request_id,model,input_tokens,output_tokens,cached_tokens,input_cost,output_cost,cached_cost,total_cost,input_price,output_price,cached_price}]}'
+
+curl -s -u <GATEWAY_SERVICE_AUTH_USERNAME>:<GATEWAY_SERVICE_AUTH_PASSWORD> \
+  -H "X-Console-Session: ${SESSION_TOKEN}" \
+  http://127.0.0.1:32658/admin/audit | jq '{items: [.items[] | {time,request_model,upstream_model,total_cost,status}]}'
+```
+
+member 侧使用同一组 Basic Auth，并改为 member 登录拿到 `X-Console-Session`，检查：
+
+- `GET /me/usage/overview`
+- `GET /me/usage/requests`
+
+当前已实现的展示口径是：
+
+- `overview` 返回三类 Token、三类费用、总费用，以及 `pricing_models`
+- `trends` 返回 `costs`
+- `requests` 返回每次请求的 Token 分类、费用和单价快照
+- `audit` 当前只返回 `total_cost`，不返回三类 Token 明细
 
 ### 前端登录
 
