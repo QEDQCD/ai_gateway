@@ -75,6 +75,50 @@ func TestNewServerAppAuthenticatesBootstrapRequest(t *testing.T) {
 	}
 }
 
+func TestNewServerAppUsesConfiguredSmartRoutingTiersForChat(t *testing.T) {
+	t.Parallel()
+
+	providerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"model":"qwen-flash","choices":[{"message":{"role":"assistant","content":"ok"}}]}`)
+	}))
+	t.Cleanup(providerServer.Close)
+
+	app := newServerApp(config.Config{
+		BootstrapPlatformAPIKey:         "platform-live-key",
+		BootstrapPlatformAPIKeyID:       "pak_bootstrap",
+		BootstrapPlatformAPIKeyName:     "bootstrap key",
+		BootstrapTenantID:               "tenant_bootstrap",
+		BootstrapTenantName:             "Bootstrap Tenant",
+		BootstrapProviderID:             "pc_bootstrap",
+		BootstrapProvider:               "openai",
+		BootstrapProviderDisplayName:    "OpenAI Primary",
+		BootstrapProviderBaseURL:        providerServer.URL + "/v1",
+		BootstrapProviderAPIKey:         "provider-secret-key",
+		BootstrapSupportedModels:        []string{"qwen-flash", "qwen-plus"},
+		ChatFastModel:                   "qwen-flash",
+		ChatReasoningModel:              "qwen-plus",
+		SmartRoutingCodingKeywords:      []string{"debug", "写代码"},
+		SmartRoutingLongPromptThreshold: 240,
+	})
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/chat/completions",
+		bytes.NewBufferString(`{"model":"gateway-public","messages":[{"role":"user","content":"请用一句话解释什么是 API Gateway。"}]}`),
+	)
+	req.Header.Set("Authorization", "Bearer platform-live-key")
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+}
+
 func TestNewServerAppRoutesRAGRequestsToDedicatedRAGService(t *testing.T) {
 	t.Parallel()
 

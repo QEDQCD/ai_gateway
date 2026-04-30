@@ -35,6 +35,7 @@ func newServerApp(cfg config.Config) *fiber.App {
 	}
 
 	chatClient, embeddingClient := newBootstrapProviderClients(cfg)
+	smartRouter := newConfiguredSmartRouter(cfg)
 	usagePublisher := queue.NewRabbitMQUsagePublisher(
 		queue.NewNoopRabbitMQMessagePublisher(),
 		"gateway.usage",
@@ -46,6 +47,7 @@ func newServerApp(cfg config.Config) *fiber.App {
 		ServiceAuthPassword:   cfg.ServiceAuthPassword,
 		ConsoleSessionEnabled: strings.TrimSpace(cfg.ConsoleSessionSecret) != "",
 		AuthService:           newBootstrapAuthService(cfg),
+		SmartRouter:           smartRouter,
 		ChatProxy:             service.NewChatProxyService(chatClient, usagePublisher),
 		EmbeddingProxy:        service.NewEmbeddingProxyService(embeddingClient, usagePublisher),
 		RAGProxy:              service.NewRAGProxyService(cfg.RAGServiceBaseURL, cfg.RAGServiceUsername, cfg.RAGServicePassword, nil),
@@ -91,6 +93,7 @@ func newDatabaseBackedServerApp(cfg config.Config) *fiber.App {
 		newUsagePublisher(cfg),
 		queue.WithPublishFailureTimeout(service.NewUsageAggregator(pool), usageAggregatorPublishFailureTimeout),
 	)
+	smartRouter := newConfiguredSmartRouter(cfg)
 	chatProxy := service.NewChatProxyService(provider.NewOpenAIClient(http.DefaultClient), usagePublisher, usageRecorder)
 	embeddingProxy := service.NewEmbeddingProxyService(provider.NewOpenAIClient(http.DefaultClient), usagePublisher, usageRecorder)
 	ragProxy := service.NewRAGProxyService(cfg.RAGServiceBaseURL, cfg.RAGServiceUsername, cfg.RAGServicePassword, http.DefaultClient)
@@ -102,11 +105,23 @@ func newDatabaseBackedServerApp(cfg config.Config) *fiber.App {
 		ServiceAuthPassword:   cfg.ServiceAuthPassword,
 		ConsoleSessionEnabled: strings.TrimSpace(cfg.ConsoleSessionSecret) != "",
 		AuthService:           authService,
+		SmartRouter:           smartRouter,
 		ChatProxy:             chatProxy,
 		EmbeddingProxy:        embeddingProxy,
 		RAGProxy:              ragProxy,
 		ConsoleService:        consoleService,
 		MemberConsoleService:  memberConsoleService,
+	})
+}
+
+func newConfiguredSmartRouter(cfg config.Config) service.SmartRouter {
+	return service.NewRuleBasedSmartRouter(service.SmartRoutingConfig{
+		FastModelTier:        cfg.ChatFastModel,
+		ReasoningModelTier:   cfg.ChatReasoningModel,
+		CodingKeywords:       cfg.SmartRoutingCodingKeywords,
+		LongPromptThreshold:  cfg.SmartRoutingLongPromptThreshold,
+		EnableCodeFenceRule:  true,
+		EnableStackTraceRule: true,
 	})
 }
 
