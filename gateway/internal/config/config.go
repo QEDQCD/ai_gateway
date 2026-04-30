@@ -51,6 +51,10 @@ type Config struct {
 	BootstrapProviderAPIKey          string
 	BootstrapSupportedModels         []string
 	BootstrapQuotaExhaustedTenantIDs []string
+	ChatFastModel                    string
+	ChatReasoningModel               string
+	SmartRoutingCodingKeywords       []string
+	SmartRoutingLongPromptThreshold  int
 	ModelTokenPricing                map[string]ModelTokenPrice
 }
 
@@ -102,6 +106,10 @@ func Load() Config {
 		BootstrapProviderAPIKey:          lookupEnv("GATEWAY_BOOTSTRAP_PROVIDER_API_KEY"),
 		BootstrapSupportedModels:         bootstrapSupportedModels,
 		BootstrapQuotaExhaustedTenantIDs: splitCommaSeparatedEnv(os.Getenv("GATEWAY_QUOTA_EXHAUSTED_TENANTS")),
+		ChatFastModel:                    defaultString(os.Getenv("GATEWAY_CHAT_FAST_MODEL"), "qwen-flash"),
+		ChatReasoningModel:               defaultString(os.Getenv("GATEWAY_CHAT_REASONING_MODEL"), "qwen-plus"),
+		SmartRoutingCodingKeywords:       splitCommaSeparatedEnv(defaultString(os.Getenv("GATEWAY_SMART_ROUTING_CODING_KEYWORDS"), "写代码,实现,重构,debug,报错,异常,单元测试,架构设计")),
+		SmartRoutingLongPromptThreshold:  int(lookupInt64Env("GATEWAY_SMART_ROUTING_LONG_PROMPT_THRESHOLD", 240)),
 		ModelTokenPricing:                modelTokenPricing,
 	}
 }

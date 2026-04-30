@@ -173,6 +173,64 @@ func TestLoadModelTokenPricingPanicsOnInvalidOverride(t *testing.T) {
 	})
 }
 
+func TestLoadSmartRoutingConfigDefaultsAndOverrides(t *testing.T) {
+	t.Run("defaults", func(t *testing.T) {
+		t.Setenv("GATEWAY_CHAT_FAST_MODEL", "")
+		t.Setenv("GATEWAY_CHAT_REASONING_MODEL", "")
+		t.Setenv("GATEWAY_SMART_ROUTING_CODING_KEYWORDS", "")
+		t.Setenv("GATEWAY_SMART_ROUTING_LONG_PROMPT_THRESHOLD", "")
+
+		cfg := Load()
+
+		if cfg.ChatFastModel != "qwen-flash" {
+			t.Fatalf("expected ChatFastModel %q, got %q", "qwen-flash", cfg.ChatFastModel)
+		}
+		if cfg.ChatReasoningModel != "qwen-plus" {
+			t.Fatalf("expected ChatReasoningModel %q, got %q", "qwen-plus", cfg.ChatReasoningModel)
+		}
+		if got, want := cfg.SmartRoutingCodingKeywords, []string{"写代码", "实现", "重构", "debug", "报错", "异常", "单元测试", "架构设计"}; len(got) != len(want) {
+			t.Fatalf("expected SmartRoutingCodingKeywords %#v, got %#v", want, got)
+		} else {
+			for i := range want {
+				if got[i] != want[i] {
+					t.Fatalf("expected SmartRoutingCodingKeywords %#v, got %#v", want, got)
+				}
+			}
+		}
+		if cfg.SmartRoutingLongPromptThreshold != 240 {
+			t.Fatalf("expected SmartRoutingLongPromptThreshold %d, got %d", 240, cfg.SmartRoutingLongPromptThreshold)
+		}
+	})
+
+	t.Run("overrides", func(t *testing.T) {
+		t.Setenv("GATEWAY_CHAT_FAST_MODEL", "fast-tier-model")
+		t.Setenv("GATEWAY_CHAT_REASONING_MODEL", "reasoning-tier-model")
+		t.Setenv("GATEWAY_SMART_ROUTING_CODING_KEYWORDS", "代码, 调试 ,traceback")
+		t.Setenv("GATEWAY_SMART_ROUTING_LONG_PROMPT_THRESHOLD", "480")
+
+		cfg := Load()
+
+		if cfg.ChatFastModel != "fast-tier-model" {
+			t.Fatalf("expected ChatFastModel %q, got %q", "fast-tier-model", cfg.ChatFastModel)
+		}
+		if cfg.ChatReasoningModel != "reasoning-tier-model" {
+			t.Fatalf("expected ChatReasoningModel %q, got %q", "reasoning-tier-model", cfg.ChatReasoningModel)
+		}
+		if got, want := cfg.SmartRoutingCodingKeywords, []string{"代码", "调试", "traceback"}; len(got) != len(want) {
+			t.Fatalf("expected SmartRoutingCodingKeywords %#v, got %#v", want, got)
+		} else {
+			for i := range want {
+				if got[i] != want[i] {
+					t.Fatalf("expected SmartRoutingCodingKeywords %#v, got %#v", want, got)
+				}
+			}
+		}
+		if cfg.SmartRoutingLongPromptThreshold != 480 {
+			t.Fatalf("expected SmartRoutingLongPromptThreshold %d, got %d", 480, cfg.SmartRoutingLongPromptThreshold)
+		}
+	})
+}
+
 func assertPanicContains(t *testing.T, want string, fn func()) {
 	t.Helper()
 
