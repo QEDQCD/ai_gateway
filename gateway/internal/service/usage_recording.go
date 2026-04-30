@@ -58,6 +58,10 @@ type UsageRecorder interface {
 	RecordEvent(ctx context.Context, record UsageRecord, eventType string, detail string) error
 }
 
+type usageEventRecordHydrator interface {
+	hydrateUsageEventRecord(record *UsageRecord) error
+}
+
 type noopUsageRecorder struct{}
 
 type sqlUsageRecorder struct {
@@ -184,6 +188,10 @@ func (noopUsageRecorder) RecordPublishFailure(context.Context, UsageRecord, erro
 }
 
 func (noopUsageRecorder) RecordEvent(context.Context, UsageRecord, string, string) error {
+	return nil
+}
+
+func (noopUsageRecorder) hydrateUsageEventRecord(*UsageRecord) error {
 	return nil
 }
 
@@ -342,6 +350,10 @@ func (r sqlUsageRecorder) RecordEvent(ctx context.Context, record UsageRecord, e
 		record.RequestCompletedAt,
 	)
 	return err
+}
+
+func (r sqlUsageRecorder) hydrateUsageEventRecord(record *UsageRecord) error {
+	return hydrateUsagePricing(record, r.pricingResolver)
 }
 
 func newUsageRecordContext(ctx context.Context) (context.Context, context.CancelFunc) {

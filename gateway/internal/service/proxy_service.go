@@ -290,16 +290,23 @@ func (s chatProxyService) recordWithEvents(ctx context.Context, record UsageReco
 			logUsageFailure(event.eventType, record, err)
 		}
 	}
-	if err := s.publisher.Publish(ctx, record.UsageEvent()); err != nil {
+
+	eventRecord, err := hydratedUsageEventRecord(record, s.recorder)
+	if err != nil {
+		logUsageFailure("usage_event_hydrate", record, err)
+		return
+	}
+
+	if err := s.publisher.Publish(ctx, eventRecord.UsageEvent()); err != nil {
 		publishErr := queue.PublishFailure(err)
 		stage := "consume"
 		if publishErr != nil {
 			stage = "publish"
 		}
-		logUsageFailure(stage, record, err)
+		logUsageFailure(stage, eventRecord, err)
 		if publishErr != nil {
-			if persistErr := persistPublishFailure(record, s.recorder, publishErr); persistErr != nil {
-				logUsageFailure("publish_failure_persist", record, persistErr)
+			if persistErr := persistPublishFailure(eventRecord, s.recorder, publishErr); persistErr != nil {
+				logUsageFailure("publish_failure_persist", eventRecord, persistErr)
 			}
 		}
 	}
@@ -310,16 +317,23 @@ func (s embeddingProxyService) record(ctx context.Context, record UsageRecord) {
 		logUsageFailure("record", record, err)
 		return
 	}
-	if err := s.publisher.Publish(ctx, record.UsageEvent()); err != nil {
+
+	eventRecord, err := hydratedUsageEventRecord(record, s.recorder)
+	if err != nil {
+		logUsageFailure("usage_event_hydrate", record, err)
+		return
+	}
+
+	if err := s.publisher.Publish(ctx, eventRecord.UsageEvent()); err != nil {
 		publishErr := queue.PublishFailure(err)
 		stage := "consume"
 		if publishErr != nil {
 			stage = "publish"
 		}
-		logUsageFailure(stage, record, err)
+		logUsageFailure(stage, eventRecord, err)
 		if publishErr != nil {
-			if persistErr := persistPublishFailure(record, s.recorder, publishErr); persistErr != nil {
-				logUsageFailure("publish_failure_persist", record, persistErr)
+			if persistErr := persistPublishFailure(eventRecord, s.recorder, publishErr); persistErr != nil {
+				logUsageFailure("publish_failure_persist", eventRecord, persistErr)
 			}
 		}
 	}
@@ -436,4 +450,16 @@ func persistPublishFailure(record UsageRecord, recorder UsageRecorder, publishEr
 	ctx, cancel := context.WithTimeout(context.Background(), publishFailureRecordTimeout)
 	defer cancel()
 	return recorder.RecordPublishFailure(ctx, record, publishErr)
+}
+
+func hydratedUsageEventRecord(record UsageRecord, recorder UsageRecorder) (UsageRecord, error) {
+	prepared := record
+	hydrator, ok := recorder.(usageEventRecordHydrator)
+	if !ok {
+		return prepared, nil
+	}
+	if err := hydrator.hydrateUsageEventRecord(&prepared); err != nil {
+		return UsageRecord{}, err
+	}
+	return prepared, nil
 }

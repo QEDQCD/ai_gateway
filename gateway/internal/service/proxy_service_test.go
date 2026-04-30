@@ -59,6 +59,73 @@ func TestChatProxySkipsPublishFailurePersistenceOnConsumerOnlyError(t *testing.T
 	}
 }
 
+func TestChatProxyCompletePublishesUsageEventWithCostSnapshot(t *testing.T) {
+	t.Parallel()
+
+	db := newRecordingTxDB()
+	publisher := queue.NewRecordingUsagePublisher()
+	proxy := service.NewChatProxyService(
+		stubChatClient{
+			response: service.ChatResponse{
+				Model: "gpt-4o-mini",
+				Choices: []service.ChatChoice{
+					{Message: service.ChatMessage{Role: "assistant", Content: "ok"}},
+				},
+				Usage: &service.TokenUsage{
+					PromptTokens:     20,
+					CompletionTokens: 10,
+					TotalTokens:      30,
+					CachedTokens:     5,
+				},
+			},
+		},
+		publisher,
+		service.NewUsageRecorder(db, newTestUsagePricingResolver(t)),
+	)
+
+	_, err := proxy.Complete(context.Background(), service.ChatRequest{
+		Model: "gpt-4o-mini",
+		Messages: []service.ChatMessage{
+			{Role: "user", Content: "hello"},
+		},
+	}, domain.RequestContext{
+		TenantID:           "tenant_demo",
+		PlatformAPIKeyID:   "pak_demo",
+		PlatformAPIKeyName: "demo key",
+		RouteID:            "route:provider_openai_demo:default",
+		ProviderTarget: domain.ProviderTarget{
+			CredentialID: "provider_openai_demo",
+			Provider:     "openai",
+			BaseURL:      "https://api.openai.example/v1",
+			APIKey:       "provider-secret",
+		},
+	})
+	if err != nil {
+		t.Fatalf("proxy.Complete returned unexpected error: %v", err)
+	}
+
+	events := publisher.Events()
+	if len(events) != 1 {
+		t.Fatalf("expected 1 published usage event, got %d", len(events))
+	}
+	event := events[0]
+	if event.CachedTokens != 5 {
+		t.Fatalf("expected cached_tokens 5, got %d", event.CachedTokens)
+	}
+	if event.InputCostMicroyuan != 30 {
+		t.Fatalf("expected input_cost_microyuan 30, got %d", event.InputCostMicroyuan)
+	}
+	if event.OutputCostMicroyuan != 40 {
+		t.Fatalf("expected output_cost_microyuan 40, got %d", event.OutputCostMicroyuan)
+	}
+	if event.CachedCostMicroyuan != 3 {
+		t.Fatalf("expected cached_cost_microyuan 3, got %d", event.CachedCostMicroyuan)
+	}
+	if event.TotalCostMicroyuan != 73 {
+		t.Fatalf("expected total_cost_microyuan 73, got %d", event.TotalCostMicroyuan)
+	}
+}
+
 func TestChatProxyStreamRecordsUsageAfterSuccessfulStream(t *testing.T) {
 	t.Parallel()
 
