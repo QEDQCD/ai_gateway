@@ -42,13 +42,18 @@ func (r ruleBasedSmartRouter) Decide(req ChatRequest) SmartRoutingDecision {
 	content := aggregateUserMessages(req.Messages)
 	normalized := strings.ToLower(content)
 	matched := make([]string, 0, 4)
-	keywordMatches := 0
+	softKeywordMatches := 0
+	directKeywordMatches := 0
 
 	for _, keyword := range r.cfg.CodingKeywords {
 		keyword = strings.TrimSpace(keyword)
 		if keyword != "" && strings.Contains(normalized, strings.ToLower(keyword)) {
-			keywordMatches++
 			matched = append(matched, "keyword:"+keyword)
+			if isSoftCodingKeyword(keyword) {
+				softKeywordMatches++
+				continue
+			}
+			directKeywordMatches++
 		}
 	}
 
@@ -63,12 +68,24 @@ func (r ruleBasedSmartRouter) Decide(req ChatRequest) SmartRoutingDecision {
 		matched = append(matched, "pattern:stack_trace")
 	}
 
-	hasLongCodingPrompt := len(content) >= r.cfg.LongPromptThreshold && keywordMatches > 0
+	hasDirectArtifactRequest := containsDirectArtifactRequest(normalized)
+	if hasDirectArtifactRequest {
+		matched = append(matched, "pattern:direct_artifact_request")
+	}
+
+	hasTechnicalArtifact := containsTechnicalArtifact(normalized)
+	hasDirectIntent := directKeywordMatches > 0 || hasDirectArtifactRequest
+	hasSoftIntentCombo := softKeywordMatches >= 2 || (softKeywordMatches > 0 && hasTechnicalArtifact)
+	hasLongCodingPrompt := len(content) >= r.cfg.LongPromptThreshold && (softKeywordMatches > 0 || directKeywordMatches > 0)
 	if hasLongCodingPrompt {
 		matched = append(matched, "signal:long_prompt")
 	}
 
-	if hasHardSignal || hasLongCodingPrompt {
+	if hasSoftIntentCombo {
+		matched = append(matched, "signal:soft_keyword_combo")
+	}
+
+	if hasHardSignal || hasDirectIntent || hasSoftIntentCombo || hasLongCodingPrompt {
 		return SmartRoutingDecision{
 			TaskClass:       "coding_complex",
 			TargetModelTier: r.cfg.ReasoningModelTier,
@@ -105,4 +122,30 @@ func containsStackTrace(content string) bool {
 	return strings.Contains(content, "panic:") ||
 		strings.Contains(content, "Traceback") ||
 		strings.Contains(content, "Exception")
+}
+
+func isSoftCodingKeyword(keyword string) bool {
+	switch strings.ToLower(strings.TrimSpace(keyword)) {
+	case "debug", "报错", "异常":
+		return true
+	default:
+		return false
+	}
+}
+
+func containsDirectArtifactRequest(content string) bool {
+	return containsAny(content, "写", "编写", "生成", "创建") && containsTechnicalArtifact(content)
+}
+
+func containsTechnicalArtifact(content string) bool {
+	return containsAny(content, "代码", "函数", "脚本", "sql", "查询")
+}
+
+func containsAny(content string, patterns ...string) bool {
+	for _, pattern := range patterns {
+		if pattern != "" && strings.Contains(content, pattern) {
+			return true
+		}
+	}
+	return false
 }

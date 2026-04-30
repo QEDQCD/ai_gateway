@@ -122,6 +122,81 @@ func TestRuleBasedSmartRouterDoesNotUpgradeTerminologyQuestionOnSingleSoftKeywor
 	}
 }
 
+func TestRuleBasedSmartRouterUpgradesShortDirectDebugRequest(t *testing.T) {
+	router := service.NewRuleBasedSmartRouter(service.SmartRoutingConfig{
+		FastModelTier:      "gateway-chat-fast",
+		ReasoningModelTier: "gateway-chat-reasoning",
+		CodingKeywords:     []string{"写代码", "实现", "重构", "debug", "报错", "异常", "单元测试", "架构设计"},
+	})
+
+	result := router.Decide(service.ChatRequest{
+		Model: "qwen-flash",
+		Messages: []service.ChatMessage{
+			{
+				Role:    "user",
+				Content: "帮我 debug 这个报错",
+			},
+		},
+	})
+
+	if result.TaskClass != "coding_complex" {
+		t.Fatalf("expected task class %q, got %q", "coding_complex", result.TaskClass)
+	}
+	if result.TargetModelTier != "gateway-chat-reasoning" {
+		t.Fatalf("expected target tier %q, got %q", "gateway-chat-reasoning", result.TargetModelTier)
+	}
+}
+
+func TestRuleBasedSmartRouterUpgradesShortRefactorRequest(t *testing.T) {
+	router := service.NewRuleBasedSmartRouter(service.SmartRoutingConfig{
+		FastModelTier:      "gateway-chat-fast",
+		ReasoningModelTier: "gateway-chat-reasoning",
+		CodingKeywords:     []string{"写代码", "实现", "重构", "debug", "报错", "异常", "单元测试", "架构设计"},
+	})
+
+	result := router.Decide(service.ChatRequest{
+		Model: "qwen-flash",
+		Messages: []service.ChatMessage{
+			{
+				Role:    "user",
+				Content: "请帮我重构这段代码",
+			},
+		},
+	})
+
+	if result.TaskClass != "coding_complex" {
+		t.Fatalf("expected task class %q, got %q", "coding_complex", result.TaskClass)
+	}
+	if result.TargetModelTier != "gateway-chat-reasoning" {
+		t.Fatalf("expected target tier %q, got %q", "gateway-chat-reasoning", result.TargetModelTier)
+	}
+}
+
+func TestRuleBasedSmartRouterUpgradesFunctionWritingRequest(t *testing.T) {
+	router := service.NewRuleBasedSmartRouter(service.SmartRoutingConfig{
+		FastModelTier:      "gateway-chat-fast",
+		ReasoningModelTier: "gateway-chat-reasoning",
+		CodingKeywords:     []string{"写代码", "实现", "重构", "debug", "报错", "异常", "单元测试", "架构设计"},
+	})
+
+	result := router.Decide(service.ChatRequest{
+		Model: "qwen-flash",
+		Messages: []service.ChatMessage{
+			{
+				Role:    "user",
+				Content: "写一个 Go 函数去重",
+			},
+		},
+	})
+
+	if result.TaskClass != "coding_complex" {
+		t.Fatalf("expected task class %q, got %q", "coding_complex", result.TaskClass)
+	}
+	if result.TargetModelTier != "gateway-chat-reasoning" {
+		t.Fatalf("expected target tier %q, got %q", "gateway-chat-reasoning", result.TargetModelTier)
+	}
+}
+
 func TestRuleBasedSmartRouterDefaultsMatchInternalTiers(t *testing.T) {
 	router := service.NewRuleBasedSmartRouter(service.SmartRoutingConfig{})
 
