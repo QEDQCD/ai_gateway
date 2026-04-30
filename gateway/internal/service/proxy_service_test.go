@@ -126,6 +126,70 @@ func TestChatProxyCompletePublishesUsageEventWithCostSnapshot(t *testing.T) {
 	}
 }
 
+func TestEmbeddingProxyCreatePublishesUsageEventWithCostSnapshot(t *testing.T) {
+	t.Parallel()
+
+	db := newRecordingTxDB()
+	publisher := queue.NewRecordingUsagePublisher()
+	proxy := service.NewEmbeddingProxyService(
+		stubEmbeddingClient{
+			response: service.EmbeddingsResponse{
+				Model: "text-embedding-3-small",
+				Usage: &service.TokenUsage{
+					PromptTokens: 12,
+					TotalTokens:  12,
+					CachedTokens: 2,
+				},
+				Data: []service.EmbeddingsDatum{
+					{Embedding: []float64{0.1, 0.2}},
+				},
+			},
+		},
+		publisher,
+		service.NewUsageRecorder(db, newTestUsagePricingResolver(t)),
+	)
+
+	_, err := proxy.Create(context.Background(), service.EmbeddingsRequest{
+		Model: "text-embedding-3-small",
+		Input: "hello",
+	}, domain.RequestContext{
+		TenantID:           "tenant_demo",
+		PlatformAPIKeyID:   "pak_demo",
+		PlatformAPIKeyName: "demo key",
+		RouteID:            "route:provider_openai_demo:default",
+		ProviderTarget: domain.ProviderTarget{
+			CredentialID: "provider_openai_demo",
+			Provider:     "openai",
+			BaseURL:      "https://api.openai.example/v1",
+			APIKey:       "provider-secret",
+		},
+	})
+	if err != nil {
+		t.Fatalf("proxy.Create returned unexpected error: %v", err)
+	}
+
+	events := publisher.Events()
+	if len(events) != 1 {
+		t.Fatalf("expected 1 published usage event, got %d", len(events))
+	}
+	event := events[0]
+	if event.CachedTokens != 2 {
+		t.Fatalf("expected cached_tokens 2, got %d", event.CachedTokens)
+	}
+	if event.InputCostMicroyuan != 10 {
+		t.Fatalf("expected input_cost_microyuan 10, got %d", event.InputCostMicroyuan)
+	}
+	if event.OutputCostMicroyuan != 0 {
+		t.Fatalf("expected output_cost_microyuan 0, got %d", event.OutputCostMicroyuan)
+	}
+	if event.CachedCostMicroyuan != 1 {
+		t.Fatalf("expected cached_cost_microyuan 1, got %d", event.CachedCostMicroyuan)
+	}
+	if event.TotalCostMicroyuan != 11 {
+		t.Fatalf("expected total_cost_microyuan 11, got %d", event.TotalCostMicroyuan)
+	}
+}
+
 func TestChatProxyStreamRecordsUsageAfterSuccessfulStream(t *testing.T) {
 	t.Parallel()
 
@@ -350,6 +414,11 @@ type stubChatClient struct {
 	streamRun func(emit func([]byte) error, onFirstToken func()) (service.ChatStreamResult, error)
 }
 
+type stubEmbeddingClient struct {
+	response service.EmbeddingsResponse
+	err      error
+}
+
 func (c stubChatClient) Complete(context.Context, domain.ProviderTarget, service.ChatRequest) (service.ChatResponse, int, error) {
 	if c.err != nil {
 		return service.ChatResponse{}, 502, c.err
@@ -378,6 +447,13 @@ func (c stubChatClient) StreamComplete(context.Context, domain.ProviderTarget, s
 	}, 200, nil
 }
 
+func (c stubEmbeddingClient) CreateEmbedding(context.Context, domain.ProviderTarget, service.EmbeddingsRequest) (service.EmbeddingsResponse, int, error) {
+	if c.err != nil {
+		return service.EmbeddingsResponse{}, 502, c.err
+	}
+	return c.response, 200, nil
+}
+
 type stubUsagePublisher struct {
 	err error
 }
@@ -394,6 +470,10 @@ type stubUsageRecorder struct {
 	lastEventRecord     service.UsageRecord
 	lastEventType       string
 	lastEventDetail     string
+}
+
+func (r *stubUsageRecorder) PrepareUsageEventRecord(record service.UsageRecord) (service.UsageRecord, error) {
+	return record, nil
 }
 
 func (r *stubUsageRecorder) Record(_ context.Context, record service.UsageRecord) error {

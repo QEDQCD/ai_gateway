@@ -52,14 +52,11 @@ type UsageRecord struct {
 }
 
 type UsageRecorder interface {
+	PrepareUsageEventRecord(record UsageRecord) (UsageRecord, error)
 	Record(ctx context.Context, record UsageRecord) error
 	RecordFailure(ctx context.Context, input UsageFailureInput) error
 	RecordPublishFailure(ctx context.Context, record UsageRecord, publishErr error) error
 	RecordEvent(ctx context.Context, record UsageRecord, eventType string, detail string) error
-}
-
-type usageEventRecordHydrator interface {
-	hydrateUsageEventRecord(record *UsageRecord) error
 }
 
 type noopUsageRecorder struct{}
@@ -191,13 +188,22 @@ func (noopUsageRecorder) RecordEvent(context.Context, UsageRecord, string, strin
 	return nil
 }
 
-func (noopUsageRecorder) hydrateUsageEventRecord(*UsageRecord) error {
-	return nil
+func (n noopUsageRecorder) PrepareUsageEventRecord(record UsageRecord) (UsageRecord, error) {
+	record.ensureDefaults()
+	return record, nil
+}
+
+func (r sqlUsageRecorder) PrepareUsageEventRecord(record UsageRecord) (UsageRecord, error) {
+	record.ensureDefaults()
+	if err := r.hydrateUsageEventRecord(&record); err != nil {
+		return UsageRecord{}, err
+	}
+	return record, nil
 }
 
 func (r sqlUsageRecorder) Record(ctx context.Context, record UsageRecord) error {
-	record.ensureDefaults()
-	if err := hydrateUsagePricing(&record, r.pricingResolver); err != nil {
+	record, err := r.PrepareUsageEventRecord(record)
+	if err != nil {
 		return err
 	}
 	recordCtx, cancel := newUsageRecordContext(ctx)
