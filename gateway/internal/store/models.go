@@ -131,27 +131,35 @@ type LlmRequestFailure struct {
 }
 
 type LlmRequestLog struct {
-	ID                   string             `json:"id"`
-	TenantID             string             `json:"tenant_id"`
-	PlatformApiKeyID     string             `json:"platform_api_key_id"`
-	PlatformApiKeyName   string             `json:"platform_api_key_name"`
-	ProviderCredentialID string             `json:"provider_credential_id"`
-	RouteID              string             `json:"route_id"`
-	RequestPath          string             `json:"request_path"`
-	RequestModel         string             `json:"request_model"`
-	UpstreamModel        string             `json:"upstream_model"`
-	UsageSource          string             `json:"usage_source"`
-	UsageStatus          string             `json:"usage_status"`
-	StatusCode           int32              `json:"status_code"`
-	LatencyMs            int32              `json:"latency_ms"`
-	PromptTokens         int32              `json:"prompt_tokens"`
-	CompletionTokens     int32              `json:"completion_tokens"`
-	TotalTokens          int32              `json:"total_tokens"`
-	ErrorCode            string             `json:"error_code"`
-	ErrorMessage         string             `json:"error_message"`
-	RequestStartedAt     pgtype.Timestamptz `json:"request_started_at"`
-	RequestCompletedAt   pgtype.Timestamptz `json:"request_completed_at"`
-	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	ID                             string             `json:"id"`
+	TenantID                       string             `json:"tenant_id"`
+	PlatformApiKeyID               string             `json:"platform_api_key_id"`
+	PlatformApiKeyName             string             `json:"platform_api_key_name"`
+	ProviderCredentialID           string             `json:"provider_credential_id"`
+	RouteID                        string             `json:"route_id"`
+	RequestPath                    string             `json:"request_path"`
+	RequestModel                   string             `json:"request_model"`
+	UpstreamModel                  string             `json:"upstream_model"`
+	UsageSource                    string             `json:"usage_source"`
+	UsageStatus                    string             `json:"usage_status"`
+	StatusCode                     int32              `json:"status_code"`
+	LatencyMs                      int32              `json:"latency_ms"`
+	PromptTokens                   int32              `json:"prompt_tokens"`
+	CompletionTokens               int32              `json:"completion_tokens"`
+	TotalTokens                    int32              `json:"total_tokens"`
+	CachedTokens                   int32              `json:"cached_tokens"`
+	InputPriceMicroyuanPerMillion  int64              `json:"input_price_microyuan_per_million"`
+	OutputPriceMicroyuanPerMillion int64              `json:"output_price_microyuan_per_million"`
+	CachedPriceMicroyuanPerMillion int64              `json:"cached_price_microyuan_per_million"`
+	InputCostMicroyuan             int64              `json:"input_cost_microyuan"`
+	OutputCostMicroyuan            int64              `json:"output_cost_microyuan"`
+	CachedCostMicroyuan            int64              `json:"cached_cost_microyuan"`
+	TotalCostMicroyuan             int64              `json:"total_cost_microyuan"`
+	ErrorCode                      string             `json:"error_code"`
+	ErrorMessage                   string             `json:"error_message"`
+	RequestStartedAt               pgtype.Timestamptz `json:"request_started_at"`
+	RequestCompletedAt             pgtype.Timestamptz `json:"request_completed_at"`
+	CreatedAt                      pgtype.Timestamptz `json:"created_at"`
 }
 
 type LlmUsageAggHourly struct {
@@ -167,6 +175,11 @@ type LlmUsageAggHourly struct {
 	PromptTokens         int32              `json:"prompt_tokens"`
 	CompletionTokens     int32              `json:"completion_tokens"`
 	TotalTokens          int32              `json:"total_tokens"`
+	CachedTokens         int32              `json:"cached_tokens"`
+	InputCostMicroyuan   int64              `json:"input_cost_microyuan"`
+	OutputCostMicroyuan  int64              `json:"output_cost_microyuan"`
+	CachedCostMicroyuan  int64              `json:"cached_cost_microyuan"`
+	TotalCostMicroyuan   int64              `json:"total_cost_microyuan"`
 }
 
 type OperationalAlert struct {
@@ -278,17 +291,22 @@ type TenantQuotaUsagePeriod struct {
 }
 
 type TenantUsageLedger struct {
-	BucketStart    pgtype.Timestamptz `json:"bucket_start"`
-	TenantID       string             `json:"tenant_id"`
-	InputTokens    int32              `json:"input_tokens"`
-	OutputTokens   int32              `json:"output_tokens"`
-	TotalTokens    int32              `json:"total_tokens"`
-	RequestCount   int32              `json:"request_count"`
-	SuccessCount   int32              `json:"success_count"`
-	FailureCount   int32              `json:"failure_count"`
-	EstimatedCount int32              `json:"estimated_count"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+	BucketStart         pgtype.Timestamptz `json:"bucket_start"`
+	TenantID            string             `json:"tenant_id"`
+	InputTokens         int32              `json:"input_tokens"`
+	OutputTokens        int32              `json:"output_tokens"`
+	TotalTokens         int32              `json:"total_tokens"`
+	CachedTokens        int32              `json:"cached_tokens"`
+	InputCostMicroyuan  int64              `json:"input_cost_microyuan"`
+	OutputCostMicroyuan int64              `json:"output_cost_microyuan"`
+	CachedCostMicroyuan int64              `json:"cached_cost_microyuan"`
+	TotalCostMicroyuan  int64              `json:"total_cost_microyuan"`
+	RequestCount        int32              `json:"request_count"`
+	SuccessCount        int32              `json:"success_count"`
+	FailureCount        int32              `json:"failure_count"`
+	EstimatedCount      int32              `json:"estimated_count"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
 }
 
 type User struct {

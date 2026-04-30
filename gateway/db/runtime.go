@@ -575,6 +575,14 @@ func RuntimeSeedStatements() []string {
 			prompt_tokens,
 			completion_tokens,
 			total_tokens,
+			cached_tokens,
+			input_price_microyuan_per_million,
+			output_price_microyuan_per_million,
+			cached_price_microyuan_per_million,
+			input_cost_microyuan,
+			output_cost_microyuan,
+			cached_cost_microyuan,
+			total_cost_microyuan,
 			error_code,
 			error_message,
 			request_started_at,
@@ -600,6 +608,14 @@ func RuntimeSeedStatements() []string {
 				124,
 				48,
 				172,
+				24,
+				2500000,
+				5000000,
+				500000,
+				310,
+				240,
+				12,
+				562,
 				'',
 				'',
 				timestamptz '2026-04-24T10:00:00Z',
@@ -624,6 +640,14 @@ func RuntimeSeedStatements() []string {
 				16,
 				0,
 				16,
+				0,
+				1250000,
+				0,
+				0,
+				20,
+				0,
+				0,
+				20,
 				'rate_limit',
 				'demo rate limit response',
 				timestamptz '2026-04-24T10:05:00Z',
@@ -719,7 +743,12 @@ func RuntimeSeedStatements() []string {
 			request_count,
 			prompt_tokens,
 			completion_tokens,
-			total_tokens
+			total_tokens,
+			cached_tokens,
+			input_cost_microyuan,
+			output_cost_microyuan,
+			cached_cost_microyuan,
+			total_cost_microyuan
 		)
 		values
 			(
@@ -734,7 +763,12 @@ func RuntimeSeedStatements() []string {
 				1,
 				124,
 				48,
-				172
+				172,
+				24,
+				310,
+				240,
+				12,
+				562
 			),
 			(
 				timestamptz '2026-04-24T10:00:00Z',
@@ -748,9 +782,67 @@ func RuntimeSeedStatements() []string {
 				1,
 				16,
 				0,
-				16
+				16,
+				0,
+				20,
+				0,
+				0,
+				20
 			)
 		on conflict do nothing;
+		`,
+		`
+		insert into tenant_usage_ledger (
+			bucket_start,
+			tenant_id,
+			input_tokens,
+			output_tokens,
+			total_tokens,
+			cached_tokens,
+			input_cost_microyuan,
+			output_cost_microyuan,
+			cached_cost_microyuan,
+			total_cost_microyuan,
+			request_count,
+			success_count,
+			failure_count,
+			estimated_count,
+			created_at,
+			updated_at
+		)
+		values (
+			timestamptz '2026-04-24T10:00:00Z',
+			'tenant_demo',
+			140,
+			48,
+			188,
+			24,
+			330,
+			240,
+			12,
+			582,
+			2,
+			1,
+			1,
+			1,
+			timestamptz '2026-04-24T10:06:00Z',
+			timestamptz '2026-04-24T10:06:00Z'
+		)
+		on conflict (bucket_start, tenant_id) do update set
+			input_tokens = excluded.input_tokens,
+			output_tokens = excluded.output_tokens,
+			total_tokens = excluded.total_tokens,
+			cached_tokens = excluded.cached_tokens,
+			input_cost_microyuan = excluded.input_cost_microyuan,
+			output_cost_microyuan = excluded.output_cost_microyuan,
+			cached_cost_microyuan = excluded.cached_cost_microyuan,
+			total_cost_microyuan = excluded.total_cost_microyuan,
+			request_count = excluded.request_count,
+			success_count = excluded.success_count,
+			failure_count = excluded.failure_count,
+			estimated_count = excluded.estimated_count,
+			created_at = excluded.created_at,
+			updated_at = excluded.updated_at;
 		`,
 	}
 	statements = append(statements, governanceSeedStatements(governanceSeedConfig{

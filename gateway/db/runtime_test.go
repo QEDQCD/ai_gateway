@@ -482,6 +482,137 @@ func TestRuntimeMigrationsCreateUsageObservabilityTablesWithDemoData(t *testing.
 	}
 }
 
+func TestApplyMigrationsAddsTokenPricingColumns(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	conn := openMigratedTestPostgres(t, ctx)
+
+	assertTableHasColumns(t, ctx, conn, "llm_request_logs", []string{
+		"cached_tokens",
+		"input_price_microyuan_per_million",
+		"output_price_microyuan_per_million",
+		"cached_price_microyuan_per_million",
+		"input_cost_microyuan",
+		"output_cost_microyuan",
+		"cached_cost_microyuan",
+		"total_cost_microyuan",
+	})
+	assertTableHasColumns(t, ctx, conn, "llm_usage_agg_hourly", []string{
+		"cached_tokens",
+		"input_cost_microyuan",
+		"output_cost_microyuan",
+		"cached_cost_microyuan",
+		"total_cost_microyuan",
+	})
+	assertTableHasColumns(t, ctx, conn, "tenant_usage_ledger", []string{
+		"cached_tokens",
+		"input_cost_microyuan",
+		"output_cost_microyuan",
+		"cached_cost_microyuan",
+		"total_cost_microyuan",
+	})
+}
+
+func TestSeedDemoDataIncludesTokenPricingFields(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	conn := openSeededRuntimeDB(t, ctx)
+
+	var (
+		logCachedTokens int32
+		logInputPrice   int64
+		logOutputPrice  int64
+		logCachedPrice  int64
+		logInputCost    int64
+		logOutputCost   int64
+		logCachedCost   int64
+		logTotalCost    int64
+	)
+	if err := conn.QueryRow(ctx, `
+		select
+			cached_tokens,
+			input_price_microyuan_per_million,
+			output_price_microyuan_per_million,
+			cached_price_microyuan_per_million,
+			input_cost_microyuan,
+			output_cost_microyuan,
+			cached_cost_microyuan,
+			total_cost_microyuan
+		from llm_request_logs
+		where id = 'llmreq_demo_001'
+	`).Scan(
+		&logCachedTokens,
+		&logInputPrice,
+		&logOutputPrice,
+		&logCachedPrice,
+		&logInputCost,
+		&logOutputCost,
+		&logCachedCost,
+		&logTotalCost,
+	); err != nil {
+		t.Fatalf("QueryRow llm_request_logs pricing fields failed: %v", err)
+	}
+	if logCachedTokens != 24 || logInputPrice != 2500000 || logOutputPrice != 5000000 || logCachedPrice != 500000 || logInputCost != 310 || logOutputCost != 240 || logCachedCost != 12 || logTotalCost != 562 {
+		t.Fatalf("unexpected llm_request_logs pricing fields: cached_tokens=%d input_price=%d output_price=%d cached_price=%d input_cost=%d output_cost=%d cached_cost=%d total_cost=%d", logCachedTokens, logInputPrice, logOutputPrice, logCachedPrice, logInputCost, logOutputCost, logCachedCost, logTotalCost)
+	}
+
+	var (
+		aggCachedTokens int32
+		aggInputCost    int64
+		aggOutputCost   int64
+		aggCachedCost   int64
+		aggTotalCost    int64
+	)
+	if err := conn.QueryRow(ctx, `
+		select
+			cached_tokens,
+			input_cost_microyuan,
+			output_cost_microyuan,
+			cached_cost_microyuan,
+			total_cost_microyuan
+		from llm_usage_agg_hourly
+		where tenant_id = 'tenant_demo'
+		  and request_path = '/v1/chat/completions'
+		  and usage_source = 'upstream'
+		  and usage_status = 'success'
+	`).Scan(&aggCachedTokens, &aggInputCost, &aggOutputCost, &aggCachedCost, &aggTotalCost); err != nil {
+		t.Fatalf("QueryRow llm_usage_agg_hourly pricing fields failed: %v", err)
+	}
+	if aggCachedTokens != 24 || aggInputCost != 310 || aggOutputCost != 240 || aggCachedCost != 12 || aggTotalCost != 562 {
+		t.Fatalf("unexpected llm_usage_agg_hourly pricing fields: cached_tokens=%d input_cost=%d output_cost=%d cached_cost=%d total_cost=%d", aggCachedTokens, aggInputCost, aggOutputCost, aggCachedCost, aggTotalCost)
+	}
+
+	var (
+		ledgerCachedTokens int32
+		ledgerInputCost    int64
+		ledgerOutputCost   int64
+		ledgerCachedCost   int64
+		ledgerTotalCost    int64
+	)
+	if err := conn.QueryRow(ctx, `
+		select
+			cached_tokens,
+			input_cost_microyuan,
+			output_cost_microyuan,
+			cached_cost_microyuan,
+			total_cost_microyuan
+		from tenant_usage_ledger
+		where tenant_id = 'tenant_demo'
+		  and bucket_start = timestamptz '2026-04-24T10:00:00Z'
+	`).Scan(&ledgerCachedTokens, &ledgerInputCost, &ledgerOutputCost, &ledgerCachedCost, &ledgerTotalCost); err != nil {
+		t.Fatalf("QueryRow tenant_usage_ledger pricing fields failed: %v", err)
+	}
+	if ledgerCachedTokens != 24 || ledgerInputCost != 330 || ledgerOutputCost != 240 || ledgerCachedCost != 12 || ledgerTotalCost != 582 {
+		t.Fatalf("unexpected tenant_usage_ledger pricing fields: cached_tokens=%d input_cost=%d output_cost=%d cached_cost=%d total_cost=%d", ledgerCachedTokens, ledgerInputCost, ledgerOutputCost, ledgerCachedCost, ledgerTotalCost)
+	}
+}
+
 func TestRuntimeMigrationsValidateUsageStatusAndSource(t *testing.T) {
 	t.Parallel()
 
@@ -1028,6 +1159,7 @@ func TestRuntimeSeedStatementsAreIdempotent(t *testing.T) {
 	assertTableCount(t, ctx, conn, "llm_request_logs", 2)
 	assertTableCount(t, ctx, conn, "llm_request_events", 2)
 	assertTableCount(t, ctx, conn, "llm_usage_agg_hourly", 2)
+	assertTableCount(t, ctx, conn, "tenant_usage_ledger", 1)
 }
 
 func TestRuntimeSeedStatementsKeepProviderSecretCodecSafe(t *testing.T) {
@@ -1205,6 +1337,39 @@ func assertTableCount(t *testing.T, ctx context.Context, conn *pgx.Conn, tableNa
 	}
 	if got != want {
 		t.Fatalf("expected %s count %d, got %d", tableName, want, got)
+	}
+}
+
+func assertTableHasColumns(t *testing.T, ctx context.Context, conn *pgx.Conn, tableName string, wantColumns []string) {
+	t.Helper()
+
+	rows, err := conn.Query(ctx, `
+		select column_name
+		from information_schema.columns
+		where table_schema = 'public'
+		  and table_name = $1
+	`, tableName)
+	if err != nil {
+		t.Fatalf("Query %s columns failed: %v", tableName, err)
+	}
+	defer rows.Close()
+
+	gotColumns := map[string]bool{}
+	for rows.Next() {
+		var columnName string
+		if err := rows.Scan(&columnName); err != nil {
+			t.Fatalf("Scan %s columns failed: %v", tableName, err)
+		}
+		gotColumns[columnName] = true
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows.Err %s columns failed: %v", tableName, err)
+	}
+
+	for _, wantColumn := range wantColumns {
+		if !gotColumns[wantColumn] {
+			t.Fatalf("expected table %s to include column %s", tableName, wantColumn)
+		}
 	}
 }
 
