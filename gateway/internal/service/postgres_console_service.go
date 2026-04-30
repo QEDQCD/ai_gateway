@@ -1434,7 +1434,8 @@ func (s postgresConsoleService) Audit(ctx context.Context) (AuditPageData, error
 			coalesce(pc.display_name, l.provider_credential_id),
 			l.latency_ms,
 			l.first_token_latency_ms,
-			l.usage_source
+			l.usage_source,
+			l.total_cost_microyuan
 		from llm_request_logs l
 		left join provider_credentials pc on pc.id = l.provider_credential_id
 		order by l.request_started_at desc, l.id desc
@@ -1452,6 +1453,7 @@ func (s postgresConsoleService) Audit(ctx context.Context) (AuditPageData, error
 		var latencyMS int64
 		var firstTokenLatencyMS int64
 		var usageSource string
+		var totalCostMicroyuan int64
 		if err := rows.Scan(
 			&item.Time,
 			&item.Tenant,
@@ -1463,6 +1465,7 @@ func (s postgresConsoleService) Audit(ctx context.Context) (AuditPageData, error
 			&latencyMS,
 			&firstTokenLatencyMS,
 			&usageSource,
+			&totalCostMicroyuan,
 		); err != nil {
 			return AuditPageData{}, err
 		}
@@ -1472,6 +1475,7 @@ func (s postgresConsoleService) Audit(ctx context.Context) (AuditPageData, error
 		item.Latency = fmt.Sprintf("%d ms", latencyMS)
 		item.FirstTokenLatencyMS = firstTokenLatencyMS
 		item.UsageSource = translateUsageSource(usageSource)
+		item.TotalCost = formatMicroyuanAmount(totalCostMicroyuan)
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
@@ -1572,6 +1576,7 @@ func (s postgresConsoleService) auditFromFallbackLogs(ctx context.Context) (Audi
 		item.Status = fmt.Sprintf("%d", statusCode)
 		item.Latency = fmt.Sprintf("%d ms", latencyMS)
 		item.UsageSource = "审计回退"
+		item.TotalCost = "--"
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
@@ -1756,21 +1761,57 @@ func (s postgresConsoleService) usageOverviewFromLogs(ctx context.Context, query
 	logWhere, logArgs := buildUsageLogWhere(query, "l.request_started_at")
 	var totalRequests int64
 	var totalTokens int64
+	var inputTokens int64
+	var outputTokens int64
+	var cachedTokens int64
 	var successRequests int64
 	var estimatedRequests int64
 	var averageLatency float64
+	var inputCostMicroyuan int64
+	var outputCostMicroyuan int64
+	var cachedCostMicroyuan int64
+	var totalCostMicroyuan int64
+	var pricingModels []string
 	if err := s.db.QueryRow(ctx, `
 		select
 			count(*),
 			coalesce(sum(l.total_tokens), 0),
+			coalesce(sum(l.prompt_tokens), 0),
+			coalesce(sum(l.completion_tokens), 0),
+			coalesce(sum(l.cached_tokens), 0),
 			coalesce(sum(case when l.usage_status = 'success' then 1 else 0 end), 0),
 			coalesce(sum(case when l.usage_source = 'estimated' then 1 else 0 end), 0),
-			coalesce(avg(l.latency_ms), 0)
+			coalesce(avg(l.latency_ms), 0),
+			coalesce(sum(l.input_cost_microyuan), 0),
+			coalesce(sum(l.output_cost_microyuan), 0),
+			coalesce(sum(l.cached_cost_microyuan), 0),
+			coalesce(sum(l.total_cost_microyuan), 0),
+			coalesce(
+				array_agg(
+					distinct coalesce(nullif(l.upstream_model, ''), l.request_model)
+					order by coalesce(nullif(l.upstream_model, ''), l.request_model)
+				) filter (where coalesce(nullif(l.upstream_model, ''), l.request_model) <> ''),
+				'{}'
+			)
 		from llm_request_logs l
 		left join route_catalog r on r.id = l.route_id
 		left join provider_credentials pc on pc.id = l.provider_credential_id
 		where `+logWhere+`;
-	`, logArgs...).Scan(&totalRequests, &totalTokens, &successRequests, &estimatedRequests, &averageLatency); err != nil {
+	`, logArgs...).Scan(
+		&totalRequests,
+		&totalTokens,
+		&inputTokens,
+		&outputTokens,
+		&cachedTokens,
+		&successRequests,
+		&estimatedRequests,
+		&averageLatency,
+		&inputCostMicroyuan,
+		&outputCostMicroyuan,
+		&cachedCostMicroyuan,
+		&totalCostMicroyuan,
+		&pricingModels,
+	); err != nil {
 		return UsageOverviewData{}, err
 	}
 
@@ -1785,8 +1826,16 @@ func (s postgresConsoleService) usageOverviewFromLogs(ctx context.Context, query
 		TotalRequests:  totalRequests,
 		SuccessRate:    formatPercentage(successRate),
 		TotalTokens:    formatLargeNumber(int(totalTokens)),
+		InputTokens:    formatLargeNumber(int(inputTokens)),
+		OutputTokens:   formatLargeNumber(int(outputTokens)),
+		CachedTokens:   formatLargeNumber(int(cachedTokens)),
 		AverageLatency: fmt.Sprintf("%d ms", int(math.Round(averageLatency))),
 		EstimatedShare: formatPercentage(estimatedShare),
+		InputCost:      formatMicroyuanAmount(inputCostMicroyuan),
+		OutputCost:     formatMicroyuanAmount(outputCostMicroyuan),
+		CachedCost:     formatMicroyuanAmount(cachedCostMicroyuan),
+		TotalCost:      formatMicroyuanAmount(totalCostMicroyuan),
+		PricingModels:  pricingModels,
 	}, nil
 }
 
@@ -1797,7 +1846,8 @@ func (s postgresConsoleService) usageTrendsFromLogs(ctx context.Context, query U
 			date_trunc('hour', l.request_started_at) as bucket_start,
 			count(*) as request_count,
 			coalesce(sum(l.total_tokens), 0) as total_tokens,
-			coalesce(sum(case when l.usage_status = 'success' then 1 else 0 end), 0) as success_count
+			coalesce(sum(case when l.usage_status = 'success' then 1 else 0 end), 0) as success_count,
+			coalesce(sum(l.total_cost_microyuan), 0) as total_cost_microyuan
 		from llm_request_logs l
 		left join route_catalog r on r.id = l.route_id
 		left join provider_credentials pc on pc.id = l.provider_credential_id
@@ -1814,13 +1864,15 @@ func (s postgresConsoleService) usageTrendsFromLogs(ctx context.Context, query U
 		Requests: make([]UsageTrendPoint, 0),
 		Tokens:   make([]UsageTrendPoint, 0),
 		Success:  make([]UsageTrendPoint, 0),
+		Costs:    make([]UsageTrendPoint, 0),
 	}
 	for rows.Next() {
 		var bucketStart time.Time
 		var requestCount int64
 		var totalTokens int64
 		var successCount int64
-		if err := rows.Scan(&bucketStart, &requestCount, &totalTokens, &successCount); err != nil {
+		var totalCostMicroyuan int64
+		if err := rows.Scan(&bucketStart, &requestCount, &totalTokens, &successCount, &totalCostMicroyuan); err != nil {
 			return UsageTrendData{}, err
 		}
 
@@ -1832,6 +1884,7 @@ func (s postgresConsoleService) usageTrendsFromLogs(ctx context.Context, query U
 		data.Requests = append(data.Requests, UsageTrendPoint{Label: label, Value: formatLargeNumber(int(requestCount))})
 		data.Tokens = append(data.Tokens, UsageTrendPoint{Label: label, Value: formatLargeNumber(int(totalTokens))})
 		data.Success = append(data.Success, UsageTrendPoint{Label: label, Value: formatPercentage(successRate)})
+		data.Costs = append(data.Costs, UsageTrendPoint{Label: label, Value: formatMicroyuanAmount(totalCostMicroyuan)})
 	}
 	if err := rows.Err(); err != nil {
 		return UsageTrendData{}, err
@@ -1991,10 +2044,20 @@ func (s postgresConsoleService) UsageRequests(ctx context.Context, query UsageQu
 			l.request_path,
 			l.request_model,
 			l.usage_status,
+			l.prompt_tokens,
+			l.completion_tokens,
 			l.total_tokens,
+			l.cached_tokens,
 			l.latency_ms,
 			l.first_token_latency_ms,
-			l.usage_source
+			l.usage_source,
+			l.input_cost_microyuan,
+			l.output_cost_microyuan,
+			l.cached_cost_microyuan,
+			l.total_cost_microyuan,
+			l.input_price_microyuan_per_million,
+			l.output_price_microyuan_per_million,
+			l.cached_price_microyuan_per_million
 		from llm_request_logs l
 		left join route_catalog r on r.id = l.route_id
 		left join provider_credentials pc on pc.id = l.provider_credential_id
@@ -2011,19 +2074,59 @@ func (s postgresConsoleService) UsageRequests(ctx context.Context, query UsageQu
 	for rows.Next() {
 		var item UsageRequestItem
 		var status string
+		var inputTokens int
+		var outputTokens int
 		var totalTokens int
+		var cachedTokens int
 		var latencyMS int64
 		var firstTokenLatencyMS int64
 		var usageSource string
-		if err := rows.Scan(&item.RequestID, &item.Tenant, &item.Endpoint, &item.Model, &status, &totalTokens, &latencyMS, &firstTokenLatencyMS, &usageSource); err != nil {
+		var inputCostMicroyuan int64
+		var outputCostMicroyuan int64
+		var cachedCostMicroyuan int64
+		var totalCostMicroyuan int64
+		var inputPriceMicroyuanPerMillion int64
+		var outputPriceMicroyuanPerMillion int64
+		var cachedPriceMicroyuanPerMillion int64
+		if err := rows.Scan(
+			&item.RequestID,
+			&item.Tenant,
+			&item.Endpoint,
+			&item.Model,
+			&status,
+			&inputTokens,
+			&outputTokens,
+			&totalTokens,
+			&cachedTokens,
+			&latencyMS,
+			&firstTokenLatencyMS,
+			&usageSource,
+			&inputCostMicroyuan,
+			&outputCostMicroyuan,
+			&cachedCostMicroyuan,
+			&totalCostMicroyuan,
+			&inputPriceMicroyuanPerMillion,
+			&outputPriceMicroyuanPerMillion,
+			&cachedPriceMicroyuanPerMillion,
+		); err != nil {
 			return UsageRequestsPageData{}, err
 		}
 		item.Endpoint = neutralizeConsoleEndpoint(item.Endpoint)
 		item.Status = translateUsageStatus(status)
 		item.TotalTokens = formatLargeNumber(totalTokens)
+		item.InputTokens = formatLargeNumber(inputTokens)
+		item.OutputTokens = formatLargeNumber(outputTokens)
+		item.CachedTokens = formatLargeNumber(cachedTokens)
 		item.Latency = fmt.Sprintf("%d ms", latencyMS)
 		item.FirstTokenLatencyMS = firstTokenLatencyMS
 		item.UsageSource = translateUsageSource(usageSource)
+		item.InputCost = formatMicroyuanAmount(inputCostMicroyuan)
+		item.OutputCost = formatMicroyuanAmount(outputCostMicroyuan)
+		item.CachedCost = formatMicroyuanAmount(cachedCostMicroyuan)
+		item.TotalCost = formatMicroyuanAmount(totalCostMicroyuan)
+		item.InputPrice = formatMicroyuanPerMillionPrice(inputPriceMicroyuanPerMillion)
+		item.OutputPrice = formatMicroyuanPerMillionPrice(outputPriceMicroyuanPerMillion)
+		item.CachedPrice = formatMicroyuanPerMillionPrice(cachedPriceMicroyuanPerMillion)
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
@@ -2194,6 +2297,14 @@ func formatLargeNumber(value int) string {
 		return fmt.Sprintf("%.1f 万", float64(value)/10000.0)
 	}
 	return fmt.Sprintf("%d", value)
+}
+
+func formatMicroyuanAmount(value int64) string {
+	return fmt.Sprintf("%.2f ￥", float64(value)/1_000_000.0)
+}
+
+func formatMicroyuanPerMillionPrice(value int64) string {
+	return fmt.Sprintf("%.2f ￥/M", float64(value)/1_000_000.0)
 }
 
 func formatPercentage(value float64) string {

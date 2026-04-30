@@ -1716,7 +1716,11 @@ func TestPostgresConsoleServiceAuditUsesUsageLogsAndEvents(t *testing.T) {
 			request_started_at = now() - interval '30 minutes',
 			request_completed_at = now() - interval '30 minutes' + interval '182 milliseconds',
 			created_at = now() - interval '30 minutes',
-			first_token_latency_ms = 41
+			first_token_latency_ms = 41,
+			input_cost_microyuan = 1200000,
+			output_cost_microyuan = 1000000,
+			cached_cost_microyuan = 300000,
+			total_cost_microyuan = 2500000
 		where id = 'llmreq_demo_001';
 
 		update llm_request_events
@@ -1748,6 +1752,9 @@ func TestPostgresConsoleServiceAuditUsesUsageLogsAndEvents(t *testing.T) {
 	}
 	if payload.Items[0].FirstTokenLatencyMS != 41 {
 		t.Fatalf("expected first_token_latency_ms 41, got %#v", payload.Items[0].FirstTokenLatencyMS)
+	}
+	if payload.Items[0].TotalCost != "2.50 ￥" {
+		t.Fatalf("expected total_cost 2.50 ￥, got %q", payload.Items[0].TotalCost)
 	}
 }
 
@@ -1810,6 +1817,34 @@ func TestPostgresConsoleServiceUsageOverview(t *testing.T) {
 
 	console, conn := newUsageConsoleService(t, ctx)
 
+	if _, err := conn.Exec(ctx, `
+		update llm_request_logs
+		set
+			input_cost_microyuan = case
+				when id = 'llmreq_demo_001' then 3200000
+				when id = 'llmreq_demo_002' then 600000
+				else input_cost_microyuan
+			end,
+			output_cost_microyuan = case
+				when id = 'llmreq_demo_001' then 1400000
+				when id = 'llmreq_demo_002' then 0
+				else output_cost_microyuan
+			end,
+			cached_cost_microyuan = case
+				when id = 'llmreq_demo_001' then 300000
+				when id = 'llmreq_demo_002' then 100000
+				else cached_cost_microyuan
+			end,
+			total_cost_microyuan = case
+				when id = 'llmreq_demo_001' then 4900000
+				when id = 'llmreq_demo_002' then 700000
+				else total_cost_microyuan
+			end
+		where id in ('llmreq_demo_001', 'llmreq_demo_002');
+	`); err != nil {
+		t.Fatalf("seed usage overview pricing failed: %v", err)
+	}
+
 	payload, err := console.UsageOverview(ctx, service.UsageQuery{
 		From: mustParseUsageTime(t, "2026-04-24T09:00:00Z"),
 		To:   mustParseUsageTime(t, "2026-04-24T11:00:00Z"),
@@ -1827,11 +1862,35 @@ func TestPostgresConsoleServiceUsageOverview(t *testing.T) {
 	if payload.TotalTokens != "188" {
 		t.Fatalf("expected total_tokens 188, got %q", payload.TotalTokens)
 	}
+	if payload.InputTokens != "140" {
+		t.Fatalf("expected input_tokens 140, got %q", payload.InputTokens)
+	}
+	if payload.OutputTokens != "48" {
+		t.Fatalf("expected output_tokens 48, got %q", payload.OutputTokens)
+	}
+	if payload.CachedTokens != "24" {
+		t.Fatalf("expected cached_tokens 24, got %q", payload.CachedTokens)
+	}
 	if payload.AverageLatency != "139 ms" {
 		t.Fatalf("expected average_latency 139 ms, got %q", payload.AverageLatency)
 	}
+	if payload.InputCost != "3.80 ￥" {
+		t.Fatalf("expected input_cost 3.80 ￥, got %q", payload.InputCost)
+	}
+	if payload.OutputCost != "1.40 ￥" {
+		t.Fatalf("expected output_cost 1.40 ￥, got %q", payload.OutputCost)
+	}
+	if payload.CachedCost != "0.40 ￥" {
+		t.Fatalf("expected cached_cost 0.40 ￥, got %q", payload.CachedCost)
+	}
+	if payload.TotalCost != "5.60 ￥" {
+		t.Fatalf("expected total_cost 5.60 ￥, got %q", payload.TotalCost)
+	}
 	if payload.EstimatedShare != "50.00%" {
 		t.Fatalf("expected estimated_share 50.00%%, got %q", payload.EstimatedShare)
+	}
+	if !containsString(payload.PricingModels, "gpt-4o-mini") || !containsString(payload.PricingModels, "text-embedding-3-small") {
+		t.Fatalf("expected pricing_models to include demo models, got %#v", payload.PricingModels)
 	}
 
 	var logCount int
@@ -2035,6 +2094,14 @@ func TestPostgresConsoleServiceUsageTrends(t *testing.T) {
 	console, conn := newUsageConsoleService(t, ctx)
 
 	if _, err := conn.Exec(ctx, `
+		update llm_request_logs
+		set total_cost_microyuan = case
+			when id = 'llmreq_demo_001' then 4900000
+			when id = 'llmreq_demo_002' then 700000
+			else total_cost_microyuan
+		end
+		where id in ('llmreq_demo_001', 'llmreq_demo_002');
+
 		insert into llm_request_logs (
 			id,
 			tenant_id,
@@ -2052,6 +2119,14 @@ func TestPostgresConsoleServiceUsageTrends(t *testing.T) {
 			prompt_tokens,
 			completion_tokens,
 			total_tokens,
+			cached_tokens,
+			input_price_microyuan_per_million,
+			output_price_microyuan_per_million,
+			cached_price_microyuan_per_million,
+			input_cost_microyuan,
+			output_cost_microyuan,
+			cached_cost_microyuan,
+			total_cost_microyuan,
 			error_code,
 			error_message,
 			request_started_at,
@@ -2074,6 +2149,14 @@ func TestPostgresConsoleServiceUsageTrends(t *testing.T) {
 			90,
 			30,
 			120,
+			20,
+			2500000,
+			5000000,
+			500000,
+			600000,
+			500000,
+			100000,
+			1200000,
 			'',
 			'',
 			timestamptz '2026-04-24T11:00:00Z',
@@ -2104,6 +2187,9 @@ func TestPostgresConsoleServiceUsageTrends(t *testing.T) {
 	if payload.Success[0].Value != "50.00%" {
 		t.Fatalf("expected first success trend value 50.00%%, got %q", payload.Success[0].Value)
 	}
+	if payload.Costs[0].Value != "5.60 ￥" {
+		t.Fatalf("expected first cost trend value 5.60 ￥, got %q", payload.Costs[0].Value)
+	}
 	if payload.Requests[1].Value != "1" {
 		t.Fatalf("expected second request trend value 1, got %q", payload.Requests[1].Value)
 	}
@@ -2112,6 +2198,9 @@ func TestPostgresConsoleServiceUsageTrends(t *testing.T) {
 	}
 	if payload.Success[1].Value != "100.00%" {
 		t.Fatalf("expected second success trend value 100.00%%, got %q", payload.Success[1].Value)
+	}
+	if payload.Costs[1].Value != "1.20 ￥" {
+		t.Fatalf("expected second cost trend value 1.20 ￥, got %q", payload.Costs[1].Value)
 	}
 }
 
@@ -2885,7 +2974,16 @@ func TestPostgresConsoleServiceUsageRequests(t *testing.T) {
 
 	if _, err := conn.Exec(ctx, `
 		update llm_request_logs
-		set first_token_latency_ms = 40
+		set
+			first_token_latency_ms = 40,
+			cached_tokens = 5,
+			input_price_microyuan_per_million = 2500000,
+			output_price_microyuan_per_million = 0,
+			cached_price_microyuan_per_million = 750000,
+			input_cost_microyuan = 1750000,
+			output_cost_microyuan = 0,
+			cached_cost_microyuan = 250000,
+			total_cost_microyuan = 2000000
 		where id = 'llmreq_demo_002';
 	`); err != nil {
 		t.Fatalf("seed usage request first_token_latency_ms failed: %v", err)
@@ -2922,8 +3020,38 @@ func TestPostgresConsoleServiceUsageRequests(t *testing.T) {
 	if item.TotalTokens != "16" {
 		t.Fatalf("expected total_tokens 16, got %q", item.TotalTokens)
 	}
+	if item.InputTokens != "16" {
+		t.Fatalf("expected input_tokens 16, got %q", item.InputTokens)
+	}
+	if item.OutputTokens != "0" {
+		t.Fatalf("expected output_tokens 0, got %q", item.OutputTokens)
+	}
+	if item.CachedTokens != "5" {
+		t.Fatalf("expected cached_tokens 5, got %q", item.CachedTokens)
+	}
 	if item.Latency != "95 ms" {
 		t.Fatalf("expected latency 95 ms, got %q", item.Latency)
+	}
+	if item.InputCost != "1.75 ￥" {
+		t.Fatalf("expected input_cost 1.75 ￥, got %q", item.InputCost)
+	}
+	if item.OutputCost != "0.00 ￥" {
+		t.Fatalf("expected output_cost 0.00 ￥, got %q", item.OutputCost)
+	}
+	if item.CachedCost != "0.25 ￥" {
+		t.Fatalf("expected cached_cost 0.25 ￥, got %q", item.CachedCost)
+	}
+	if item.TotalCost != "2.00 ￥" {
+		t.Fatalf("expected total_cost 2.00 ￥, got %q", item.TotalCost)
+	}
+	if item.InputPrice != "2.50 ￥/M" {
+		t.Fatalf("expected input_price 2.50 ￥/M, got %q", item.InputPrice)
+	}
+	if item.OutputPrice != "0.00 ￥/M" {
+		t.Fatalf("expected output_price 0.00 ￥/M, got %q", item.OutputPrice)
+	}
+	if item.CachedPrice != "0.75 ￥/M" {
+		t.Fatalf("expected cached_price 0.75 ￥/M, got %q", item.CachedPrice)
 	}
 	if item.UsageSource != "估算" {
 		t.Fatalf("expected usage_source 估算, got %q", item.UsageSource)

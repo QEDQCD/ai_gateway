@@ -217,6 +217,7 @@ type AuditItem struct {
 	Latency             string `json:"latency"`
 	FirstTokenLatencyMS int64  `json:"first_token_latency_ms"`
 	UsageSource         string `json:"usage_source"`
+	TotalCost           string `json:"total_cost"`
 }
 
 type AuditPageData struct {
@@ -244,11 +245,19 @@ type UsageQuery struct {
 }
 
 type UsageOverviewData struct {
-	TotalRequests  int64  `json:"total_requests"`
-	SuccessRate    string `json:"success_rate"`
-	TotalTokens    string `json:"total_tokens"`
-	AverageLatency string `json:"average_latency"`
-	EstimatedShare string `json:"estimated_share"`
+	TotalRequests  int64    `json:"total_requests"`
+	SuccessRate    string   `json:"success_rate"`
+	TotalTokens    string   `json:"total_tokens"`
+	InputTokens    string   `json:"input_tokens"`
+	OutputTokens   string   `json:"output_tokens"`
+	CachedTokens   string   `json:"cached_tokens"`
+	AverageLatency string   `json:"average_latency"`
+	EstimatedShare string   `json:"estimated_share"`
+	InputCost      string   `json:"input_cost"`
+	OutputCost     string   `json:"output_cost"`
+	CachedCost     string   `json:"cached_cost"`
+	TotalCost      string   `json:"total_cost"`
+	PricingModels  []string `json:"pricing_models"`
 }
 
 type UsageTrendPoint struct {
@@ -260,6 +269,7 @@ type UsageTrendData struct {
 	Requests []UsageTrendPoint `json:"requests"`
 	Tokens   []UsageTrendPoint `json:"tokens"`
 	Success  []UsageTrendPoint `json:"success"`
+	Costs    []UsageTrendPoint `json:"costs"`
 }
 
 type UsageLatencyCell struct {
@@ -300,9 +310,19 @@ type UsageRequestItem struct {
 	Model               string `json:"model"`
 	Status              string `json:"status"`
 	TotalTokens         string `json:"total_tokens"`
+	InputTokens         string `json:"input_tokens"`
+	OutputTokens        string `json:"output_tokens"`
+	CachedTokens        string `json:"cached_tokens"`
 	Latency             string `json:"latency"`
 	FirstTokenLatencyMS int64  `json:"first_token_latency_ms"`
 	UsageSource         string `json:"usage_source"`
+	InputCost           string `json:"input_cost"`
+	OutputCost          string `json:"output_cost"`
+	CachedCost          string `json:"cached_cost"`
+	TotalCost           string `json:"total_cost"`
+	InputPrice          string `json:"input_price"`
+	OutputPrice         string `json:"output_price"`
+	CachedPrice         string `json:"cached_price"`
 }
 
 type UsageRequestsPageData struct {
