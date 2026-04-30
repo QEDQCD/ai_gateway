@@ -217,6 +217,8 @@ func TestNewServerAppDatabaseModeWritesUsageObservability(t *testing.T) {
 		SeedProvider:            "openai",
 		SeedProviderDisplayName: "OpenAI Primary",
 		ProviderSecretKey:       "0123456789abcdef0123456789abcdef",
+		ChatFastModel:           "gpt-4o-mini",
+		ChatReasoningModel:      "gpt-4o-mini",
 	})
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hello"}]}`))
