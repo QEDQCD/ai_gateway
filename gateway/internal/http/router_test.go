@@ -1352,7 +1352,7 @@ func TestAdminUsageRequestsRouteReturnsConsoleData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("io.ReadAll failed: %v", err)
 	}
-	expected := `{"items":[{"request_id":"llmreq_demo_002","tenant":"tenant_demo","endpoint":"/v1/embeddings","model":"text-embedding-3-small","status":"限流","total_tokens":"16","input_tokens":"16","output_tokens":"0","cached_tokens":"5","latency":"95 ms","first_token_latency_ms":0,"usage_source":"估算","input_cost":"1.75 ￥","output_cost":"0.00 ￥","cached_cost":"0.25 ￥","total_cost":"2.00 ￥","input_price":"2.50 ￥/M","output_price":"0.00 ￥/M","cached_price":"0.75 ￥/M"}],"total":1,"limit":20,"offset":0}`
+	expected := `{"items":[{"request_id":"llmreq_demo_002","tenant":"tenant_demo","endpoint":"/v1/embeddings","model":"text-embedding-3-small","resolved_model":"","task_class":"","routing_reason":"","target_model_tier":"","status":"限流","total_tokens":"16","input_tokens":"16","output_tokens":"0","cached_tokens":"5","latency":"95 ms","first_token_latency_ms":0,"usage_source":"估算","input_cost":"1.75 ￥","output_cost":"0.00 ￥","cached_cost":"0.25 ￥","total_cost":"2.00 ￥","input_price":"2.50 ￥/M","output_price":"0.00 ￥/M","cached_price":"0.75 ￥/M"}],"total":1,"limit":20,"offset":0}`
 	if string(body) != expected {
 		t.Fatalf("expected body %q, got %q", expected, string(body))
 	}
@@ -1732,8 +1732,8 @@ func TestChatCompletionRouteUsesSmartRoutingDecisionBeforeAuthResolve(t *testing
 	if authService.requestedModel != "gateway-chat-reasoning" {
 		t.Fatalf("expected requested model %q, got %q", "gateway-chat-reasoning", authService.requestedModel)
 	}
-	if chatProxy.request.Model != "qwen-flash" {
-		t.Fatalf("expected proxy request model %q, got %q", "qwen-flash", chatProxy.request.Model)
+	if chatProxy.request.Model != "gateway-chat-reasoning" {
+		t.Fatalf("expected proxy request model %q, got %q", "gateway-chat-reasoning", chatProxy.request.Model)
 	}
 	if chatProxy.requestContext.RequestedModel != "qwen-flash" {
 		t.Fatalf("expected request context requested model %q, got %q", "qwen-flash", chatProxy.requestContext.RequestedModel)

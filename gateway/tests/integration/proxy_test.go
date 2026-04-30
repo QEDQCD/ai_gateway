@@ -141,6 +141,48 @@ func TestChatCompletionProxy(t *testing.T) {
 	}
 }
 
+func TestChatCompletionProxyRoutesComplexCodingPromptToReasoningModel(t *testing.T) {
+	t.Parallel()
+
+	var upstreamModel string
+	providerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+
+		var payload struct {
+			Model string `json:"model"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("json.NewDecoder failed: %v", err)
+		}
+		upstreamModel = payload.Model
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"model":"qwen-plus","choices":[{"message":{"content":"stub-answer"}}],"usage":{"prompt_tokens":11,"completion_tokens":7,"total_tokens":18}}`)
+	}))
+	t.Cleanup(providerServer.Close)
+
+	app := newGatewayAppWithSmartRouting(t, providerServer.URL+"/v1", providerServer.URL)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/chat/completions",
+		bytes.NewBufferString("{\"model\":\"gateway-public\",\"messages\":[{\"role\":\"user\",\"content\":\"请帮我 debug 这段 panic 代码 ```go\\npanic(\\\"x\\\")\\n```\"}]}"),
+	)
+	req.Header.Set("Authorization", "Bearer platform-live-key")
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if upstreamModel != "qwen-plus" {
+		t.Fatalf("expected upstream model %q, got %q", "qwen-plus", upstreamModel)
+	}
+}
+
 func TestChatCompletionProxyPublishesUsageOnInvalidBody(t *testing.T) {
 	t.Parallel()
 
@@ -407,7 +449,60 @@ func newGatewayApp(t *testing.T, providerBaseURL string, ragBaseURL string) (*fi
 	chatProxy := service.NewChatProxyService(provider.NewOpenAIClient(http.DefaultClient), usagePublisher)
 	embeddingProxy := service.NewEmbeddingProxyService(provider.NewOpenAIClient(http.DefaultClient), usagePublisher)
 	ragProxy := service.NewRAGProxyService(ragBaseURL, "", "", http.DefaultClient)
-	return apphttp.NewRouterWithServices(authService, chatProxy, embeddingProxy, ragProxy), usagePublisher
+	return apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+		AuthService:          authService,
+		SmartRouter:          newDefaultIntegrationSmartRouter(),
+		ChatProxy:            chatProxy,
+		EmbeddingProxy:       embeddingProxy,
+		RAGProxy:             ragProxy,
+		ConsoleService:       service.NewUnavailableConsoleService(),
+		MemberConsoleService: service.NewUnavailableMemberConsoleService(),
+	}), usagePublisher
+}
+
+func newGatewayAppWithSmartRouting(t *testing.T, providerBaseURL string, ragBaseURL string) *fiber.App {
+	t.Helper()
+
+	repository := store.NewBootstrapAuthRepository(store.BootstrapAuthConfig{
+		RawPlatformAPIKey:    "platform-live-key",
+		PlatformAPIKeyID:     "pak_demo",
+		PlatformAPIKeyName:   "demo key",
+		TenantID:             "tenant_demo",
+		TenantName:           "Demo Tenant",
+		ProviderCredentialID: "provider_qwen_primary",
+		Provider:             "openai",
+		ProviderDisplayName:  "OpenAI Primary",
+		SupportedModels:      []string{"qwen-flash", "qwen-plus", "text-embedding-3-small"},
+		ProviderBaseURL:      providerBaseURL,
+		ProviderAPIKey:       "provider-secret-key",
+	})
+
+	authService := service.NewAuthService(
+		repository,
+		service.NewRedisQuotaGuard(staticQuotaClient{}),
+		service.NewRouteService(repository),
+	)
+	usagePublisher := queue.NewRecordingUsagePublisher()
+	chatProxy := service.NewChatProxyService(provider.NewOpenAIClient(http.DefaultClient), usagePublisher)
+	embeddingProxy := service.NewEmbeddingProxyService(provider.NewOpenAIClient(http.DefaultClient), usagePublisher)
+	ragProxy := service.NewRAGProxyService(ragBaseURL, "", "", http.DefaultClient)
+
+	return apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+		AuthService: authService,
+		SmartRouter: service.NewRuleBasedSmartRouter(service.SmartRoutingConfig{
+			FastModelTier:        "qwen-flash",
+			ReasoningModelTier:   "qwen-plus",
+			CodingKeywords:       []string{"debug", "报错", "panic", "写代码"},
+			LongPromptThreshold:  240,
+			EnableCodeFenceRule:  true,
+			EnableStackTraceRule: true,
+		}),
+		ChatProxy:            chatProxy,
+		EmbeddingProxy:       embeddingProxy,
+		RAGProxy:             ragProxy,
+		ConsoleService:       service.NewUnavailableConsoleService(),
+		MemberConsoleService: service.NewUnavailableMemberConsoleService(),
+	})
 }
 
 func newGatewayAppWithChatProxy(t *testing.T, chatProxy service.ChatProxyService) *fiber.App {
@@ -433,12 +528,26 @@ func newGatewayAppWithChatProxy(t *testing.T, chatProxy service.ChatProxyService
 		service.NewRouteService(repository),
 	)
 
-	return apphttp.NewRouterWithServices(
-		authService,
-		chatProxy,
-		service.NewUnavailableEmbeddingProxyService(),
-		service.NewUnavailableRAGProxyService(),
-	)
+	return apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+		AuthService:          authService,
+		SmartRouter:          newDefaultIntegrationSmartRouter(),
+		ChatProxy:            chatProxy,
+		EmbeddingProxy:       service.NewUnavailableEmbeddingProxyService(),
+		RAGProxy:             service.NewUnavailableRAGProxyService(),
+		ConsoleService:       service.NewUnavailableConsoleService(),
+		MemberConsoleService: service.NewUnavailableMemberConsoleService(),
+	})
+}
+
+func newDefaultIntegrationSmartRouter() service.SmartRouter {
+	return service.NewRuleBasedSmartRouter(service.SmartRoutingConfig{
+		FastModelTier:        "gpt-4o-mini",
+		ReasoningModelTier:   "gpt-4o-mini",
+		CodingKeywords:       []string{"debug", "报错", "panic", "写代码"},
+		LongPromptThreshold:  240,
+		EnableCodeFenceRule:  true,
+		EnableStackTraceRule: true,
+	})
 }
 
 type staticQuotaClient struct{}

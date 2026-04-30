@@ -15,7 +15,11 @@ func ChatCompletion(proxy service.ChatProxyService, router service.SmartRouter, 
 	return func(c *fiber.Ctx) error {
 		var req service.ChatRequest
 		if err := c.BodyParser(&req); err != nil {
-			proxy.RecordFailure(c.UserContext(), c.Locals("requestContext"), fiber.StatusBadRequest)
+			recordContext := c.Locals("requestContext")
+			if resolved, resolveErr := authService.Resolve(chatScopedRequestContext(c), bearerToken(c), ""); resolveErr == nil {
+				recordContext = resolved
+			}
+			proxy.RecordFailure(c.UserContext(), recordContext, fiber.StatusBadRequest)
 			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
 		}
 
@@ -30,6 +34,9 @@ func ChatCompletion(proxy service.ChatProxyService, router service.SmartRouter, 
 		resolved.TargetModelTier = decision.TargetModelTier
 		resolved.RoutingReason = strings.Join(decision.MatchedRules, ",")
 		resolved.ResolvedModel = decision.TargetModelTier
+		if strings.TrimSpace(decision.TargetModelTier) != "" {
+			req.Model = decision.TargetModelTier
+		}
 		c.Locals("requestContext", resolved)
 
 		if req.Stream {
