@@ -212,6 +212,10 @@ type AuditItem struct {
 	Endpoint            string `json:"endpoint"`
 	RequestModel        string `json:"request_model"`
 	UpstreamModel       string `json:"upstream_model"`
+	ResolvedModel       string `json:"resolved_model"`
+	TaskClass           string `json:"task_class"`
+	RoutingReason       string `json:"routing_reason"`
+	TargetModelTier     string `json:"target_model_tier"`
 	Status              string `json:"status"`
 	RouteLabel          string `json:"route_label"`
 	Latency             string `json:"latency"`
@@ -315,6 +319,10 @@ type UsageRequestItem struct {
 	Tenant              string `json:"tenant"`
 	Endpoint            string `json:"endpoint"`
 	Model               string `json:"model"`
+	ResolvedModel       string `json:"resolved_model"`
+	TaskClass           string `json:"task_class"`
+	RoutingReason       string `json:"routing_reason"`
+	TargetModelTier     string `json:"target_model_tier"`
 	Status              string `json:"status"`
 	TotalTokens         string `json:"total_tokens"`
 	InputTokens         string `json:"input_tokens"`

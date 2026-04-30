@@ -34,6 +34,10 @@ type UsageRecord struct {
 	RequestPath          string
 	RequestModel         string
 	UpstreamModel        string
+	ResolvedModel        string
+	TaskClass            string
+	RoutingReason        string
+	TargetModelTier      string
 	Status               UsageStatus
 	UsageSource          UsageSource
 	StatusCode           int
@@ -103,11 +107,16 @@ insert into llm_request_logs (
 	error_code,
 	error_message,
 	request_started_at,
-	request_completed_at
+	request_completed_at,
+	task_class,
+	routing_reason,
+	target_model_tier,
+	resolved_model
 ) values (
 	$1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
 	$11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
-	$21, $22, $23, $24, $25, $26, $27, $28, $29
+	$21, $22, $23, $24, $25, $26, $27, $28, $29, $30,
+	$31, $32, $33
 )`
 
 const insertUsagePublishFailureEventSQL = `
@@ -262,6 +271,10 @@ func insertUsageRecord(ctx context.Context, db store.DBTX, record UsageRecord) e
 		record.ErrorMessage,
 		record.RequestStartedAt,
 		record.RequestCompletedAt,
+		record.TaskClass,
+		record.RoutingReason,
+		record.TargetModelTier,
+		record.ResolvedModel,
 	)
 	return err
 }
@@ -401,12 +414,12 @@ func NewChatUsageRecord(
 	err error,
 ) UsageRecord {
 	usage, usageSource := normalizeUsage(resp.Usage, estimateChatUsage(req, resp))
-	return newUsageRecord(
+	record := newUsageRecord(
 		requestID,
 		requestContext,
 		"/v1/chat/completions",
-		req.Model,
-		firstNonEmpty(strings.TrimSpace(resp.Model), strings.TrimSpace(req.Model)),
+		firstNonEmpty(requestContext.RequestedModel, req.Model),
+		firstNonEmpty(resp.Model, requestContext.ResolvedModel, req.Model),
 		usage,
 		usageSource,
 		statusFromHTTPStatus(defaultStatusCode(statusCode)),
@@ -416,6 +429,12 @@ func NewChatUsageRecord(
 		completedAt,
 		err,
 	)
+	record.TaskClass = strings.TrimSpace(requestContext.TaskClass)
+	record.RoutingReason = strings.TrimSpace(requestContext.RoutingReason)
+	record.TargetModelTier = strings.TrimSpace(requestContext.TargetModelTier)
+	record.ResolvedModel = firstNonEmpty(resp.Model, requestContext.ResolvedModel, req.Model)
+	record.ensureDefaults()
+	return record
 }
 
 func NewEmbeddingsUsageRecord(
@@ -526,6 +545,10 @@ func newUsageRecord(
 		RequestPath:          endpoint,
 		RequestModel:         strings.TrimSpace(requestModel),
 		UpstreamModel:        strings.TrimSpace(upstreamModel),
+		ResolvedModel:        strings.TrimSpace(requestContext.ResolvedModel),
+		TaskClass:            strings.TrimSpace(requestContext.TaskClass),
+		RoutingReason:        strings.TrimSpace(requestContext.RoutingReason),
+		TargetModelTier:      strings.TrimSpace(requestContext.TargetModelTier),
 		Status:               status,
 		UsageSource:          usageSource,
 		StatusCode:           statusCode,
@@ -550,6 +573,9 @@ func (r *UsageRecord) ensureDefaults() {
 	}
 	if strings.TrimSpace(r.UpstreamModel) == "" {
 		r.UpstreamModel = r.RequestModel
+	}
+	if strings.TrimSpace(r.ResolvedModel) == "" {
+		r.ResolvedModel = r.UpstreamModel
 	}
 	if r.TotalTokens == 0 {
 		r.TotalTokens = r.PromptTokens + r.CompletionTokens

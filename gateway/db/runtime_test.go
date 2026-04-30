@@ -554,6 +554,26 @@ func TestApplyMigrationsAddsTokenPricingColumns(t *testing.T) {
 	}
 }
 
+func TestApplyMigrationsAddsSmartRoutingColumns(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	conn := openMigratedTestPostgres(t, ctx)
+
+	assertTableHasColumns(t, ctx, conn, "llm_request_logs", []string{
+		"task_class",
+		"routing_reason",
+		"target_model_tier",
+		"resolved_model",
+	})
+	assertColumnDefinition(t, ctx, conn, "llm_request_logs", "task_class", "text", "NO", "''")
+	assertColumnDefinition(t, ctx, conn, "llm_request_logs", "routing_reason", "text", "NO", "''")
+	assertColumnDefinition(t, ctx, conn, "llm_request_logs", "target_model_tier", "text", "NO", "''")
+	assertColumnDefinition(t, ctx, conn, "llm_request_logs", "resolved_model", "text", "NO", "''")
+}
+
 func TestSeedDemoDataIncludesTokenPricingFields(t *testing.T) {
 	t.Parallel()
 

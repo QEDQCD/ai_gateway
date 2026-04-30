@@ -8,6 +8,7 @@ import (
 	"time"
 
 	gatewaydb "github.com/example/ai_gateway/gateway/db"
+	"github.com/example/ai_gateway/gateway/internal/domain"
 	"github.com/example/ai_gateway/gateway/internal/service"
 	"github.com/example/ai_gateway/gateway/internal/store"
 	"github.com/jackc/pgx/v5"
@@ -77,6 +78,76 @@ func TestUsageRecorderRecordDefaultsFirstTokenLatencyToZero(t *testing.T) {
 
 	if got := db.tx.execCalls[0].args[13]; got != int64(0) {
 		t.Fatalf("expected first_token_latency_ms default 0, got %#v", got)
+	}
+}
+
+func TestUsageRecorderRecordPersistsSmartRoutingFields(t *testing.T) {
+	t.Parallel()
+
+	db := newRecordingTxDB()
+	recorder := service.NewUsageRecorder(db, newTestUsagePricingResolver(t))
+	record := newUsageRecord(service.UsageStatusSuccess, service.UsageSourceUpstream)
+	record.TaskClass = "coding_complex"
+	record.RoutingReason = "keyword:debug,pattern:code_fence"
+	record.TargetModelTier = "gateway-chat-reasoning"
+	record.ResolvedModel = "qwen-plus"
+
+	if err := recorder.Record(context.Background(), record); err != nil {
+		t.Fatalf("recorder.Record failed: %v", err)
+	}
+
+	if got := db.tx.execCalls[0].args[29]; got != "coding_complex" {
+		t.Fatalf("expected task_class arg %q, got %#v", "coding_complex", got)
+	}
+	if got := db.tx.execCalls[0].args[30]; got != "keyword:debug,pattern:code_fence" {
+		t.Fatalf("expected routing_reason arg %q, got %#v", "keyword:debug,pattern:code_fence", got)
+	}
+	if got := db.tx.execCalls[0].args[31]; got != "gateway-chat-reasoning" {
+		t.Fatalf("expected target_model_tier arg %q, got %#v", "gateway-chat-reasoning", got)
+	}
+	if got := db.tx.execCalls[0].args[32]; got != "qwen-plus" {
+		t.Fatalf("expected resolved_model arg %q, got %#v", "qwen-plus", got)
+	}
+}
+
+func TestNewChatUsageRecordPrefersUpstreamModelForResolvedModel(t *testing.T) {
+	t.Parallel()
+
+	record := service.NewChatUsageRecord(
+		"llmreq_chat_resolved_model",
+		domain.RequestContext{
+			TenantID:         "tenant_demo",
+			PlatformAPIKeyID: "pak_demo",
+			RouteID:          "route_demo",
+			ProviderTarget: domain.ProviderTarget{
+				Provider: "openai",
+			},
+			RequestedModel:  "gateway-public",
+			ResolvedModel:   "gateway-chat-reasoning",
+			TaskClass:       "coding_complex",
+			RoutingReason:   "keyword:debug",
+			TargetModelTier: "gateway-chat-reasoning",
+		},
+		service.ChatRequest{
+			Model: "gateway-public",
+			Messages: []service.ChatMessage{
+				{Role: "user", Content: "请帮我 debug 这段代码"},
+			},
+		},
+		service.ChatResponse{
+			Model: "qwen-plus",
+			Choices: []service.ChatChoice{
+				{Message: service.ChatMessage{Role: "assistant", Content: "ok"}},
+			},
+		},
+		200,
+		time.Date(2026, time.April, 24, 10, 0, 0, 0, time.UTC),
+		time.Date(2026, time.April, 24, 10, 0, 1, 0, time.UTC),
+		nil,
+	)
+
+	if record.ResolvedModel != "qwen-plus" {
+		t.Fatalf("expected resolved_model %q, got %q", "qwen-plus", record.ResolvedModel)
 	}
 }
 

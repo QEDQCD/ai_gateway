@@ -1717,6 +1717,10 @@ func TestPostgresConsoleServiceAuditUsesUsageLogsAndEvents(t *testing.T) {
 			request_completed_at = now() - interval '30 minutes' + interval '182 milliseconds',
 			created_at = now() - interval '30 minutes',
 			first_token_latency_ms = 41,
+			task_class = 'coding_complex',
+			routing_reason = 'keyword:debug,pattern:code_fence',
+			target_model_tier = 'gateway-chat-reasoning',
+			resolved_model = 'qwen-plus',
 			input_cost_microyuan = 1200000,
 			output_cost_microyuan = 1000000,
 			cached_cost_microyuan = 300000,
@@ -1755,6 +1759,18 @@ func TestPostgresConsoleServiceAuditUsesUsageLogsAndEvents(t *testing.T) {
 	}
 	if payload.Items[0].TotalCost != "2.50 ￥" {
 		t.Fatalf("expected total_cost 2.50 ￥, got %q", payload.Items[0].TotalCost)
+	}
+	if payload.Items[0].TaskClass != "coding_complex" {
+		t.Fatalf("expected task_class %q, got %q", "coding_complex", payload.Items[0].TaskClass)
+	}
+	if payload.Items[0].RoutingReason != "keyword:debug,pattern:code_fence" {
+		t.Fatalf("expected routing_reason to be populated, got %q", payload.Items[0].RoutingReason)
+	}
+	if payload.Items[0].TargetModelTier != "gateway-chat-reasoning" {
+		t.Fatalf("expected target_model_tier %q, got %q", "gateway-chat-reasoning", payload.Items[0].TargetModelTier)
+	}
+	if payload.Items[0].ResolvedModel != "qwen-plus" {
+		t.Fatalf("expected resolved_model %q, got %q", "qwen-plus", payload.Items[0].ResolvedModel)
 	}
 }
 
@@ -3078,6 +3094,10 @@ func TestPostgresConsoleServiceUsageRequests(t *testing.T) {
 		update llm_request_logs
 		set
 			first_token_latency_ms = 40,
+			task_class = 'embedding_simple',
+			routing_reason = 'model:direct',
+			target_model_tier = 'text-embedding-3-small',
+			resolved_model = 'text-embedding-3-small',
 			cached_tokens = 5,
 			input_price_microyuan_per_million = 2500000,
 			output_price_microyuan_per_million = 0,
@@ -3157,6 +3177,18 @@ func TestPostgresConsoleServiceUsageRequests(t *testing.T) {
 	}
 	if item.UsageSource != "估算" {
 		t.Fatalf("expected usage_source 估算, got %q", item.UsageSource)
+	}
+	if item.TaskClass != "embedding_simple" {
+		t.Fatalf("expected task_class %q, got %q", "embedding_simple", item.TaskClass)
+	}
+	if item.RoutingReason != "model:direct" {
+		t.Fatalf("expected routing_reason %q, got %q", "model:direct", item.RoutingReason)
+	}
+	if item.TargetModelTier != "text-embedding-3-small" {
+		t.Fatalf("expected target_model_tier %q, got %q", "text-embedding-3-small", item.TargetModelTier)
+	}
+	if item.ResolvedModel != "text-embedding-3-small" {
+		t.Fatalf("expected resolved_model %q, got %q", "text-embedding-3-small", item.ResolvedModel)
 	}
 	if item.FirstTokenLatencyMS != 40 {
 		t.Fatalf("expected first_token_latency_ms 40, got %#v", item.FirstTokenLatencyMS)
