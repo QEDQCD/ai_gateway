@@ -92,3 +92,64 @@ func TestLoadReadsPlatformAPIKeySecretKeyFromFile(t *testing.T) {
 		t.Fatalf("expected PlatformAPIKeySecretKey %q, got %q", expected, cfg.PlatformAPIKeySecretKey)
 	}
 }
+
+func TestLoadModelTokenPricingDefaultsAndOverrides(t *testing.T) {
+	t.Run("defaults", func(t *testing.T) {
+		t.Setenv("GATEWAY_MODEL_TOKEN_PRICING_DEFAULT_INPUT_MICROYUAN_PER_MILLION", "")
+		t.Setenv("GATEWAY_MODEL_TOKEN_PRICING_DEFAULT_OUTPUT_MICROYUAN_PER_MILLION", "")
+		t.Setenv("GATEWAY_MODEL_TOKEN_PRICING_DEFAULT_CACHED_MICROYUAN_PER_MILLION", "")
+		t.Setenv("GATEWAY_MODEL_TOKEN_PRICING_QWEN_FLASH_INPUT_MICROYUAN_PER_MILLION", "")
+		t.Setenv("GATEWAY_MODEL_TOKEN_PRICING_QWEN_FLASH_OUTPUT_MICROYUAN_PER_MILLION", "")
+		t.Setenv("GATEWAY_MODEL_TOKEN_PRICING_QWEN_FLASH_CACHED_MICROYUAN_PER_MILLION", "")
+
+		cfg := Load()
+
+		defaultPrice, ok := cfg.ModelTokenPricing["default"]
+		if !ok {
+			t.Fatal("expected default model pricing entry")
+		}
+		if defaultPrice.InputMicroyuanPerMillion != 2_000_000 {
+			t.Fatalf("expected default input price %d, got %d", int64(2_000_000), defaultPrice.InputMicroyuanPerMillion)
+		}
+		if defaultPrice.OutputMicroyuanPerMillion != 20_000_000 {
+			t.Fatalf("expected default output price %d, got %d", int64(20_000_000), defaultPrice.OutputMicroyuanPerMillion)
+		}
+		if defaultPrice.CachedMicroyuanPerMillion != 500_000 {
+			t.Fatalf("expected default cached price %d, got %d", int64(500_000), defaultPrice.CachedMicroyuanPerMillion)
+		}
+
+		qwenFlashPrice, ok := cfg.ModelTokenPricing["qwen-flash"]
+		if !ok {
+			t.Fatal("expected qwen-flash model pricing entry")
+		}
+		if qwenFlashPrice != defaultPrice {
+			t.Fatalf("expected qwen-flash pricing to default to %#v, got %#v", defaultPrice, qwenFlashPrice)
+		}
+	})
+
+	t.Run("overrides", func(t *testing.T) {
+		t.Setenv("GATEWAY_MODEL_TOKEN_PRICING_DEFAULT_INPUT_MICROYUAN_PER_MILLION", "2100000")
+		t.Setenv("GATEWAY_MODEL_TOKEN_PRICING_DEFAULT_OUTPUT_MICROYUAN_PER_MILLION", "22000000")
+		t.Setenv("GATEWAY_MODEL_TOKEN_PRICING_DEFAULT_CACHED_MICROYUAN_PER_MILLION", "2300000")
+		t.Setenv("GATEWAY_MODEL_TOKEN_PRICING_QWEN_FLASH_INPUT_MICROYUAN_PER_MILLION", "3100000")
+		t.Setenv("GATEWAY_MODEL_TOKEN_PRICING_QWEN_FLASH_OUTPUT_MICROYUAN_PER_MILLION", "32000000")
+		t.Setenv("GATEWAY_MODEL_TOKEN_PRICING_QWEN_FLASH_CACHED_MICROYUAN_PER_MILLION", "3300000")
+
+		cfg := Load()
+
+		if got := cfg.ModelTokenPricing["default"]; got != (ModelTokenPrice{
+			InputMicroyuanPerMillion:  2_100_000,
+			OutputMicroyuanPerMillion: 22_000_000,
+			CachedMicroyuanPerMillion: 2_300_000,
+		}) {
+			t.Fatalf("expected overridden default model pricing, got %#v", got)
+		}
+		if got := cfg.ModelTokenPricing["qwen-flash"]; got != (ModelTokenPrice{
+			InputMicroyuanPerMillion:  3_100_000,
+			OutputMicroyuanPerMillion: 32_000_000,
+			CachedMicroyuanPerMillion: 3_300_000,
+		}) {
+			t.Fatalf("expected overridden qwen-flash model pricing, got %#v", got)
+		}
+	})
+}

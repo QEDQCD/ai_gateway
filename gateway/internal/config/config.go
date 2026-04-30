@@ -3,10 +3,17 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/example/ai_gateway/gateway/internal/secret"
 )
+
+type ModelTokenPrice struct {
+	InputMicroyuanPerMillion  int64
+	OutputMicroyuanPerMillion int64
+	CachedMicroyuanPerMillion int64
+}
 
 type Config struct {
 	ListenAddr        string
@@ -44,6 +51,7 @@ type Config struct {
 	BootstrapProviderAPIKey          string
 	BootstrapSupportedModels         []string
 	BootstrapQuotaExhaustedTenantIDs []string
+	ModelTokenPricing                map[string]ModelTokenPrice
 }
 
 func Load() Config {
@@ -60,6 +68,7 @@ func Load() Config {
 	bootstrapProviderDisplayName := defaultString(lookupEnv("GATEWAY_BOOTSTRAP_PROVIDER_DISPLAY_NAME"), defaultProviderDisplayName(bootstrapProvider))
 	bootstrapProviderBaseURL := defaultString(lookupEnv("GATEWAY_BOOTSTRAP_PROVIDER_BASE_URL"), defaultProviderBaseURL(bootstrapProvider))
 	seedProviderBaseURL := defaultString(lookupEnv("GATEWAY_SEED_PROVIDER_BASE_URL"), bootstrapProviderBaseURL)
+	modelTokenPricing := loadModelTokenPricing()
 
 	return Config{
 		ListenAddr:                       listenAddr,
@@ -93,6 +102,7 @@ func Load() Config {
 		BootstrapProviderAPIKey:          lookupEnv("GATEWAY_BOOTSTRAP_PROVIDER_API_KEY"),
 		BootstrapSupportedModels:         bootstrapSupportedModels,
 		BootstrapQuotaExhaustedTenantIDs: splitCommaSeparatedEnv(os.Getenv("GATEWAY_QUOTA_EXHAUSTED_TENANTS")),
+		ModelTokenPricing:                modelTokenPricing,
 	}
 }
 
@@ -109,6 +119,39 @@ func defaultString(value string, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func loadModelTokenPricing() map[string]ModelTokenPrice {
+	defaultPrice := ModelTokenPrice{
+		InputMicroyuanPerMillion:  lookupInt64Env("GATEWAY_MODEL_TOKEN_PRICING_DEFAULT_INPUT_MICROYUAN_PER_MILLION", 2_000_000),
+		OutputMicroyuanPerMillion: lookupInt64Env("GATEWAY_MODEL_TOKEN_PRICING_DEFAULT_OUTPUT_MICROYUAN_PER_MILLION", 20_000_000),
+		CachedMicroyuanPerMillion: lookupInt64Env("GATEWAY_MODEL_TOKEN_PRICING_DEFAULT_CACHED_MICROYUAN_PER_MILLION", 500_000),
+	}
+
+	return map[string]ModelTokenPrice{
+		"default": defaultPrice,
+		"qwen-flash": {
+			InputMicroyuanPerMillion:  lookupInt64Env("GATEWAY_MODEL_TOKEN_PRICING_QWEN_FLASH_INPUT_MICROYUAN_PER_MILLION", defaultPrice.InputMicroyuanPerMillion),
+			OutputMicroyuanPerMillion: lookupInt64Env("GATEWAY_MODEL_TOKEN_PRICING_QWEN_FLASH_OUTPUT_MICROYUAN_PER_MILLION", defaultPrice.OutputMicroyuanPerMillion),
+			CachedMicroyuanPerMillion: lookupInt64Env("GATEWAY_MODEL_TOKEN_PRICING_QWEN_FLASH_CACHED_MICROYUAN_PER_MILLION", defaultPrice.CachedMicroyuanPerMillion),
+		},
+	}
+}
+
+func lookupInt64Env(name string, fallback int64) int64 {
+	value := strings.TrimSpace(lookupEnv(name))
+	if value == "" {
+		return fallback
+	}
+
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		panic(fmt.Sprintf("config: parse %s: %v", name, err))
+	}
+	if parsed < 0 {
+		panic(fmt.Sprintf("config: %s must be >= 0", name))
+	}
+	return parsed
 }
 
 func splitCommaSeparatedEnv(value string) []string {
