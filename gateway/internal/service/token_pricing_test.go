@@ -1,14 +1,14 @@
 package service_test
 
 import (
+	"strings"
 	"testing"
 
-	"github.com/example/ai_gateway/gateway/internal/config"
 	"github.com/example/ai_gateway/gateway/internal/service"
 )
 
 func TestResolveModelPricingFallsBackToDefault(t *testing.T) {
-	resolver, err := service.NewModelPricingResolver(map[string]config.ModelTokenPrice{
+	resolver, err := service.NewModelPricingResolver(map[string]service.ModelTokenPrice{
 		"default": {
 			InputMicroyuanPerMillion:  2_000_000,
 			OutputMicroyuanPerMillion: 20_000_000,
@@ -41,7 +41,7 @@ func TestResolveModelPricingFallsBackToDefault(t *testing.T) {
 }
 
 func TestResolveModelPricingUsesExactModelMatch(t *testing.T) {
-	resolver, err := service.NewModelPricingResolver(map[string]config.ModelTokenPrice{
+	resolver, err := service.NewModelPricingResolver(map[string]service.ModelTokenPrice{
 		"default": {
 			InputMicroyuanPerMillion:  2_000_000,
 			OutputMicroyuanPerMillion: 20_000_000,
@@ -72,7 +72,7 @@ func TestResolveModelPricingUsesExactModelMatch(t *testing.T) {
 }
 
 func TestNewModelPricingResolverRequiresDefault(t *testing.T) {
-	_, err := service.NewModelPricingResolver(map[string]config.ModelTokenPrice{
+	_, err := service.NewModelPricingResolver(map[string]service.ModelTokenPrice{
 		"qwen-flash": {
 			InputMicroyuanPerMillion:  3_000_000,
 			OutputMicroyuanPerMillion: 30_000_000,
@@ -81,6 +81,22 @@ func TestNewModelPricingResolverRequiresDefault(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected missing default pricing to fail")
+	}
+}
+
+func TestNewModelPricingResolverRejectsNegativePrices(t *testing.T) {
+	_, err := service.NewModelPricingResolver(map[string]service.ModelTokenPrice{
+		"default": {
+			InputMicroyuanPerMillion:  -1,
+			OutputMicroyuanPerMillion: 20_000_000,
+			CachedMicroyuanPerMillion: 500_000,
+		},
+	})
+	if err == nil {
+		t.Fatal("expected negative model pricing to fail")
+	}
+	if !strings.Contains(err.Error(), "default") {
+		t.Fatalf("expected error to mention default entry, got %v", err)
 	}
 }
 
@@ -99,7 +115,7 @@ func TestComputeUsageCostsRoundsHalfUp(t *testing.T) {
 	}
 }
 
-func TestComputeUsageCostsBreaksDownInputOutputAndCached(t *testing.T) {
+func TestComputeUsageCostsTreatsCachedTokensAsSubsetOfInput(t *testing.T) {
 	costs := service.ComputeUsageCosts(service.ModelTokenPrice{
 		InputMicroyuanPerMillion:  2_000_000,
 		OutputMicroyuanPerMillion: 20_000_000,
@@ -111,10 +127,10 @@ func TestComputeUsageCostsBreaksDownInputOutputAndCached(t *testing.T) {
 	})
 
 	if costs != (service.UsageCosts{
-		InputCostMicroyuan:  22,
+		InputCostMicroyuan:  12,
 		OutputCostMicroyuan: 140,
 		CachedCostMicroyuan: 3,
-		TotalCostMicroyuan:  165,
+		TotalCostMicroyuan:  155,
 	}) {
 		t.Fatalf("expected full cost breakdown, got %#v", costs)
 	}

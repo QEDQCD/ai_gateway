@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -152,4 +153,38 @@ func TestLoadModelTokenPricingDefaultsAndOverrides(t *testing.T) {
 			t.Fatalf("expected overridden qwen-flash model pricing, got %#v", got)
 		}
 	})
+}
+
+func TestLoadModelTokenPricingPanicsOnInvalidOverride(t *testing.T) {
+	t.Run("non-numeric", func(t *testing.T) {
+		t.Setenv("GATEWAY_MODEL_TOKEN_PRICING_DEFAULT_INPUT_MICROYUAN_PER_MILLION", "not-a-number")
+
+		assertPanicContains(t, "GATEWAY_MODEL_TOKEN_PRICING_DEFAULT_INPUT_MICROYUAN_PER_MILLION", func() {
+			Load()
+		})
+	})
+
+	t.Run("negative", func(t *testing.T) {
+		t.Setenv("GATEWAY_MODEL_TOKEN_PRICING_QWEN_FLASH_CACHED_MICROYUAN_PER_MILLION", "-1")
+
+		assertPanicContains(t, "GATEWAY_MODEL_TOKEN_PRICING_QWEN_FLASH_CACHED_MICROYUAN_PER_MILLION", func() {
+			Load()
+		})
+	})
+}
+
+func assertPanicContains(t *testing.T, want string, fn func()) {
+	t.Helper()
+
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			t.Fatal("expected panic")
+		}
+		if !strings.Contains(recovered.(string), want) {
+			t.Fatalf("expected panic containing %q, got %q", want, recovered)
+		}
+	}()
+
+	fn()
 }

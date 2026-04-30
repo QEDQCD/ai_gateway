@@ -2,6 +2,7 @@ package service
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/example/ai_gateway/gateway/internal/config"
@@ -26,18 +27,18 @@ type ModelPricingResolver struct {
 	prices map[string]ModelTokenPrice
 }
 
-func NewModelPricingResolver(prices map[string]config.ModelTokenPrice) (ModelPricingResolver, error) {
+func NewModelPricingResolver(prices map[string]ModelTokenPrice) (ModelPricingResolver, error) {
 	normalized := make(map[string]ModelTokenPrice, len(prices))
 	for model, price := range prices {
 		key := strings.TrimSpace(model)
 		if key == "" {
 			continue
 		}
-		normalized[key] = ModelTokenPrice{
-			InputMicroyuanPerMillion:  nonNegativeInt64(price.InputMicroyuanPerMillion),
-			OutputMicroyuanPerMillion: nonNegativeInt64(price.OutputMicroyuanPerMillion),
-			CachedMicroyuanPerMillion: nonNegativeInt64(price.CachedMicroyuanPerMillion),
+
+		if err := validateModelTokenPrice(key, price); err != nil {
+			return ModelPricingResolver{}, err
 		}
+		normalized[key] = price
 	}
 
 	if _, ok := normalized["default"]; !ok {
@@ -60,7 +61,7 @@ func (r ModelPricingResolver) Resolve(model string) (ModelTokenPrice, error) {
 
 func ComputeUsageCosts(price ModelTokenPrice, usage TokenUsageBreakdown) UsageCosts {
 	costs := UsageCosts{
-		InputCostMicroyuan:  roundMicroyuanCost(usage.InputTokens, price.InputMicroyuanPerMillion),
+		InputCostMicroyuan:  roundMicroyuanCost(uncachedInputTokens(usage), price.InputMicroyuanPerMillion),
 		OutputCostMicroyuan: roundMicroyuanCost(usage.OutputTokens, price.OutputMicroyuanPerMillion),
 		CachedCostMicroyuan: roundMicroyuanCost(usage.CachedTokens, price.CachedMicroyuanPerMillion),
 	}
@@ -75,9 +76,22 @@ func roundMicroyuanCost(tokens int64, price int64) int64 {
 	return (tokens*price + 500_000) / 1_000_000
 }
 
-func nonNegativeInt64(value int64) int64 {
-	if value < 0 {
+func uncachedInputTokens(usage TokenUsageBreakdown) int64 {
+	if usage.InputTokens <= usage.CachedTokens {
 		return 0
 	}
-	return value
+	return usage.InputTokens - usage.CachedTokens
+}
+
+func validateModelTokenPrice(model string, price ModelTokenPrice) error {
+	if price.InputMicroyuanPerMillion < 0 {
+		return fmt.Errorf("service: model pricing %q input price must be >= 0", model)
+	}
+	if price.OutputMicroyuanPerMillion < 0 {
+		return fmt.Errorf("service: model pricing %q output price must be >= 0", model)
+	}
+	if price.CachedMicroyuanPerMillion < 0 {
+		return fmt.Errorf("service: model pricing %q cached price must be >= 0", model)
+	}
+	return nil
 }
