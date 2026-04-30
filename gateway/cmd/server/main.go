@@ -86,7 +86,7 @@ func newDatabaseBackedServerApp(cfg config.Config) *fiber.App {
 	repository := store.NewAuthRepository(queries, providerSecretCodec)
 	routeService := service.NewRouteService(repository)
 	authService := service.NewAuthServiceWithConsoleSessions(repository, newDatabaseQuotaGuard(cfg, pool), routeService, cfg.ConsoleSessionSecret)
-	usageRecorder := service.NewUsageRecorder(pool)
+	usageRecorder := service.NewUsageRecorder(pool, mustNewUsagePricingResolver(cfg))
 	usagePublisher := queue.NewUsagePublisherWithConsumers(
 		newUsagePublisher(cfg),
 		queue.WithPublishFailureTimeout(service.NewUsageAggregator(pool), usageAggregatorPublishFailureTimeout),
@@ -289,4 +289,23 @@ func mustNewPlatformAPIKeySecretCodec(cfg config.Config) *secret.Codec {
 		panic(err)
 	}
 	return codec
+}
+
+func mustNewUsagePricingResolver(cfg config.Config) service.ModelPricingResolver {
+	prices := cfg.ModelTokenPricing
+	if len(prices) == 0 {
+		prices = map[string]config.ModelTokenPrice{
+			"default": {
+				InputMicroyuanPerMillion:  2_000_000,
+				OutputMicroyuanPerMillion: 20_000_000,
+				CachedMicroyuanPerMillion: 500_000,
+			},
+		}
+	}
+
+	resolver, err := service.NewModelPricingResolver(prices)
+	if err != nil {
+		panic(err)
+	}
+	return resolver
 }

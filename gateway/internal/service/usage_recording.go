@@ -19,6 +19,7 @@ type TokenUsage struct {
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
 	TotalTokens      int `json:"total_tokens"`
+	CachedTokens     int `json:"cached_tokens"`
 }
 
 type UsageRecord struct {
@@ -41,6 +42,9 @@ type UsageRecord struct {
 	PromptTokens         int
 	CompletionTokens     int
 	TotalTokens          int
+	CachedTokens         int
+	PriceSnapshot        ModelTokenPrice
+	CostSnapshot         UsageCosts
 	ErrorCode            string
 	ErrorMessage         string
 	RequestStartedAt     time.Time
@@ -57,7 +61,8 @@ type UsageRecorder interface {
 type noopUsageRecorder struct{}
 
 type sqlUsageRecorder struct {
-	db usageRecordStore
+	db              usageRecordStore
+	pricingResolver ModelPricingResolver
 }
 
 type usageRecordStore interface {
@@ -86,13 +91,22 @@ insert into llm_request_logs (
 	prompt_tokens,
 	completion_tokens,
 	total_tokens,
+	cached_tokens,
+	input_price_microyuan_per_million,
+	output_price_microyuan_per_million,
+	cached_price_microyuan_per_million,
+	input_cost_microyuan,
+	output_cost_microyuan,
+	cached_cost_microyuan,
+	total_cost_microyuan,
 	error_code,
 	error_message,
 	request_started_at,
 	request_completed_at
 ) values (
 	$1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-	$11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21
+	$11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
+	$21, $22, $23, $24, $25, $26, $27, $28, $29
 )`
 
 const insertUsagePublishFailureEventSQL = `
@@ -147,11 +161,14 @@ func NewNoopUsageRecorder() UsageRecorder {
 	return noopUsageRecorder{}
 }
 
-func NewUsageRecorder(db usageRecordStore) UsageRecorder {
+func NewUsageRecorder(db usageRecordStore, pricingResolver ModelPricingResolver) UsageRecorder {
 	if db == nil {
 		return noopUsageRecorder{}
 	}
-	return sqlUsageRecorder{db: db}
+	return sqlUsageRecorder{
+		db:              db,
+		pricingResolver: pricingResolver,
+	}
 }
 
 func (noopUsageRecorder) Record(context.Context, UsageRecord) error {
@@ -172,6 +189,9 @@ func (noopUsageRecorder) RecordEvent(context.Context, UsageRecord, string, strin
 
 func (r sqlUsageRecorder) Record(ctx context.Context, record UsageRecord) error {
 	record.ensureDefaults()
+	if err := hydrateUsagePricing(&record, r.pricingResolver); err != nil {
+		return err
+	}
 	recordCtx, cancel := newUsageRecordContext(ctx)
 	defer cancel()
 
@@ -216,6 +236,14 @@ func insertUsageRecord(ctx context.Context, db store.DBTX, record UsageRecord) e
 		record.PromptTokens,
 		record.CompletionTokens,
 		record.TotalTokens,
+		record.CachedTokens,
+		record.PriceSnapshot.InputMicroyuanPerMillion,
+		record.PriceSnapshot.OutputMicroyuanPerMillion,
+		record.PriceSnapshot.CachedMicroyuanPerMillion,
+		record.CostSnapshot.InputCostMicroyuan,
+		record.CostSnapshot.OutputCostMicroyuan,
+		record.CostSnapshot.CachedCostMicroyuan,
+		record.CostSnapshot.TotalCostMicroyuan,
 		record.ErrorCode,
 		record.ErrorMessage,
 		record.RequestStartedAt,
@@ -324,6 +352,26 @@ func newUsageRecordContext(ctx context.Context) (context.Context, context.Cancel
 	return context.WithTimeout(baseCtx, usageRecordTimeout)
 }
 
+func hydrateUsagePricing(record *UsageRecord, resolver ModelPricingResolver) error {
+	price, err := resolver.Resolve(record.RequestModel)
+	if err != nil {
+		return err
+	}
+
+	costs, err := ComputeUsageCosts(price, TokenUsageBreakdown{
+		InputTokens:  int64(record.PromptTokens),
+		OutputTokens: int64(record.CompletionTokens),
+		CachedTokens: int64(record.CachedTokens),
+	})
+	if err != nil {
+		return err
+	}
+
+	record.PriceSnapshot = price
+	record.CostSnapshot = costs
+	return nil
+}
+
 func NewChatUsageRecord(
 	requestID string,
 	requestContext domain.RequestContext,
@@ -421,9 +469,14 @@ func (r UsageRecord) UsageEvent() queue.UsageEvent {
 		PromptTokens:         r.PromptTokens,
 		CompletionTokens:     r.CompletionTokens,
 		TotalTokens:          r.TotalTokens,
+		CachedTokens:         r.CachedTokens,
 		Endpoint:             r.RequestPath,
 		StatusCode:           r.StatusCode,
 		LatencyMS:            r.LatencyMS,
+		InputCostMicroyuan:   r.CostSnapshot.InputCostMicroyuan,
+		OutputCostMicroyuan:  r.CostSnapshot.OutputCostMicroyuan,
+		CachedCostMicroyuan:  r.CostSnapshot.CachedCostMicroyuan,
+		TotalCostMicroyuan:   r.CostSnapshot.TotalCostMicroyuan,
 		OccurredAt:           r.RequestCompletedAt,
 	}
 }
@@ -462,6 +515,7 @@ func newUsageRecord(
 		PromptTokens:         usage.PromptTokens,
 		CompletionTokens:     usage.CompletionTokens,
 		TotalTokens:          usage.TotalTokens,
+		CachedTokens:         usage.CachedTokens,
 		RequestStartedAt:     startedAt,
 		RequestCompletedAt:   completedAt,
 	}
@@ -493,6 +547,9 @@ func (r *UsageRecord) ensureDefaults() {
 	}
 	if r.FirstTokenLatencyMS < 0 {
 		r.FirstTokenLatencyMS = 0
+	}
+	if r.CachedTokens < 0 {
+		r.CachedTokens = 0
 	}
 }
 
@@ -660,7 +717,7 @@ func trustworthyUpstreamUsage(upstream *TokenUsage) (TokenUsage, bool) {
 	if upstream == nil {
 		return TokenUsage{}, false
 	}
-	if upstream.PromptTokens < 0 || upstream.CompletionTokens < 0 || upstream.TotalTokens < 0 {
+	if upstream.PromptTokens < 0 || upstream.CompletionTokens < 0 || upstream.TotalTokens < 0 || upstream.CachedTokens < 0 {
 		return TokenUsage{}, false
 	}
 	if upstream.TotalTokens <= 0 {
@@ -676,6 +733,7 @@ func sanitizeUsage(usage TokenUsage) TokenUsage {
 	usage.PromptTokens = max(0, usage.PromptTokens)
 	usage.CompletionTokens = max(0, usage.CompletionTokens)
 	usage.TotalTokens = max(0, usage.TotalTokens)
+	usage.CachedTokens = max(0, usage.CachedTokens)
 	if usage.TotalTokens == 0 {
 		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 	}

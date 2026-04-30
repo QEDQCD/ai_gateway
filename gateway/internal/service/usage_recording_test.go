@@ -27,7 +27,7 @@ func TestUsageRecorderRecordWritesSuccessLifecycleEvent(t *testing.T) {
 	t.Parallel()
 
 	db := newRecordingTxDB()
-	recorder := service.NewUsageRecorder(db)
+	recorder := service.NewUsageRecorder(db, newTestUsagePricingResolver(t))
 	record := newUsageRecord(service.UsageStatusSuccess, service.UsageSourceUpstream)
 	record.FirstTokenLatencyMS = 42
 
@@ -68,7 +68,7 @@ func TestUsageRecorderRecordDefaultsFirstTokenLatencyToZero(t *testing.T) {
 	t.Parallel()
 
 	db := newRecordingTxDB()
-	recorder := service.NewUsageRecorder(db)
+	recorder := service.NewUsageRecorder(db, newTestUsagePricingResolver(t))
 	record := newUsageRecord(service.UsageStatusSuccess, service.UsageSourceUpstream)
 
 	if err := recorder.Record(context.Background(), record); err != nil {
@@ -84,7 +84,7 @@ func TestUsageRecorderRecordNormalizesNegativeFirstTokenLatencyToZero(t *testing
 	t.Parallel()
 
 	db := newRecordingTxDB()
-	recorder := service.NewUsageRecorder(db)
+	recorder := service.NewUsageRecorder(db, newTestUsagePricingResolver(t))
 	record := newUsageRecord(service.UsageStatusSuccess, service.UsageSourceUpstream)
 	record.FirstTokenLatencyMS = -9
 
@@ -101,7 +101,7 @@ func TestUsageRecorderRecordWritesFailureLifecycleEvent(t *testing.T) {
 	t.Parallel()
 
 	db := newRecordingTxDB()
-	recorder := service.NewUsageRecorder(db)
+	recorder := service.NewUsageRecorder(db, newTestUsagePricingResolver(t))
 	record := newUsageRecord(service.UsageStatusFailed, service.UsageSourceEstimated)
 	record.StatusCode = 502
 	record.ErrorMessage = "upstream bad gateway"
@@ -134,7 +134,7 @@ func TestUsageRecorderRecordEventWritesAdditionalLifecycleEvent(t *testing.T) {
 	t.Parallel()
 
 	db := newRecordingTxDB()
-	recorder := service.NewUsageRecorder(db)
+	recorder := service.NewUsageRecorder(db, newTestUsagePricingResolver(t))
 	record := newUsageRecord(service.UsageStatusSuccess, service.UsageSourceUpstream)
 
 	if err := recorder.RecordEvent(context.Background(), record, "client_aborted", "client disconnected after first content token"); err != nil {
@@ -192,7 +192,7 @@ func TestUsageRecorderRecordUsesIndependentContextWhenParentContextIsDone(t *tes
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			db := newRecordingTxDB()
-			recorder := service.NewUsageRecorder(db)
+			recorder := service.NewUsageRecorder(db, newTestUsagePricingResolver(t))
 			record := newUsageRecord(service.UsageStatusSuccess, service.UsageSourceUpstream)
 
 			if err := recorder.Record(tc.parentCtx(t), record); err != nil {
@@ -214,6 +214,201 @@ func TestUsageRecorderRecordUsesIndependentContextWhenParentContextIsDone(t *tes
 			}
 			assertActiveBoundedContext(t, db.tx.commitCtxs[0])
 		})
+	}
+}
+
+func TestUsageRecorderRecordPersistsTokenPricingSnapshot(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	container, dsn := startPostgresContainer(ctx, t)
+	t.Cleanup(func() {
+		_ = container.Terminate(context.Background())
+	})
+
+	pool, err := gatewaydb.OpenPostgres(ctx, dsn)
+	if err != nil {
+		t.Fatalf("OpenPostgres failed: %v", err)
+	}
+	t.Cleanup(pool.Close)
+
+	if err := gatewaydb.ApplyMigrations(ctx, pool); err != nil {
+		t.Fatalf("ApplyMigrations failed: %v", err)
+	}
+	for _, statement := range gatewaydb.RuntimeSeedStatements() {
+		if _, err := pool.Exec(ctx, statement); err != nil {
+			t.Fatalf("pool.Exec seed failed: %v", err)
+		}
+	}
+
+	recorder := service.NewUsageRecorder(pool, newTestUsagePricingResolver(t))
+	record := newUsageRecord(service.UsageStatusSuccess, service.UsageSourceUpstream)
+	record.RequestID = "llmreq_pricing_snapshot"
+	record.CachedTokens = 4
+
+	if err := recorder.Record(ctx, record); err != nil {
+		t.Fatalf("recorder.Record failed: %v", err)
+	}
+
+	var cachedTokens int
+	var inputPrice int64
+	var outputPrice int64
+	var cachedPrice int64
+	var inputCost int64
+	var outputCost int64
+	var cachedCost int64
+	var totalCost int64
+	if err := pool.QueryRow(ctx, `
+		select cached_tokens,
+		       input_price_microyuan_per_million,
+		       output_price_microyuan_per_million,
+		       cached_price_microyuan_per_million,
+		       input_cost_microyuan,
+		       output_cost_microyuan,
+		       cached_cost_microyuan,
+		       total_cost_microyuan
+		from llm_request_logs
+		where id = $1
+	`, record.RequestID).Scan(
+		&cachedTokens,
+		&inputPrice,
+		&outputPrice,
+		&cachedPrice,
+		&inputCost,
+		&outputCost,
+		&cachedCost,
+		&totalCost,
+	); err != nil {
+		t.Fatalf("QueryRow llm_request_logs pricing snapshot failed: %v", err)
+	}
+
+	if cachedTokens != 4 {
+		t.Fatalf("expected cached_tokens 4, got %d", cachedTokens)
+	}
+	if inputPrice != 2_000_000 || outputPrice != 4_000_000 || cachedPrice != 500_000 {
+		t.Fatalf("unexpected price snapshot: input=%d output=%d cached=%d", inputPrice, outputPrice, cachedPrice)
+	}
+	if inputCost != 12 || outputCost != 20 || cachedCost != 2 || totalCost != 34 {
+		t.Fatalf("unexpected cost snapshot: input=%d output=%d cached=%d total=%d", inputCost, outputCost, cachedCost, totalCost)
+	}
+}
+
+func TestUsageRecorderRecordFailsWithoutPricingResolverDefault(t *testing.T) {
+	t.Parallel()
+
+	db := newRecordingTxDB()
+	recorder := service.NewUsageRecorder(db, service.ModelPricingResolver{})
+	record := newUsageRecord(service.UsageStatusSuccess, service.UsageSourceUpstream)
+
+	err := recorder.Record(context.Background(), record)
+	if err == nil {
+		t.Fatal("expected missing default model pricing to fail")
+	}
+	if !strings.Contains(err.Error(), "default model pricing not configured") {
+		t.Fatalf("expected missing default model pricing error, got %v", err)
+	}
+	if db.beginCalls != 0 {
+		t.Fatalf("expected no transaction begin on pricing resolution failure, got %d", db.beginCalls)
+	}
+}
+
+func TestUsageRecorderPricingResolverRejectsInvalidPrice(t *testing.T) {
+	t.Parallel()
+
+	_, err := service.NewModelPricingResolver(map[string]service.ModelTokenPrice{
+		"default": {
+			InputMicroyuanPerMillion:  2_000_000,
+			OutputMicroyuanPerMillion: 4_000_000,
+			CachedMicroyuanPerMillion: -1,
+		},
+	})
+	if err == nil {
+		t.Fatal("expected invalid cached model pricing to fail")
+	}
+	if !strings.Contains(err.Error(), "cached price must be >= 0") {
+		t.Fatalf("expected cached price validation error, got %v", err)
+	}
+}
+
+func TestUsageRecorderRecordPersistsZeroCachedTokens(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	container, dsn := startPostgresContainer(ctx, t)
+	t.Cleanup(func() {
+		_ = container.Terminate(context.Background())
+	})
+
+	pool, err := gatewaydb.OpenPostgres(ctx, dsn)
+	if err != nil {
+		t.Fatalf("OpenPostgres failed: %v", err)
+	}
+	t.Cleanup(pool.Close)
+
+	if err := gatewaydb.ApplyMigrations(ctx, pool); err != nil {
+		t.Fatalf("ApplyMigrations failed: %v", err)
+	}
+	for _, statement := range gatewaydb.RuntimeSeedStatements() {
+		if _, err := pool.Exec(ctx, statement); err != nil {
+			t.Fatalf("pool.Exec seed failed: %v", err)
+		}
+	}
+
+	recorder := service.NewUsageRecorder(pool, newTestUsagePricingResolver(t))
+	record := newUsageRecord(service.UsageStatusSuccess, service.UsageSourceUpstream)
+	record.RequestID = "llmreq_zero_cached_tokens"
+	record.CachedTokens = 0
+
+	if err := recorder.Record(ctx, record); err != nil {
+		t.Fatalf("recorder.Record failed: %v", err)
+	}
+
+	var cachedTokens int
+	var cachedCost int64
+	var totalCost int64
+	if err := pool.QueryRow(ctx, `
+		select cached_tokens,
+		       cached_cost_microyuan,
+		       total_cost_microyuan
+		from llm_request_logs
+		where id = $1
+	`, record.RequestID).Scan(&cachedTokens, &cachedCost, &totalCost); err != nil {
+		t.Fatalf("QueryRow llm_request_logs zero cached_tokens failed: %v", err)
+	}
+
+	if cachedTokens != 0 {
+		t.Fatalf("expected cached_tokens 0, got %d", cachedTokens)
+	}
+	if cachedCost != 0 {
+		t.Fatalf("expected cached_cost_microyuan 0, got %d", cachedCost)
+	}
+	if totalCost != 40 {
+		t.Fatalf("expected total_cost_microyuan 40, got %d", totalCost)
+	}
+}
+
+func TestUsageRecorderUsageEventIncludesCachedTokensAndCostSnapshot(t *testing.T) {
+	t.Parallel()
+
+	record := newUsageRecord(service.UsageStatusSuccess, service.UsageSourceUpstream)
+	record.CachedTokens = 3
+	record.CostSnapshot = service.UsageCosts{
+		InputCostMicroyuan:  14,
+		OutputCostMicroyuan: 21,
+		CachedCostMicroyuan: 2,
+		TotalCostMicroyuan:  37,
+	}
+
+	event := record.UsageEvent()
+	if event.CachedTokens != 3 {
+		t.Fatalf("expected cached_tokens 3, got %d", event.CachedTokens)
+	}
+	if event.InputCostMicroyuan != 14 || event.OutputCostMicroyuan != 21 || event.CachedCostMicroyuan != 2 || event.TotalCostMicroyuan != 37 {
+		t.Fatalf("unexpected usage event cost snapshot: %#v", event)
 	}
 }
 
@@ -257,7 +452,7 @@ func TestUsageRecorderRecordRollsBackWhenLifecycleEventInsertFails(t *testing.T)
 		t.Fatalf("pool.Exec trigger setup failed: %v", err)
 	}
 
-	recorder := service.NewUsageRecorder(pool)
+	recorder := service.NewUsageRecorder(pool, newTestUsagePricingResolver(t))
 	record := newUsageRecord(service.UsageStatusSuccess, service.UsageSourceUpstream)
 	record.RequestID = "llmreq_tx_rollback"
 
@@ -320,7 +515,7 @@ func TestUsageRecorderStoresTenantAndUserScopedFailureRecord(t *testing.T) {
 		t.Fatalf("pool.Exec membership seed failed: %v", err)
 	}
 
-	recorder := service.NewUsageRecorder(pool)
+	recorder := service.NewUsageRecorder(pool, newTestUsagePricingResolver(t))
 	record := newUsageRecord(service.UsageStatusRateLimited, service.UsageSourceEstimated)
 	record.RequestID = "llmreq_failure_record"
 	record.UserID = "user_member_demo"
@@ -450,7 +645,7 @@ func TestUsageFailureStageFromRecordClassifiesResponseFailures(t *testing.T) {
 		t.Fatalf("pool.Exec membership seed failed: %v", err)
 	}
 
-	recorder := service.NewUsageRecorder(pool)
+	recorder := service.NewUsageRecorder(pool, newTestUsagePricingResolver(t))
 	record := newUsageRecord(service.UsageStatusFailed, service.UsageSourceEstimated)
 	record.RequestID = "llmreq_response_failure"
 	record.UserID = "user_member_response"
@@ -498,9 +693,35 @@ func newUsageRecord(status service.UsageStatus, source service.UsageSource) serv
 		PromptTokens:         10,
 		CompletionTokens:     5,
 		TotalTokens:          15,
-		RequestStartedAt:     startedAt,
-		RequestCompletedAt:   completedAt,
+		PriceSnapshot: service.ModelTokenPrice{
+			InputMicroyuanPerMillion:  2_000_000,
+			OutputMicroyuanPerMillion: 4_000_000,
+			CachedMicroyuanPerMillion: 500_000,
+		},
+		RequestStartedAt:   startedAt,
+		RequestCompletedAt: completedAt,
 	}
+}
+
+func newTestUsagePricingResolver(t *testing.T) service.ModelPricingResolver {
+	t.Helper()
+
+	resolver, err := service.NewModelPricingResolver(map[string]service.ModelTokenPrice{
+		"default": {
+			InputMicroyuanPerMillion:  1_000_000,
+			OutputMicroyuanPerMillion: 1_000_000,
+			CachedMicroyuanPerMillion: 250_000,
+		},
+		"gpt-4o-mini": {
+			InputMicroyuanPerMillion:  2_000_000,
+			OutputMicroyuanPerMillion: 4_000_000,
+			CachedMicroyuanPerMillion: 500_000,
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewModelPricingResolver failed: %v", err)
+	}
+	return resolver
 }
 
 type recordingDB struct {

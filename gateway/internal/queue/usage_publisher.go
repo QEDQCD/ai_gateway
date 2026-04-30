@@ -21,9 +21,14 @@ type UsageEvent struct {
 	PromptTokens         int       `json:"prompt_tokens"`
 	CompletionTokens     int       `json:"completion_tokens"`
 	TotalTokens          int       `json:"total_tokens"`
+	CachedTokens         int       `json:"cached_tokens"`
 	Endpoint             string    `json:"endpoint"`
 	StatusCode           int       `json:"status_code"`
 	LatencyMS            int64     `json:"latency_ms"`
+	InputCostMicroyuan   int64     `json:"input_cost_microyuan"`
+	OutputCostMicroyuan  int64     `json:"output_cost_microyuan"`
+	CachedCostMicroyuan  int64     `json:"cached_cost_microyuan"`
+	TotalCostMicroyuan   int64     `json:"total_cost_microyuan"`
 	OccurredAt           time.Time `json:"occurred_at"`
 }
 
