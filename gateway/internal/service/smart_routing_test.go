@@ -66,3 +66,86 @@ func TestRuleBasedSmartRouterFallsBackToFastModelForSimpleQuestion(t *testing.T)
 		t.Fatalf("expected target tier %q, got %q", "gateway-chat-fast", result.TargetModelTier)
 	}
 }
+
+func TestRuleBasedSmartRouterIgnoresAssistantMessagesWhenClassifying(t *testing.T) {
+	router := service.NewRuleBasedSmartRouter(service.SmartRoutingConfig{
+		FastModelTier:       "gateway-chat-fast",
+		ReasoningModelTier:  "gateway-chat-reasoning",
+		CodingKeywords:      []string{"debug", "报错"},
+		EnableCodeFenceRule: true,
+	})
+
+	result := router.Decide(service.ChatRequest{
+		Model: "qwen-flash",
+		Messages: []service.ChatMessage{
+			{
+				Role:    "assistant",
+				Content: "你可以参考这个例子：\n```go\nfunc main() { panic(\"x\") }\n```",
+			},
+			{
+				Role:    "user",
+				Content: "请用一句话解释什么是 API Gateway。",
+			},
+		},
+	})
+
+	if result.TaskClass != "simple_qa" {
+		t.Fatalf("expected task class %q, got %q", "simple_qa", result.TaskClass)
+	}
+	if result.TargetModelTier != "gateway-chat-fast" {
+		t.Fatalf("expected target tier %q, got %q", "gateway-chat-fast", result.TargetModelTier)
+	}
+}
+
+func TestRuleBasedSmartRouterDoesNotUpgradeTerminologyQuestionOnSingleSoftKeyword(t *testing.T) {
+	router := service.NewRuleBasedSmartRouter(service.SmartRoutingConfig{
+		FastModelTier:      "gateway-chat-fast",
+		ReasoningModelTier: "gateway-chat-reasoning",
+		CodingKeywords:     []string{"debug", "报错"},
+	})
+
+	result := router.Decide(service.ChatRequest{
+		Model: "qwen-flash",
+		Messages: []service.ChatMessage{
+			{
+				Role:    "user",
+				Content: "请解释一下 debug 是什么。",
+			},
+		},
+	})
+
+	if result.TaskClass != "simple_qa" {
+		t.Fatalf("expected task class %q, got %q", "simple_qa", result.TaskClass)
+	}
+	if result.TargetModelTier != "gateway-chat-fast" {
+		t.Fatalf("expected target tier %q, got %q", "gateway-chat-fast", result.TargetModelTier)
+	}
+}
+
+func TestRuleBasedSmartRouterDefaultsMatchInternalTiers(t *testing.T) {
+	router := service.NewRuleBasedSmartRouter(service.SmartRoutingConfig{})
+
+	simple := router.Decide(service.ChatRequest{
+		Messages: []service.ChatMessage{
+			{Role: "user", Content: "什么是 API Gateway？"},
+		},
+	})
+	if simple.TargetModelTier != "gateway-chat-fast" {
+		t.Fatalf("expected default fast tier %q, got %q", "gateway-chat-fast", simple.TargetModelTier)
+	}
+
+	complexRouter := service.NewRuleBasedSmartRouter(service.SmartRoutingConfig{
+		EnableCodeFenceRule: true,
+	})
+	complex := complexRouter.Decide(service.ChatRequest{
+		Messages: []service.ChatMessage{
+			{
+				Role:    "user",
+				Content: "请帮我处理下面的报错：\n```go\npanic(\"x\")\n```",
+			},
+		},
+	})
+	if complex.TargetModelTier != "gateway-chat-reasoning" {
+		t.Fatalf("expected default reasoning tier %q, got %q", "gateway-chat-reasoning", complex.TargetModelTier)
+	}
+}

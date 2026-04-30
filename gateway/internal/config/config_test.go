@@ -182,11 +182,11 @@ func TestLoadSmartRoutingConfigDefaultsAndOverrides(t *testing.T) {
 
 		cfg := Load()
 
-		if cfg.ChatFastModel != "qwen-flash" {
-			t.Fatalf("expected ChatFastModel %q, got %q", "qwen-flash", cfg.ChatFastModel)
+		if cfg.ChatFastModel != "gateway-chat-fast" {
+			t.Fatalf("expected ChatFastModel %q, got %q", "gateway-chat-fast", cfg.ChatFastModel)
 		}
-		if cfg.ChatReasoningModel != "qwen-plus" {
-			t.Fatalf("expected ChatReasoningModel %q, got %q", "qwen-plus", cfg.ChatReasoningModel)
+		if cfg.ChatReasoningModel != "gateway-chat-reasoning" {
+			t.Fatalf("expected ChatReasoningModel %q, got %q", "gateway-chat-reasoning", cfg.ChatReasoningModel)
 		}
 		if got, want := cfg.SmartRoutingCodingKeywords, []string{"写代码", "实现", "重构", "debug", "报错", "异常", "单元测试", "架构设计"}; len(got) != len(want) {
 			t.Fatalf("expected SmartRoutingCodingKeywords %#v, got %#v", want, got)

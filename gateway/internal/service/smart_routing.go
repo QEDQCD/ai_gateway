@@ -39,34 +39,36 @@ func NewRuleBasedSmartRouter(cfg SmartRoutingConfig) SmartRouter {
 }
 
 func (r ruleBasedSmartRouter) Decide(req ChatRequest) SmartRoutingDecision {
-	content := aggregateChatMessages(req.Messages)
+	content := aggregateUserMessages(req.Messages)
 	normalized := strings.ToLower(content)
 	matched := make([]string, 0, 4)
-	hasCodingSignal := false
+	keywordMatches := 0
 
 	for _, keyword := range r.cfg.CodingKeywords {
 		keyword = strings.TrimSpace(keyword)
 		if keyword != "" && strings.Contains(normalized, strings.ToLower(keyword)) {
-			hasCodingSignal = true
+			keywordMatches++
 			matched = append(matched, "keyword:"+keyword)
 		}
 	}
 
+	hasHardSignal := false
 	if r.cfg.EnableCodeFenceRule && strings.Contains(content, "```") {
-		hasCodingSignal = true
+		hasHardSignal = true
 		matched = append(matched, "pattern:code_fence")
 	}
 
 	if r.cfg.EnableStackTraceRule && containsStackTrace(content) {
-		hasCodingSignal = true
+		hasHardSignal = true
 		matched = append(matched, "pattern:stack_trace")
 	}
 
-	if len(content) >= r.cfg.LongPromptThreshold && hasCodingSignal {
+	hasLongCodingPrompt := len(content) >= r.cfg.LongPromptThreshold && keywordMatches > 0
+	if hasLongCodingPrompt {
 		matched = append(matched, "signal:long_prompt")
 	}
 
-	if len(matched) > 0 {
+	if hasHardSignal || hasLongCodingPrompt {
 		return SmartRoutingDecision{
 			TaskClass:       "coding_complex",
 			TargetModelTier: r.cfg.ReasoningModelTier,
@@ -80,13 +82,16 @@ func (r ruleBasedSmartRouter) Decide(req ChatRequest) SmartRoutingDecision {
 	}
 }
 
-func aggregateChatMessages(messages []ChatMessage) string {
+func aggregateUserMessages(messages []ChatMessage) string {
 	if len(messages) == 0 {
 		return ""
 	}
 
 	parts := make([]string, 0, len(messages))
 	for _, message := range messages {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "user") {
+			continue
+		}
 		content := strings.TrimSpace(message.Content)
 		if content != "" {
 			parts = append(parts, content)
