@@ -117,6 +117,9 @@ export function MemberUsagePage() {
             "租户",
             "端点",
             "模型",
+            "实际模型",
+            "任务类型",
+            "平台策略",
             "状态",
             "输入 Token",
             "输出 Token",
@@ -137,6 +140,9 @@ export function MemberUsagePage() {
             item.tenant,
             item.endpoint,
             item.model,
+            formatValue(item.resolved_model),
+            formatValue(item.task_class),
+            formatValue(item.target_model_tier),
             <StatusPill
               key={`${item.request_id}-status`}
               label={item.status}

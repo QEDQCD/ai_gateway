@@ -6,6 +6,10 @@ import { neutralizeLineLabel, neutralizePlatformNarrative } from "../lib/platfor
 import { useConsoleSession } from "../lib/session";
 import { useRemoteData } from "../lib/use-remote-data";
 
+function formatValue(value: string) {
+  return value || "--";
+}
+
 export function AuditPage() {
   const session = useConsoleSession();
   const isAdmin = session.role === "admin";
@@ -63,7 +67,11 @@ export function AuditPage() {
             "租户",
             "端点",
             "请求模型",
+            "实际模型",
             "上游模型",
+            "任务分类",
+            "目标档位",
+            "路由原因",
             "状态",
             "平台线路",
             "延迟",
@@ -74,13 +82,17 @@ export function AuditPage() {
             item.time,
             item.tenant,
             item.endpoint,
-            item.request_model,
-            item.upstream_model,
+            formatValue(item.request_model),
+            formatValue(item.resolved_model),
+            formatValue(item.upstream_model),
+            formatValue(item.task_class),
+            formatValue(item.target_model_tier),
+            formatValue(item.routing_reason),
             item.status,
             neutralizeLineLabel(item.route_label),
             item.latency,
             item.usage_source,
-            item.total_cost,
+            formatValue(item.total_cost),
           ])}
         />
       </section>

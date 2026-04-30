@@ -77,6 +77,10 @@ function createUsageRequestMock(overrides: Record<string, unknown> = {}) {
     tenant: "tenant_demo",
     endpoint: "/v1/chat/completions",
     model: "gpt-4o-mini",
+    resolved_model: "gpt-4o-mini",
+    task_class: "",
+    routing_reason: "",
+    target_model_tier: "",
     status: "成功",
     total_tokens: "1,280",
     input_tokens: "840",
@@ -1731,7 +1735,7 @@ describe("控制台路由", () => {
     expect(screen.getByText("生产网关")).toBeInTheDocument();
     expect(screen.getByText("320 万")).toBeInTheDocument();
     expect(screen.getAllByText("6.20 万￥").length).toBeGreaterThan(0);
-    expect(screen.getByText("gpt-4o-mini")).toBeInTheDocument();
+    expect(screen.getAllByText("gpt-4o-mini").length).toBeGreaterThan(0);
     expect(fetchMock).toHaveBeenCalledWith("/api/admin/overview");
     expect(fetchMock).toHaveBeenCalledWith("/api/admin/api-keys");
     expect(fetchMock).toHaveBeenCalledWith("/api/admin/usage/overview");
@@ -2166,6 +2170,9 @@ describe("控制台路由", () => {
           createUsageRequestMock({
             request_id: "req_1",
             tenant: "tenant_demo",
+            resolved_model: "qwen-plus",
+            task_class: "coding_complex",
+            target_model_tier: "gateway-chat-reasoning",
             usage_source: "member_key",
             input_tokens: "840",
             output_tokens: "400",
@@ -2189,6 +2196,9 @@ describe("控制台路由", () => {
     expect(screen.getByText("1.56 ￥")).toBeInTheDocument();
     expect(screen.getByText("840")).toBeInTheDocument();
     expect(screen.getByText("1.20 ￥")).toBeInTheDocument();
+    expect(screen.getAllByText("qwen-plus").length).toBeGreaterThan(0);
+    expect(screen.getByText("coding_complex")).toBeInTheDocument();
+    expect(screen.getByText("gateway-chat-reasoning")).toBeInTheDocument();
     expect(screen.getAllByText("2.00 ￥/M").length).toBeGreaterThan(0);
     expect(fetchMock).toHaveBeenCalledWith("/api/me/usage/overview");
     expect(fetchMock).toHaveBeenCalledWith("/api/me/usage/requests?limit=20&offset=0");
@@ -2302,7 +2312,11 @@ describe("控制台路由", () => {
             tenant: "tenant_alpha",
             endpoint: "/v1/chat/completions",
             request_model: "qwen-flash",
+            resolved_model: "qwen-plus",
             upstream_model: "qwen-plus",
+            task_class: "coding_complex",
+            target_model_tier: "gateway-chat-reasoning",
+            routing_reason: "keyword:debug,pattern:code_fence",
             status: "200",
             route_label: "default-route",
             latency: "218 ms",
@@ -2325,6 +2339,10 @@ describe("控制台路由", () => {
     expect(screen.getByText("平台上游 限流")).toBeInTheDocument();
     expect(screen.getByText("内部检索能力链路回退到 平台默认线路后恢复成功")).toBeInTheDocument();
     expect(screen.getByText("/v1/chat/completions")).toBeInTheDocument();
+    expect(screen.getAllByText("qwen-plus").length).toBeGreaterThan(0);
+    expect(screen.getByText("coding_complex")).toBeInTheDocument();
+    expect(screen.getByText("gateway-chat-reasoning")).toBeInTheDocument();
+    expect(screen.getByText("keyword:debug,pattern:code_fence")).toBeInTheDocument();
     expect(screen.getAllByText("总费用").length).toBeGreaterThan(0);
     expect(screen.getByText("2.50 ￥")).toBeInTheDocument();
     expect(screen.queryByText(new RegExp(providerAlias))).not.toBeInTheDocument();
@@ -2537,7 +2555,7 @@ describe("控制台路由", () => {
     expect(screen.getByText("llmreq_demo_002")).toBeInTheDocument();
     expect(screen.getByText("0.04 ￥")).toBeInTheDocument();
     expect(screen.getAllByText("2.00 ￥/M").length).toBeGreaterThan(0);
-    expect(screen.getByText("gpt-4o-mini")).toBeInTheDocument();
+    expect(screen.getAllByText("gpt-4o-mini").length).toBeGreaterThan(0);
     expect(screen.getByText("平台默认线路")).toBeInTheDocument();
     expect(screen.queryByText(/DashScope/)).not.toBeInTheDocument();
     expect(screen.queryByText(new RegExp(hiddenKnowledgeTerm))).not.toBeInTheDocument();
@@ -2547,6 +2565,35 @@ describe("控制台路由", () => {
     expect(fetchMock).toHaveBeenCalledWith("/api/admin/usage/latency-wall?window=24h");
     expect(fetchMock).toHaveBeenCalledWith("/api/admin/usage/failures");
     expect(fetchMock).toHaveBeenCalledWith("/api/admin/usage/requests?limit=20&offset=0");
+  });
+
+  test("调用观测页展示智能路由分类与路由原因", async () => {
+    mockFetch({
+      "/api/admin/usage/overview": createUsageOverviewMock(),
+      "/api/admin/usage/trends": { requests: [], tokens: [], success: [], costs: [] },
+      "/api/admin/usage/latency-wall?window=24h": { window_label: "最近 24 小时", buckets: [], lanes: [] },
+      "/api/admin/usage/failures": { breakdown: [], recent_events: [] },
+      "/api/admin/usage/requests?limit=20&offset=0": {
+        items: [
+          createUsageRequestMock({
+            task_class: "coding_complex",
+            target_model_tier: "gateway-chat-reasoning",
+            routing_reason: "keyword:debug,pattern:code_fence",
+            resolved_model: "qwen-plus",
+          }),
+        ],
+        total: 1,
+        limit: 20,
+        offset: 0,
+      },
+    });
+
+    renderRoute("/usage");
+
+    expect(await screen.findByText("coding_complex")).toBeInTheDocument();
+    expect(screen.getByText("gateway-chat-reasoning")).toBeInTheDocument();
+    expect(screen.getByText("keyword:debug,pattern:code_fence")).toBeInTheDocument();
+    expect(screen.getByText("qwen-plus")).toBeInTheDocument();
   });
 
   test("调用观测页使用可视化组件展示状态、事件流与来源 pill", async () => {

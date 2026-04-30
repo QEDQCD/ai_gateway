@@ -170,6 +170,10 @@ export type AuditItem = {
   endpoint: string;
   request_model: string;
   upstream_model: string;
+  resolved_model: string;
+  task_class: string;
+  routing_reason: string;
+  target_model_tier: string;
   status: string;
   route_label: string;
   latency: string;
@@ -255,6 +259,10 @@ export type UsageRequestItem = {
   tenant: string;
   endpoint: string;
   model: string;
+  resolved_model: string;
+  task_class: string;
+  routing_reason: string;
+  target_model_tier: string;
   status: string;
   total_tokens: string;
   input_tokens: string;
@@ -418,6 +426,10 @@ function toUsageRequestItem(value: unknown): UsageRequestItem {
     tenant: readString(record, "tenant"),
     endpoint: readString(record, "endpoint"),
     model: readString(record, "model"),
+    resolved_model: readString(record, "resolved_model"),
+    task_class: readString(record, "task_class"),
+    routing_reason: readString(record, "routing_reason"),
+    target_model_tier: readString(record, "target_model_tier"),
     status: readString(record, "status"),
     total_tokens: readString(record, "total_tokens"),
     input_tokens: readString(record, "input_tokens"),
@@ -673,6 +685,10 @@ export function getAudit() {
             endpoint: readString(record, "endpoint"),
             request_model: readString(record, "request_model"),
             upstream_model: readString(record, "upstream_model"),
+            resolved_model: readString(record, "resolved_model"),
+            task_class: readString(record, "task_class"),
+            routing_reason: readString(record, "routing_reason"),
+            target_model_tier: readString(record, "target_model_tier"),
             status: readString(record, "status"),
             route_label: readRouteLabel(record),
             latency: readString(record, "latency"),

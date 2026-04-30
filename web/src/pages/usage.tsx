@@ -308,6 +308,10 @@ export function UsagePage() {
             "租户",
             "端点",
             "模型",
+            "实际模型",
+            "任务分类",
+            "目标档位",
+            "路由原因",
             "状态",
             "输入 Token",
             "输出 Token",
@@ -328,6 +332,10 @@ export function UsagePage() {
             item.tenant,
             item.endpoint,
             item.model,
+            formatValue(item.resolved_model),
+            formatValue(item.task_class),
+            formatValue(item.target_model_tier),
+            formatValue(item.routing_reason),
             <StatusPill
               key={`${item.request_id}-status`}
               label={item.status}
