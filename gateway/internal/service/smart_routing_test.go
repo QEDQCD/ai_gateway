@@ -224,3 +224,46 @@ func TestRuleBasedSmartRouterDefaultsMatchInternalTiers(t *testing.T) {
 		t.Fatalf("expected default reasoning tier %q, got %q", "gateway-chat-reasoning", complex.TargetModelTier)
 	}
 }
+
+func TestRuleBasedSmartRouterDefaultsIncludeCodingKeywords(t *testing.T) {
+	router := service.NewRuleBasedSmartRouter(service.SmartRoutingConfig{})
+
+	result := router.Decide(service.ChatRequest{
+		Messages: []service.ChatMessage{
+			{Role: "user", Content: "写一个 Go 函数去重"},
+		},
+	})
+
+	if result.TaskClass != "coding_complex" {
+		t.Fatalf("expected task class %q, got %q", "coding_complex", result.TaskClass)
+	}
+	if result.TargetModelTier != "gateway-chat-reasoning" {
+		t.Fatalf("expected target tier %q, got %q", "gateway-chat-reasoning", result.TargetModelTier)
+	}
+}
+
+func TestRuleBasedSmartRouterUsesRuneCountForLongPromptThreshold(t *testing.T) {
+	router := service.NewRuleBasedSmartRouter(service.SmartRoutingConfig{
+		FastModelTier:       "gateway-chat-fast",
+		ReasoningModelTier:  "gateway-chat-reasoning",
+		CodingKeywords:      []string{"debug", "报错"},
+		LongPromptThreshold: 15,
+	})
+
+	result := router.Decide(service.ChatRequest{
+		Model: "qwen-flash",
+		Messages: []service.ChatMessage{
+			{
+				Role:    "user",
+				Content: "debug 是什么含义",
+			},
+		},
+	})
+
+	if result.TaskClass != "simple_qa" {
+		t.Fatalf("expected task class %q, got %q", "simple_qa", result.TaskClass)
+	}
+	if result.TargetModelTier != "gateway-chat-fast" {
+		t.Fatalf("expected target tier %q, got %q", "gateway-chat-fast", result.TargetModelTier)
+	}
+}

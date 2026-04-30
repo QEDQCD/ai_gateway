@@ -1,6 +1,9 @@
 package service
 
-import "strings"
+import (
+	"strings"
+	"unicode/utf8"
+)
 
 type SmartRoutingConfig struct {
 	FastModelTier        string
@@ -25,12 +28,26 @@ type ruleBasedSmartRouter struct {
 	cfg SmartRoutingConfig
 }
 
+var defaultSmartRoutingCodingKeywords = []string{
+	"写代码",
+	"实现",
+	"重构",
+	"debug",
+	"报错",
+	"异常",
+	"单元测试",
+	"架构设计",
+}
+
 func NewRuleBasedSmartRouter(cfg SmartRoutingConfig) SmartRouter {
 	if strings.TrimSpace(cfg.FastModelTier) == "" {
 		cfg.FastModelTier = "gateway-chat-fast"
 	}
 	if strings.TrimSpace(cfg.ReasoningModelTier) == "" {
 		cfg.ReasoningModelTier = "gateway-chat-reasoning"
+	}
+	if len(cfg.CodingKeywords) == 0 {
+		cfg.CodingKeywords = append([]string(nil), defaultSmartRoutingCodingKeywords...)
 	}
 	if cfg.LongPromptThreshold <= 0 {
 		cfg.LongPromptThreshold = 240
@@ -76,7 +93,7 @@ func (r ruleBasedSmartRouter) Decide(req ChatRequest) SmartRoutingDecision {
 	hasTechnicalArtifact := containsTechnicalArtifact(normalized)
 	hasDirectIntent := directKeywordMatches > 0 || hasDirectArtifactRequest
 	hasSoftIntentCombo := softKeywordMatches >= 2 || (softKeywordMatches > 0 && hasTechnicalArtifact)
-	hasLongCodingPrompt := len(content) >= r.cfg.LongPromptThreshold && (softKeywordMatches > 0 || directKeywordMatches > 0)
+	hasLongCodingPrompt := utf8.RuneCountInString(content) >= r.cfg.LongPromptThreshold && (softKeywordMatches > 0 || directKeywordMatches > 0)
 	if hasLongCodingPrompt {
 		matched = append(matched, "signal:long_prompt")
 	}
