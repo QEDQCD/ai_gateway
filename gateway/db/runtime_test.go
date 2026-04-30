@@ -514,6 +514,44 @@ func TestApplyMigrationsAddsTokenPricingColumns(t *testing.T) {
 		"cached_cost_microyuan",
 		"total_cost_microyuan",
 	})
+
+	assertColumnDefinition(t, ctx, conn, "tenant_usage_ledger", "cached_tokens", "integer", "NO", "0")
+	assertColumnDefinition(t, ctx, conn, "tenant_usage_ledger", "input_cost_microyuan", "bigint", "NO", "0")
+
+	if _, err := conn.Exec(ctx, `
+		insert into tenants (id, name, status)
+		values ('tenant_pricing_constraints', 'Pricing Constraints', 'active')
+	`); err != nil {
+		t.Fatalf("insert tenant for token pricing constraint check failed: %v", err)
+	}
+
+	if _, err := conn.Exec(ctx, `
+		insert into tenant_usage_ledger (
+			bucket_start,
+			tenant_id,
+			cached_tokens
+		) values (
+			timestamptz '2026-04-24T10:00:00Z',
+			'tenant_pricing_constraints',
+			-1
+		)
+	`); err == nil {
+		t.Fatal("expected tenant_usage_ledger.cached_tokens negative insert to fail")
+	}
+
+	if _, err := conn.Exec(ctx, `
+		insert into tenant_usage_ledger (
+			bucket_start,
+			tenant_id,
+			input_cost_microyuan
+		) values (
+			timestamptz '2026-04-24T11:00:00Z',
+			'tenant_pricing_constraints',
+			-1
+		)
+	`); err == nil {
+		t.Fatal("expected tenant_usage_ledger.input_cost_microyuan negative insert to fail")
+	}
 }
 
 func TestSeedDemoDataIncludesTokenPricingFields(t *testing.T) {
@@ -525,17 +563,21 @@ func TestSeedDemoDataIncludesTokenPricingFields(t *testing.T) {
 	conn := openSeededRuntimeDB(t, ctx)
 
 	var (
-		logCachedTokens int32
-		logInputPrice   int64
-		logOutputPrice  int64
-		logCachedPrice  int64
-		logInputCost    int64
-		logOutputCost   int64
-		logCachedCost   int64
-		logTotalCost    int64
+		logPromptTokens     int32
+		logCompletionTokens int32
+		logCachedTokens     int32
+		logInputPrice       int64
+		logOutputPrice      int64
+		logCachedPrice      int64
+		logInputCost        int64
+		logOutputCost       int64
+		logCachedCost       int64
+		logTotalCost        int64
 	)
 	if err := conn.QueryRow(ctx, `
 		select
+			prompt_tokens,
+			completion_tokens,
 			cached_tokens,
 			input_price_microyuan_per_million,
 			output_price_microyuan_per_million,
@@ -547,6 +589,8 @@ func TestSeedDemoDataIncludesTokenPricingFields(t *testing.T) {
 		from llm_request_logs
 		where id = 'llmreq_demo_001'
 	`).Scan(
+		&logPromptTokens,
+		&logCompletionTokens,
 		&logCachedTokens,
 		&logInputPrice,
 		&logOutputPrice,
@@ -558,19 +602,31 @@ func TestSeedDemoDataIncludesTokenPricingFields(t *testing.T) {
 	); err != nil {
 		t.Fatalf("QueryRow llm_request_logs pricing fields failed: %v", err)
 	}
-	if logCachedTokens != 24 || logInputPrice != 2500000 || logOutputPrice != 5000000 || logCachedPrice != 500000 || logInputCost != 310 || logOutputCost != 240 || logCachedCost != 12 || logTotalCost != 562 {
-		t.Fatalf("unexpected llm_request_logs pricing fields: cached_tokens=%d input_price=%d output_price=%d cached_price=%d input_cost=%d output_cost=%d cached_cost=%d total_cost=%d", logCachedTokens, logInputPrice, logOutputPrice, logCachedPrice, logInputCost, logOutputCost, logCachedCost, logTotalCost)
+	if logPromptTokens != 124 || logCompletionTokens != 48 || logCachedTokens != 24 || logInputPrice != 2500000 || logOutputPrice != 5000000 || logCachedPrice != 500000 {
+		t.Fatalf("unexpected llm_request_logs token pricing seed inputs: prompt_tokens=%d completion_tokens=%d cached_tokens=%d input_price=%d output_price=%d cached_price=%d", logPromptTokens, logCompletionTokens, logCachedTokens, logInputPrice, logOutputPrice, logCachedPrice)
+	}
+
+	expectedLogInputCost := int64(logPromptTokens-logCachedTokens) * logInputPrice / 1_000_000
+	expectedLogOutputCost := int64(logCompletionTokens) * logOutputPrice / 1_000_000
+	expectedLogCachedCost := int64(logCachedTokens) * logCachedPrice / 1_000_000
+	expectedLogTotalCost := expectedLogInputCost + expectedLogOutputCost + expectedLogCachedCost
+	if logInputCost != expectedLogInputCost || logOutputCost != expectedLogOutputCost || logCachedCost != expectedLogCachedCost || logTotalCost != expectedLogTotalCost {
+		t.Fatalf("unexpected llm_request_logs pricing fields: input_cost=%d want=%d output_cost=%d want=%d cached_cost=%d want=%d total_cost=%d want=%d", logInputCost, expectedLogInputCost, logOutputCost, expectedLogOutputCost, logCachedCost, expectedLogCachedCost, logTotalCost, expectedLogTotalCost)
 	}
 
 	var (
-		aggCachedTokens int32
-		aggInputCost    int64
-		aggOutputCost   int64
-		aggCachedCost   int64
-		aggTotalCost    int64
+		aggPromptTokens     int32
+		aggCompletionTokens int32
+		aggCachedTokens     int32
+		aggInputCost        int64
+		aggOutputCost       int64
+		aggCachedCost       int64
+		aggTotalCost        int64
 	)
 	if err := conn.QueryRow(ctx, `
 		select
+			prompt_tokens,
+			completion_tokens,
 			cached_tokens,
 			input_cost_microyuan,
 			output_cost_microyuan,
@@ -581,14 +637,17 @@ func TestSeedDemoDataIncludesTokenPricingFields(t *testing.T) {
 		  and request_path = '/v1/chat/completions'
 		  and usage_source = 'upstream'
 		  and usage_status = 'success'
-	`).Scan(&aggCachedTokens, &aggInputCost, &aggOutputCost, &aggCachedCost, &aggTotalCost); err != nil {
+	`).Scan(&aggPromptTokens, &aggCompletionTokens, &aggCachedTokens, &aggInputCost, &aggOutputCost, &aggCachedCost, &aggTotalCost); err != nil {
 		t.Fatalf("QueryRow llm_usage_agg_hourly pricing fields failed: %v", err)
 	}
-	if aggCachedTokens != 24 || aggInputCost != 310 || aggOutputCost != 240 || aggCachedCost != 12 || aggTotalCost != 562 {
-		t.Fatalf("unexpected llm_usage_agg_hourly pricing fields: cached_tokens=%d input_cost=%d output_cost=%d cached_cost=%d total_cost=%d", aggCachedTokens, aggInputCost, aggOutputCost, aggCachedCost, aggTotalCost)
+	if aggPromptTokens != logPromptTokens || aggCompletionTokens != logCompletionTokens || aggCachedTokens != logCachedTokens || aggInputCost != logInputCost || aggOutputCost != logOutputCost || aggCachedCost != logCachedCost || aggTotalCost != logTotalCost {
+		t.Fatalf("unexpected llm_usage_agg_hourly pricing fields: prompt_tokens=%d completion_tokens=%d cached_tokens=%d input_cost=%d output_cost=%d cached_cost=%d total_cost=%d", aggPromptTokens, aggCompletionTokens, aggCachedTokens, aggInputCost, aggOutputCost, aggCachedCost, aggTotalCost)
 	}
 
 	var (
+		ledgerInputTokens  int32
+		ledgerOutputTokens int32
+		ledgerTotalTokens  int32
 		ledgerCachedTokens int32
 		ledgerInputCost    int64
 		ledgerOutputCost   int64
@@ -597,6 +656,9 @@ func TestSeedDemoDataIncludesTokenPricingFields(t *testing.T) {
 	)
 	if err := conn.QueryRow(ctx, `
 		select
+			input_tokens,
+			output_tokens,
+			total_tokens,
 			cached_tokens,
 			input_cost_microyuan,
 			output_cost_microyuan,
@@ -605,11 +667,40 @@ func TestSeedDemoDataIncludesTokenPricingFields(t *testing.T) {
 		from tenant_usage_ledger
 		where tenant_id = 'tenant_demo'
 		  and bucket_start = timestamptz '2026-04-24T10:00:00Z'
-	`).Scan(&ledgerCachedTokens, &ledgerInputCost, &ledgerOutputCost, &ledgerCachedCost, &ledgerTotalCost); err != nil {
+	`).Scan(&ledgerInputTokens, &ledgerOutputTokens, &ledgerTotalTokens, &ledgerCachedTokens, &ledgerInputCost, &ledgerOutputCost, &ledgerCachedCost, &ledgerTotalCost); err != nil {
 		t.Fatalf("QueryRow tenant_usage_ledger pricing fields failed: %v", err)
 	}
-	if ledgerCachedTokens != 24 || ledgerInputCost != 330 || ledgerOutputCost != 240 || ledgerCachedCost != 12 || ledgerTotalCost != 582 {
-		t.Fatalf("unexpected tenant_usage_ledger pricing fields: cached_tokens=%d input_cost=%d output_cost=%d cached_cost=%d total_cost=%d", ledgerCachedTokens, ledgerInputCost, ledgerOutputCost, ledgerCachedCost, ledgerTotalCost)
+
+	var (
+		sumPromptTokens     int32
+		sumCompletionTokens int32
+		sumTotalTokens      int32
+		sumCachedTokens     int32
+		sumInputCost        int64
+		sumOutputCost       int64
+		sumCachedCost       int64
+		sumTotalCost        int64
+	)
+	if err := conn.QueryRow(ctx, `
+		select
+			coalesce(sum(prompt_tokens), 0),
+			coalesce(sum(completion_tokens), 0),
+			coalesce(sum(total_tokens), 0),
+			coalesce(sum(cached_tokens), 0),
+			coalesce(sum(input_cost_microyuan), 0),
+			coalesce(sum(output_cost_microyuan), 0),
+			coalesce(sum(cached_cost_microyuan), 0),
+			coalesce(sum(total_cost_microyuan), 0)
+		from llm_request_logs
+		where tenant_id = 'tenant_demo'
+		  and request_started_at >= timestamptz '2026-04-24T10:00:00Z'
+		  and request_started_at < timestamptz '2026-04-24T11:00:00Z'
+	`).Scan(&sumPromptTokens, &sumCompletionTokens, &sumTotalTokens, &sumCachedTokens, &sumInputCost, &sumOutputCost, &sumCachedCost, &sumTotalCost); err != nil {
+		t.Fatalf("QueryRow llm_request_logs pricing sum failed: %v", err)
+	}
+
+	if ledgerInputTokens != sumPromptTokens || ledgerOutputTokens != sumCompletionTokens || ledgerTotalTokens != sumTotalTokens || ledgerCachedTokens != sumCachedTokens || ledgerInputCost != sumInputCost || ledgerOutputCost != sumOutputCost || ledgerCachedCost != sumCachedCost || ledgerTotalCost != sumTotalCost {
+		t.Fatalf("unexpected tenant_usage_ledger pricing fields: input_tokens=%d output_tokens=%d total_tokens=%d cached_tokens=%d input_cost=%d output_cost=%d cached_cost=%d total_cost=%d", ledgerInputTokens, ledgerOutputTokens, ledgerTotalTokens, ledgerCachedTokens, ledgerInputCost, ledgerOutputCost, ledgerCachedCost, ledgerTotalCost)
 	}
 }
 
@@ -1370,6 +1461,26 @@ func assertTableHasColumns(t *testing.T, ctx context.Context, conn *pgx.Conn, ta
 		if !gotColumns[wantColumn] {
 			t.Fatalf("expected table %s to include column %s", tableName, wantColumn)
 		}
+	}
+}
+
+func assertColumnDefinition(t *testing.T, ctx context.Context, conn *pgx.Conn, tableName string, columnName string, wantDataType string, wantNullable string, wantDefaultFragment string) {
+	t.Helper()
+
+	var gotDataType string
+	var gotNullable string
+	var gotDefault string
+	if err := conn.QueryRow(ctx, `
+		select data_type, is_nullable, coalesce(column_default, '')
+		from information_schema.columns
+		where table_schema = 'public'
+		  and table_name = $1
+		  and column_name = $2
+	`, tableName, columnName).Scan(&gotDataType, &gotNullable, &gotDefault); err != nil {
+		t.Fatalf("QueryRow %s.%s definition failed: %v", tableName, columnName, err)
+	}
+	if gotDataType != wantDataType || gotNullable != wantNullable || !strings.Contains(gotDefault, wantDefaultFragment) {
+		t.Fatalf("unexpected %s.%s definition: data_type=%q is_nullable=%q column_default=%q", tableName, columnName, gotDataType, gotNullable, gotDefault)
 	}
 }
 
