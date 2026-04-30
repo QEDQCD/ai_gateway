@@ -1807,6 +1807,9 @@ func TestPostgresConsoleServiceAuditFallsBackToAuditLogsWhenUsageDataMissing(t *
 	if payload.Items[0].UsageSource != "审计回退" {
 		t.Fatalf("expected fallback usage_source 审计回退, got %q", payload.Items[0].UsageSource)
 	}
+	if payload.Items[0].TotalCost != "--" {
+		t.Fatalf("expected fallback total_cost --, got %q", payload.Items[0].TotalCost)
+	}
 }
 
 func TestPostgresConsoleServiceUsageOverview(t *testing.T) {
@@ -1889,7 +1892,10 @@ func TestPostgresConsoleServiceUsageOverview(t *testing.T) {
 	if payload.EstimatedShare != "50.00%" {
 		t.Fatalf("expected estimated_share 50.00%%, got %q", payload.EstimatedShare)
 	}
-	if !containsString(payload.PricingModels, "gpt-4o-mini") || !containsString(payload.PricingModels, "text-embedding-3-small") {
+	if !containsPricingModel(payload.PricingModels, "gpt-4o-mini", "2.50 ￥/M", "5.00 ￥/M", "0.50 ￥/M") {
+		t.Fatalf("expected pricing_models to include gpt-4o-mini pricing, got %#v", payload.PricingModels)
+	}
+	if !containsPricingModel(payload.PricingModels, "text-embedding-3-small", "1.25 ￥/M", "0.00 ￥/M", "0.00 ￥/M") {
 		t.Fatalf("expected pricing_models to include demo models, got %#v", payload.PricingModels)
 	}
 
@@ -3333,6 +3339,18 @@ func containsRecentEvent(items []string, fragment string) bool {
 func containsString(items []string, expected string) bool {
 	for _, item := range items {
 		if item == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func containsPricingModel(items []service.PricingModelItem, model string, inputPrice string, outputPrice string, cachedPrice string) bool {
+	for _, item := range items {
+		if item.Model == model &&
+			item.InputPrice == inputPrice &&
+			item.OutputPrice == outputPrice &&
+			item.CachedPrice == cachedPrice {
 			return true
 		}
 	}

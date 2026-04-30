@@ -245,19 +245,26 @@ type UsageQuery struct {
 }
 
 type UsageOverviewData struct {
-	TotalRequests  int64    `json:"total_requests"`
-	SuccessRate    string   `json:"success_rate"`
-	TotalTokens    string   `json:"total_tokens"`
-	InputTokens    string   `json:"input_tokens"`
-	OutputTokens   string   `json:"output_tokens"`
-	CachedTokens   string   `json:"cached_tokens"`
-	AverageLatency string   `json:"average_latency"`
-	EstimatedShare string   `json:"estimated_share"`
-	InputCost      string   `json:"input_cost"`
-	OutputCost     string   `json:"output_cost"`
-	CachedCost     string   `json:"cached_cost"`
-	TotalCost      string   `json:"total_cost"`
-	PricingModels  []string `json:"pricing_models"`
+	TotalRequests  int64              `json:"total_requests"`
+	SuccessRate    string             `json:"success_rate"`
+	TotalTokens    string             `json:"total_tokens"`
+	InputTokens    string             `json:"input_tokens"`
+	OutputTokens   string             `json:"output_tokens"`
+	CachedTokens   string             `json:"cached_tokens"`
+	AverageLatency string             `json:"average_latency"`
+	EstimatedShare string             `json:"estimated_share"`
+	InputCost      string             `json:"input_cost"`
+	OutputCost     string             `json:"output_cost"`
+	CachedCost     string             `json:"cached_cost"`
+	TotalCost      string             `json:"total_cost"`
+	PricingModels  []PricingModelItem `json:"pricing_models"`
+}
+
+type PricingModelItem struct {
+	Model       string `json:"model"`
+	InputPrice  string `json:"input_price"`
+	OutputPrice string `json:"output_price"`
+	CachedPrice string `json:"cached_price"`
 }
 
 type UsageTrendPoint struct {

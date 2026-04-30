@@ -1771,7 +1771,6 @@ func (s postgresConsoleService) usageOverviewFromLogs(ctx context.Context, query
 	var outputCostMicroyuan int64
 	var cachedCostMicroyuan int64
 	var totalCostMicroyuan int64
-	var pricingModels []string
 	if err := s.db.QueryRow(ctx, `
 		select
 			count(*),
@@ -1785,14 +1784,7 @@ func (s postgresConsoleService) usageOverviewFromLogs(ctx context.Context, query
 			coalesce(sum(l.input_cost_microyuan), 0),
 			coalesce(sum(l.output_cost_microyuan), 0),
 			coalesce(sum(l.cached_cost_microyuan), 0),
-			coalesce(sum(l.total_cost_microyuan), 0),
-			coalesce(
-				array_agg(
-					distinct coalesce(nullif(l.upstream_model, ''), l.request_model)
-					order by coalesce(nullif(l.upstream_model, ''), l.request_model)
-				) filter (where coalesce(nullif(l.upstream_model, ''), l.request_model) <> ''),
-				'{}'
-			)
+			coalesce(sum(l.total_cost_microyuan), 0)
 		from llm_request_logs l
 		left join route_catalog r on r.id = l.route_id
 		left join provider_credentials pc on pc.id = l.provider_credential_id
@@ -1810,8 +1802,12 @@ func (s postgresConsoleService) usageOverviewFromLogs(ctx context.Context, query
 		&outputCostMicroyuan,
 		&cachedCostMicroyuan,
 		&totalCostMicroyuan,
-		&pricingModels,
 	); err != nil {
+		return UsageOverviewData{}, err
+	}
+
+	pricingModels, err := s.usagePricingModelsFromLogs(ctx, logWhere, logArgs)
+	if err != nil {
 		return UsageOverviewData{}, err
 	}
 
@@ -1837,6 +1833,60 @@ func (s postgresConsoleService) usageOverviewFromLogs(ctx context.Context, query
 		TotalCost:      formatMicroyuanAmount(totalCostMicroyuan),
 		PricingModels:  pricingModels,
 	}, nil
+}
+
+func (s postgresConsoleService) usagePricingModelsFromLogs(ctx context.Context, whereClause string, args []any) ([]PricingModelItem, error) {
+	rows, err := s.db.Query(ctx, `
+		select distinct on (model_name)
+			model_name,
+			input_price_microyuan_per_million,
+			output_price_microyuan_per_million,
+			cached_price_microyuan_per_million
+		from (
+			select
+				coalesce(nullif(l.upstream_model, ''), l.request_model) as model_name,
+				l.input_price_microyuan_per_million,
+				l.output_price_microyuan_per_million,
+				l.cached_price_microyuan_per_million,
+				l.request_started_at,
+				l.id
+			from llm_request_logs l
+			left join route_catalog r on r.id = l.route_id
+			left join provider_credentials pc on pc.id = l.provider_credential_id
+			where `+whereClause+`
+			  and coalesce(nullif(l.upstream_model, ''), l.request_model) <> ''
+		) pricing
+		order by model_name asc, request_started_at desc, id desc;
+	`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]PricingModelItem, 0)
+	for rows.Next() {
+		var item PricingModelItem
+		var inputPriceMicroyuanPerMillion int64
+		var outputPriceMicroyuanPerMillion int64
+		var cachedPriceMicroyuanPerMillion int64
+		if err := rows.Scan(
+			&item.Model,
+			&inputPriceMicroyuanPerMillion,
+			&outputPriceMicroyuanPerMillion,
+			&cachedPriceMicroyuanPerMillion,
+		); err != nil {
+			return nil, err
+		}
+		item.InputPrice = formatMicroyuanPerMillionPrice(inputPriceMicroyuanPerMillion)
+		item.OutputPrice = formatMicroyuanPerMillionPrice(outputPriceMicroyuanPerMillion)
+		item.CachedPrice = formatMicroyuanPerMillionPrice(cachedPriceMicroyuanPerMillion)
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return items, nil
 }
 
 func (s postgresConsoleService) usageTrendsFromLogs(ctx context.Context, query UsageQuery) (UsageTrendData, error) {
