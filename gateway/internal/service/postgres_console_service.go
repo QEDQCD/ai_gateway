@@ -1837,7 +1837,7 @@ func (s postgresConsoleService) usageOverviewFromLogs(ctx context.Context, query
 
 func (s postgresConsoleService) usagePricingModelsFromLogs(ctx context.Context, whereClause string, args []any) ([]PricingModelItem, error) {
 	rows, err := s.db.Query(ctx, `
-		select distinct on (model_name)
+		select distinct
 			model_name,
 			input_price_microyuan_per_million,
 			output_price_microyuan_per_million,
@@ -1847,16 +1847,18 @@ func (s postgresConsoleService) usagePricingModelsFromLogs(ctx context.Context, 
 				coalesce(nullif(l.upstream_model, ''), l.request_model) as model_name,
 				l.input_price_microyuan_per_million,
 				l.output_price_microyuan_per_million,
-				l.cached_price_microyuan_per_million,
-				l.request_started_at,
-				l.id
+				l.cached_price_microyuan_per_million
 			from llm_request_logs l
 			left join route_catalog r on r.id = l.route_id
 			left join provider_credentials pc on pc.id = l.provider_credential_id
 			where `+whereClause+`
 			  and coalesce(nullif(l.upstream_model, ''), l.request_model) <> ''
 		) pricing
-		order by model_name asc, request_started_at desc, id desc;
+		order by
+			model_name asc,
+			input_price_microyuan_per_million asc,
+			output_price_microyuan_per_million asc,
+			cached_price_microyuan_per_million asc;
 	`, args...)
 	if err != nil {
 		return nil, err

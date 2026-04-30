@@ -1908,6 +1908,102 @@ func TestPostgresConsoleServiceUsageOverview(t *testing.T) {
 	}
 }
 
+func TestPostgresConsoleServiceUsageOverviewIncludesDistinctPricingVariantsPerModel(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	if _, err := conn.Exec(ctx, `
+		insert into llm_request_logs (
+			id,
+			tenant_id,
+			platform_api_key_id,
+			platform_api_key_name,
+			provider_credential_id,
+			route_id,
+			request_path,
+			request_model,
+			upstream_model,
+			usage_source,
+			usage_status,
+			status_code,
+			latency_ms,
+			prompt_tokens,
+			completion_tokens,
+			total_tokens,
+			cached_tokens,
+			input_price_microyuan_per_million,
+			output_price_microyuan_per_million,
+			cached_price_microyuan_per_million,
+			input_cost_microyuan,
+			output_cost_microyuan,
+			cached_cost_microyuan,
+			total_cost_microyuan,
+			error_code,
+			error_message,
+			request_started_at,
+			request_completed_at,
+			created_at
+		) values (
+			'llmreq_demo_pricing_variant',
+			'tenant_demo',
+			'pak_demo',
+			'demo key',
+			'provider_openai_demo',
+			'route:provider_openai_demo:default',
+			'/v1/chat/completions',
+			'gpt-4o-mini',
+			'gpt-4o-mini',
+			'upstream',
+			'success',
+			200,
+			120,
+			20,
+			10,
+			30,
+			4,
+			3500000,
+			6500000,
+			800000,
+			56,
+			65,
+			3,
+			124,
+			'',
+			'',
+			timestamptz '2026-04-24T10:20:00Z',
+			timestamptz '2026-04-24T10:20:00.120Z',
+			timestamptz '2026-04-24T10:20:01Z'
+		);
+	`); err != nil {
+		t.Fatalf("insert pricing variant request log failed: %v", err)
+	}
+
+	payload, err := console.UsageOverview(ctx, service.UsageQuery{
+		From: mustParseUsageTime(t, "2026-04-24T09:00:00Z"),
+		To:   mustParseUsageTime(t, "2026-04-24T11:00:00Z"),
+	})
+	if err != nil {
+		t.Fatalf("UsageOverview failed: %v", err)
+	}
+
+	if !containsPricingModel(payload.PricingModels, "gpt-4o-mini", "2.50 ￥/M", "5.00 ￥/M", "0.50 ￥/M") {
+		t.Fatalf("expected pricing_models to include base gpt-4o-mini pricing, got %#v", payload.PricingModels)
+	}
+	if !containsPricingModel(payload.PricingModels, "gpt-4o-mini", "3.50 ￥/M", "6.50 ￥/M", "0.80 ￥/M") {
+		t.Fatalf("expected pricing_models to include variant gpt-4o-mini pricing, got %#v", payload.PricingModels)
+	}
+	if !containsPricingModel(payload.PricingModels, "text-embedding-3-small", "1.25 ￥/M", "0.00 ￥/M", "0.00 ￥/M") {
+		t.Fatalf("expected pricing_models to retain embedding pricing, got %#v", payload.PricingModels)
+	}
+	if len(payload.PricingModels) != 3 {
+		t.Fatalf("expected 3 pricing model variants, got %d (%#v)", len(payload.PricingModels), payload.PricingModels)
+	}
+}
+
 func TestPostgresConsoleServiceUsageLatencyWall(t *testing.T) {
 	t.Parallel()
 
