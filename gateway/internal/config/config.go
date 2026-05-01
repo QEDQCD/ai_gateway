@@ -34,6 +34,9 @@ type Config struct {
 	SeedProviderAPIKey      string
 	SeedProvider            string
 	SeedProviderDisplayName string
+	MIMOProviderBaseURL     string
+	MIMOProviderAPIKey      string
+	MIMOProviderDisplayName string
 	ProviderSecretKey       string
 	PlatformAPIKeySecretKey string
 	SeedAdminPassword       string
@@ -90,6 +93,9 @@ func Load() Config {
 		SeedProviderAPIKey:               defaultString(lookupEnv("GATEWAY_SEED_PROVIDER_API_KEY"), lookupEnv("GATEWAY_BOOTSTRAP_PROVIDER_API_KEY")),
 		SeedProvider:                     defaultString(lookupEnv("GATEWAY_SEED_PROVIDER"), bootstrapProvider),
 		SeedProviderDisplayName:          defaultString(lookupEnv("GATEWAY_SEED_PROVIDER_DISPLAY_NAME"), bootstrapProviderDisplayName),
+		MIMOProviderBaseURL:              defaultString(lookupEnv("GATEWAY_MIMO_PROVIDER_BASE_URL"), "https://api.xiaomimimo.com/v1"),
+		MIMOProviderAPIKey:               lookupEnv("GATEWAY_MIMO_PROVIDER_API_KEY"),
+		MIMOProviderDisplayName:          defaultString(lookupEnv("GATEWAY_MIMO_PROVIDER_DISPLAY_NAME"), "Xiaomi MIMO"),
 		ProviderSecretKey:                lookupEnv("GATEWAY_PROVIDER_SECRET_KEY"),
 		PlatformAPIKeySecretKey:          lookupEnv("GATEWAY_PLATFORM_API_KEY_SECRET_KEY"),
 		SeedAdminPassword:                lookupEnv("GATEWAY_CONSOLE_ADMIN_PASSWORD"),
@@ -107,7 +113,7 @@ func Load() Config {
 		BootstrapSupportedModels:         bootstrapSupportedModels,
 		BootstrapQuotaExhaustedTenantIDs: splitCommaSeparatedEnv(os.Getenv("GATEWAY_QUOTA_EXHAUSTED_TENANTS")),
 		ChatFastModel:                    defaultString(os.Getenv("GATEWAY_CHAT_FAST_MODEL"), "gateway-chat-fast"),
-		ChatReasoningModel:               defaultString(os.Getenv("GATEWAY_CHAT_REASONING_MODEL"), "gateway-chat-reasoning"),
+		ChatReasoningModel:               defaultString(os.Getenv("GATEWAY_CHAT_REASONING_MODEL"), "mimo-v2.5-pro"),
 		SmartRoutingCodingKeywords:       splitCommaSeparatedEnv(defaultString(os.Getenv("GATEWAY_SMART_ROUTING_CODING_KEYWORDS"), "写代码,实现,重构,debug,报错,异常,单元测试,架构设计")),
 		SmartRoutingLongPromptThreshold:  int(lookupInt64Env("GATEWAY_SMART_ROUTING_LONG_PROMPT_THRESHOLD", 240)),
 		ModelTokenPricing:                modelTokenPricing,

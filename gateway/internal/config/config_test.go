@@ -7,6 +7,43 @@ import (
 	"testing"
 )
 
+func TestLoadDefaultsMIMOSeedProvider(t *testing.T) {
+	t.Setenv("GATEWAY_MIMO_PROVIDER_API_KEY", "")
+	t.Setenv("GATEWAY_MIMO_PROVIDER_API_KEY_FILE", "")
+	t.Setenv("GATEWAY_MIMO_PROVIDER_BASE_URL", "")
+	t.Setenv("GATEWAY_MIMO_PROVIDER_DISPLAY_NAME", "")
+	t.Setenv("GATEWAY_CHAT_REASONING_MODEL", "")
+
+	cfg := Load()
+
+	if cfg.MIMOProviderBaseURL != "https://api.xiaomimimo.com/v1" {
+		t.Fatalf("expected MIMO base URL %q, got %q", "https://api.xiaomimimo.com/v1", cfg.MIMOProviderBaseURL)
+	}
+	if cfg.MIMOProviderDisplayName != "Xiaomi MIMO" {
+		t.Fatalf("expected MIMO display name %q, got %q", "Xiaomi MIMO", cfg.MIMOProviderDisplayName)
+	}
+	if cfg.ChatReasoningModel != "mimo-v2.5-pro" {
+		t.Fatalf("expected reasoning model %q, got %q", "mimo-v2.5-pro", cfg.ChatReasoningModel)
+	}
+}
+
+func TestLoadReadsMIMOAPIKeyFromFile(t *testing.T) {
+	dir := t.TempDir()
+	keyPath := filepath.Join(dir, "mimo_api_key")
+	if err := os.WriteFile(keyPath, []byte("file-secret-key"), 0o600); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	t.Setenv("GATEWAY_MIMO_PROVIDER_API_KEY", "")
+	t.Setenv("GATEWAY_MIMO_PROVIDER_API_KEY_FILE", keyPath)
+
+	cfg := Load()
+
+	if cfg.MIMOProviderAPIKey != "file-secret-key" {
+		t.Fatalf("expected MIMO provider key %q, got %q", "file-secret-key", cfg.MIMOProviderAPIKey)
+	}
+}
+
 func TestLoadDefaultsUseDashScopeBootstrapSettings(t *testing.T) {
 	t.Setenv("GATEWAY_BOOTSTRAP_PROVIDER", "")
 	t.Setenv("GATEWAY_BOOTSTRAP_SUPPORTED_MODELS", "")
@@ -185,8 +222,8 @@ func TestLoadSmartRoutingConfigDefaultsAndOverrides(t *testing.T) {
 		if cfg.ChatFastModel != "gateway-chat-fast" {
 			t.Fatalf("expected ChatFastModel %q, got %q", "gateway-chat-fast", cfg.ChatFastModel)
 		}
-		if cfg.ChatReasoningModel != "gateway-chat-reasoning" {
-			t.Fatalf("expected ChatReasoningModel %q, got %q", "gateway-chat-reasoning", cfg.ChatReasoningModel)
+		if cfg.ChatReasoningModel != "mimo-v2.5-pro" {
+			t.Fatalf("expected ChatReasoningModel %q, got %q", "mimo-v2.5-pro", cfg.ChatReasoningModel)
 		}
 		if got, want := cfg.SmartRoutingCodingKeywords, []string{"写代码", "实现", "重构", "debug", "报错", "异常", "单元测试", "架构设计"}; len(got) != len(want) {
 			t.Fatalf("expected SmartRoutingCodingKeywords %#v, got %#v", want, got)
