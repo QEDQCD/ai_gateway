@@ -2500,6 +2500,16 @@ describe("控制台路由", () => {
         buckets: ["04-24 18:00", "04-24 19:00"],
         lanes: [
           {
+            model: "text-embedding-v4",
+            route_label: "default-route",
+            success_rate: "100.00%",
+            average_latency: "64 ms",
+            cells: [
+              { bucket_label: "04-24 18:00", latency: "64 ms", status: "健康", requests: "4 次" },
+              { bucket_label: "04-24 19:00", latency: "--", status: "空闲", requests: "0 次" },
+            ],
+          },
+          {
             model: "qwen-flash",
             route_label: "default-route",
             success_rate: "98.00%",
@@ -2578,6 +2588,7 @@ describe("控制台路由", () => {
     expect(screen.getByText("0.04 ￥")).toBeInTheDocument();
     expect(screen.getAllByText("2.00 ￥/M").length).toBeGreaterThan(0);
     expect(screen.getAllByText("gpt-4o-mini").length).toBeGreaterThan(0);
+    expect(screen.queryByText("text-embedding-v4")).not.toBeInTheDocument();
     expect(screen.getByText("平台默认线路")).toBeInTheDocument();
     expect(screen.queryByText(/DashScope/)).not.toBeInTheDocument();
     expect(screen.queryByText(new RegExp(hiddenKnowledgeTerm))).not.toBeInTheDocument();

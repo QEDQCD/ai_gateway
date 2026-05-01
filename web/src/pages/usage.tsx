@@ -69,6 +69,11 @@ function formatTokenCost(tokens: string, cost: string) {
   return `${formatValue(tokens)} / ${formatValue(cost)}`;
 }
 
+function shouldShowLatencyLane(model: string) {
+  const normalizedModel = model.trim().toLowerCase();
+  return !normalizedModel.startsWith("text-embedding");
+}
+
 export function UsagePage() {
   const [offset, setOffset] = useState(0);
   const [wallWindow, setWallWindow] = useState<WallWindow>("24h");
@@ -111,6 +116,7 @@ export function UsagePage() {
   const strongestFailure = Math.max(1, ...failures.data.breakdown.map((item) => toCount(item.value)));
   const visibleWallLabel =
     wallWindows.find((item) => item.key === wallWindow)?.label ?? "最近 24 小时";
+  const visibleLatencyLanes = latencyWall.data.lanes.filter((lane) => shouldShowLatencyLane(lane.model));
 
   return (
     <div className="page-grid page-grid--usage">
@@ -189,7 +195,7 @@ export function UsagePage() {
             </span>
           ))}
         </div>
-        {latencyWall.data.lanes.length > 0 ? (
+        {visibleLatencyLanes.length > 0 ? (
           <div className="usage-wall__board">
             <div className="usage-wall__header">
               <div>模型 / 平台线路</div>
@@ -199,7 +205,7 @@ export function UsagePage() {
                 ))}
               </div>
             </div>
-            {latencyWall.data.lanes.map((lane) => (
+            {visibleLatencyLanes.map((lane) => (
               <div
                 key={`${lane.model}-${neutralizeLineLabel(lane.route_label)}`}
                 className="usage-wall__lane"
