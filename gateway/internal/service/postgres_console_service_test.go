@@ -2150,6 +2150,125 @@ func TestPostgresConsoleServiceUsageLatencyWall(t *testing.T) {
 	}
 }
 
+func TestPostgresConsoleServiceUsageLatencyWallIncludesConfiguredChatRoutesWithoutUsage(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	if _, err := conn.Exec(ctx, `
+		delete from llm_request_events;
+		delete from llm_usage_agg_hourly;
+		delete from llm_request_logs;
+		delete from route_catalog;
+		delete from provider_credentials;
+
+		insert into provider_credentials (id, provider, display_name, supported_models, base_url, encrypted_secret, status) values
+			('provider_dashscope_primary', 'dashscope', 'Qwen', '{"qwen-flash"}', 'https://dashscope.aliyuncs.com/compatible-mode/v1', '', 'active'),
+			('provider_mimo_primary', 'mimo', 'MIMO', '{"mimo-v2.5-pro"}', 'https://api.xiaomimimo.com/v1', '', 'active');
+
+		insert into route_catalog (id, requested_model, resolved_provider, provider_credential_id, endpoint, latency_ms, health_status, request_mode, updated_at) values
+			('route:provider_dashscope_primary:default', 'qwen-flash', 'Qwen', 'provider_dashscope_primary', '/v1/chat/completions', 218, 'healthy', '聊天', now()),
+			('route:provider_mimo_primary:default', 'mimo-v2.5-pro', 'MIMO', 'provider_mimo_primary', '/v1/chat/completions', 286, 'warning', '聊天', now());
+
+		insert into llm_request_logs (
+			id,
+			tenant_id,
+			platform_api_key_id,
+			platform_api_key_name,
+			provider_credential_id,
+			route_id,
+			request_path,
+			request_model,
+			upstream_model,
+			usage_source,
+			usage_status,
+			status_code,
+			latency_ms,
+			prompt_tokens,
+			completion_tokens,
+			total_tokens,
+			cached_tokens,
+			input_price_microyuan_per_million,
+			output_price_microyuan_per_million,
+			cached_price_microyuan_per_million,
+			input_cost_microyuan,
+			output_cost_microyuan,
+			cached_cost_microyuan,
+			total_cost_microyuan,
+			error_code,
+			error_message,
+			request_started_at,
+			request_completed_at,
+			created_at
+		) values (
+			'llmreq_usage_qwen_only',
+			'tenant_demo',
+			'pak_demo',
+			'demo key',
+			'provider_dashscope_primary',
+			'route:provider_dashscope_primary:default',
+			'/v1/chat/completions',
+			'qwen-flash',
+			'qwen-flash',
+			'upstream',
+			'success',
+			200,
+			182,
+			12,
+			6,
+			18,
+			0,
+			2000000,
+			20000000,
+			500000,
+			24,
+			120,
+			0,
+			144,
+			'',
+			'',
+			now() - interval '20 minutes',
+			now() - interval '20 minutes' + interval '182 milliseconds',
+			now() - interval '20 minutes'
+		);
+	`); err != nil {
+		t.Fatalf("seed fallback usage latency wall failed: %v", err)
+	}
+
+	payload, err := console.UsageLatencyWall(ctx, service.UsageQuery{Window: "24h"})
+	if err != nil {
+		t.Fatalf("UsageLatencyWall failed: %v", err)
+	}
+
+	models := make([]string, 0, len(payload.Lanes))
+	var mimoLane service.UsageLatencyLane
+	for _, lane := range payload.Lanes {
+		models = append(models, lane.Model)
+		if lane.Model == "mimo-v2.5-pro" {
+			mimoLane = lane
+		}
+	}
+
+	if !slices.Contains(models, "qwen-flash") {
+		t.Fatalf("expected qwen-flash lane, got %v", models)
+	}
+	if !slices.Contains(models, "mimo-v2.5-pro") {
+		t.Fatalf("expected mimo-v2.5-pro fallback lane, got %v", models)
+	}
+	if mimoLane.Model == "" {
+		t.Fatalf("expected mimo fallback lane to be populated, got %+v", payload.Lanes)
+	}
+	if len(mimoLane.Cells) == 0 {
+		t.Fatalf("expected mimo fallback lane to contain empty buckets, got %+v", mimoLane)
+	}
+	if mimoLane.Cells[0].Status != "空窗" {
+		t.Fatalf("expected mimo fallback lane status 空窗, got %+v", mimoLane.Cells[0])
+	}
+}
+
 func TestPostgresConsoleServiceUsageOverviewFiltersByErrorCategory(t *testing.T) {
 	t.Parallel()
 

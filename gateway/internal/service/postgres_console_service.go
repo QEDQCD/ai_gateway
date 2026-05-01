@@ -25,6 +25,21 @@ type consoleDB interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 }
 
+type usageLatencyBucketStat struct {
+	requestCount int64
+	successCount int64
+	avgLatencyMS int64
+}
+
+type usageLatencyLaneAccumulator struct {
+	model             string
+	provider          string
+	totalRequests     int64
+	totalSuccess      int64
+	totalLatencyTimes int64
+	buckets           map[time.Time]usageLatencyBucketStat
+}
+
 type postgresConsoleService struct {
 	db              consoleDB
 	authService     AuthService
@@ -1689,21 +1704,7 @@ func (s postgresConsoleService) UsageLatencyWall(ctx context.Context, query Usag
 	}
 	defer rows.Close()
 
-	type bucketStat struct {
-		requestCount int64
-		successCount int64
-		avgLatencyMS int64
-	}
-	type laneAccumulator struct {
-		model             string
-		provider          string
-		totalRequests     int64
-		totalSuccess      int64
-		totalLatencyTimes int64
-		buckets           map[time.Time]bucketStat
-	}
-
-	lanesByKey := make(map[string]*laneAccumulator)
+	lanesByKey := make(map[string]*usageLatencyLaneAccumulator)
 	for rows.Next() {
 		var requestModel string
 		var resolvedModel string
@@ -1720,17 +1721,17 @@ func (s postgresConsoleService) UsageLatencyWall(ctx context.Context, query Usag
 		key := model + "::" + provider
 		lane := lanesByKey[key]
 		if lane == nil {
-			lane = &laneAccumulator{
+			lane = &usageLatencyLaneAccumulator{
 				model:    model,
 				provider: provider,
-				buckets:  make(map[time.Time]bucketStat),
+				buckets:  make(map[time.Time]usageLatencyBucketStat),
 			}
 			lanesByKey[key] = lane
 		}
 		lane.totalRequests += requestCount
 		lane.totalSuccess += successCount
 		lane.totalLatencyTimes += avgLatencyMS * requestCount
-		lane.buckets[bucketStart.UTC()] = bucketStat{
+		lane.buckets[bucketStart.UTC()] = usageLatencyBucketStat{
 			requestCount: requestCount,
 			successCount: successCount,
 			avgLatencyMS: avgLatencyMS,
@@ -1738,6 +1739,22 @@ func (s postgresConsoleService) UsageLatencyWall(ctx context.Context, query Usag
 	}
 	if err := rows.Err(); err != nil {
 		return UsageLatencyWallData{}, err
+	}
+
+	configuredRoutes, err := s.usageLatencyConfiguredChatRoutes(ctx)
+	if err != nil {
+		return UsageLatencyWallData{}, err
+	}
+	for _, route := range configuredRoutes {
+		if usageLatencyHasConfiguredRouteLane(lanesByKey, route.model, route.provider) {
+			continue
+		}
+		key := route.model + "::" + route.provider
+		lanesByKey[key] = &usageLatencyLaneAccumulator{
+			model:    route.model,
+			provider: route.provider,
+			buckets:  make(map[time.Time]usageLatencyBucketStat),
+		}
 	}
 
 	buckets := usageLatencyBuckets(query.From, query.To, bucketStep, bucketLayout)
@@ -1750,7 +1767,7 @@ func (s postgresConsoleService) UsageLatencyWall(ctx context.Context, query Usag
 		return result, nil
 	}
 
-	laneList := make([]*laneAccumulator, 0, len(lanesByKey))
+	laneList := make([]*usageLatencyLaneAccumulator, 0, len(lanesByKey))
 	for _, lane := range lanesByKey {
 		laneList = append(laneList, lane)
 	}
@@ -1801,6 +1818,64 @@ func (s postgresConsoleService) UsageLatencyWall(ctx context.Context, query Usag
 	}
 
 	return result, nil
+}
+
+type usageLatencyConfiguredRoute struct {
+	model    string
+	provider string
+}
+
+func (s postgresConsoleService) usageLatencyConfiguredChatRoutes(ctx context.Context) ([]usageLatencyConfiguredRoute, error) {
+	rows, err := s.db.Query(ctx, `
+		select distinct
+			rc.requested_model,
+			coalesce(pc.display_name, rc.provider_credential_id)
+		from route_catalog rc
+		left join provider_credentials pc on pc.id = rc.provider_credential_id
+		where rc.endpoint = '/v1/chat/completions'
+		order by rc.requested_model asc;
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	routes := make([]usageLatencyConfiguredRoute, 0)
+	for rows.Next() {
+		var route usageLatencyConfiguredRoute
+		if err := rows.Scan(&route.model, &route.provider); err != nil {
+			return nil, err
+		}
+		route.model = strings.TrimSpace(route.model)
+		route.provider = strings.TrimSpace(route.provider)
+		if route.model == "" || route.provider == "" {
+			continue
+		}
+		routes = append(routes, route)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return routes, nil
+}
+
+func usageLatencyHasConfiguredRouteLane(
+	lanesByKey map[string]*usageLatencyLaneAccumulator,
+	requestedModel string,
+	provider string,
+) bool {
+	trimmedRequestedModel := strings.TrimSpace(requestedModel)
+	trimmedProvider := strings.TrimSpace(provider)
+	for _, lane := range lanesByKey {
+		if strings.TrimSpace(lane.provider) != trimmedProvider {
+			continue
+		}
+		if lane.model == trimmedRequestedModel || strings.HasSuffix(lane.model, " -> "+trimmedRequestedModel) {
+			return true
+		}
+	}
+	return false
 }
 
 func usageLatencyLaneModel(requestModel string, resolvedModel string) string {
