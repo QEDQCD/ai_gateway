@@ -254,6 +254,109 @@ func TestPostgresConsoleServiceOverviewUsesLLMLogsWithoutAuditLogs(t *testing.T)
 	}
 }
 
+func TestPostgresConsoleServiceOverviewRouteHealthIncludesConfiguredMIMOWithoutUsage(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	if _, err := conn.Exec(ctx, `
+		delete from llm_request_events;
+		delete from llm_usage_agg_hourly;
+		delete from llm_request_logs;
+		delete from route_catalog;
+		delete from provider_credentials;
+
+		insert into provider_credentials (id, provider, display_name, supported_models, base_url, encrypted_secret, status) values
+			('provider_dashscope_primary', 'dashscope', 'Qwen', '{"qwen-flash"}', 'https://dashscope.aliyuncs.com/compatible-mode/v1', '', 'active'),
+			('provider_mimo_primary', 'mimo', 'MIMO', '{"mimo-v2.5-pro"}', 'https://api.xiaomimimo.com/v1', '', 'active');
+
+		insert into route_catalog (id, requested_model, resolved_provider, provider_credential_id, endpoint, latency_ms, health_status, request_mode, updated_at) values
+			('route:provider_dashscope_primary:default', 'qwen-flash', 'Qwen', 'provider_dashscope_primary', '/v1/chat/completions', 218, 'healthy', '聊天', now()),
+			('route:provider_mimo_primary:default', 'mimo-v2.5-pro', 'MIMO', 'provider_mimo_primary', '/v1/chat/completions', 286, 'warning', '聊天', now());
+
+		insert into llm_request_logs (
+			id,
+			tenant_id,
+			platform_api_key_id,
+			platform_api_key_name,
+			provider_credential_id,
+			route_id,
+			request_path,
+			request_model,
+			upstream_model,
+			resolved_model,
+			usage_source,
+			usage_status,
+			status_code,
+			latency_ms,
+			prompt_tokens,
+			completion_tokens,
+			total_tokens,
+			cached_tokens,
+			input_price_microyuan_per_million,
+			output_price_microyuan_per_million,
+			cached_price_microyuan_per_million,
+			input_cost_microyuan,
+			output_cost_microyuan,
+			cached_cost_microyuan,
+			total_cost_microyuan,
+			error_code,
+			error_message,
+			request_started_at,
+			request_completed_at,
+			created_at
+		) values (
+			'llmreq_overview_qwen_only',
+			'tenant_demo',
+			'pak_demo',
+			'demo key',
+			'provider_dashscope_primary',
+			'route:provider_dashscope_primary:default',
+			'/v1/chat/completions',
+			'gateway-public',
+			'qwen-flash',
+			'qwen-flash',
+			'upstream',
+			'success',
+			200,
+			182,
+			12,
+			6,
+			18,
+			0,
+			2000000,
+			20000000,
+			500000,
+			24,
+			120,
+			0,
+			144,
+			'',
+			'',
+			now() - interval '20 minutes',
+			now() - interval '20 minutes' + interval '182 milliseconds',
+			now() - interval '20 minutes'
+		);
+	`); err != nil {
+		t.Fatalf("seed overview route health fallback failed: %v", err)
+	}
+
+	payload, err := console.Overview(ctx)
+	if err != nil {
+		t.Fatalf("Overview failed: %v", err)
+	}
+
+	if !containsTableRowValue(payload.RouteHealth, "qwen-flash") {
+		t.Fatalf("expected route health to include qwen-flash, got %#v", payload.RouteHealth)
+	}
+	if !containsTableRowValue(payload.RouteHealth, "mimo-v2.5-pro") {
+		t.Fatalf("expected route health to include mimo-v2.5-pro, got %#v", payload.RouteHealth)
+	}
+}
+
 func TestPostgresConsoleServiceStreamPlaygroundRejectsEmbeddingsRoute(t *testing.T) {
 	t.Parallel()
 
@@ -2088,6 +2191,107 @@ func TestPostgresConsoleServiceUsageOverviewIncludesDistinctPricingVariantsPerMo
 	}
 }
 
+func TestPostgresConsoleServiceUsageOverviewIncludesConfiguredMIMOPricingWithoutUsage(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	if _, err := conn.Exec(ctx, `
+		delete from llm_request_events;
+		delete from llm_usage_agg_hourly;
+		delete from llm_request_logs;
+		delete from route_catalog;
+		delete from provider_credentials;
+
+		insert into provider_credentials (id, provider, display_name, supported_models, base_url, encrypted_secret, status) values
+			('provider_dashscope_primary', 'dashscope', 'Qwen', '{"qwen-flash"}', 'https://dashscope.aliyuncs.com/compatible-mode/v1', '', 'active'),
+			('provider_mimo_primary', 'mimo', 'MIMO', '{"mimo-v2.5-pro"}', 'https://api.xiaomimimo.com/v1', '', 'active');
+
+		insert into route_catalog (id, requested_model, resolved_provider, provider_credential_id, endpoint, latency_ms, health_status, request_mode, updated_at) values
+			('route:provider_dashscope_primary:default', 'qwen-flash', 'Qwen', 'provider_dashscope_primary', '/v1/chat/completions', 218, 'healthy', '聊天', now()),
+			('route:provider_mimo_primary:default', 'mimo-v2.5-pro', 'MIMO', 'provider_mimo_primary', '/v1/chat/completions', 286, 'warning', '聊天', now());
+
+		insert into llm_request_logs (
+			id,
+			tenant_id,
+			platform_api_key_id,
+			platform_api_key_name,
+			provider_credential_id,
+			route_id,
+			request_path,
+			request_model,
+			upstream_model,
+			usage_source,
+			usage_status,
+			status_code,
+			latency_ms,
+			prompt_tokens,
+			completion_tokens,
+			total_tokens,
+			cached_tokens,
+			input_price_microyuan_per_million,
+			output_price_microyuan_per_million,
+			cached_price_microyuan_per_million,
+			input_cost_microyuan,
+			output_cost_microyuan,
+			cached_cost_microyuan,
+			total_cost_microyuan,
+			error_code,
+			error_message,
+			request_started_at,
+			request_completed_at,
+			created_at
+		) values (
+			'llmreq_pricing_qwen_only',
+			'tenant_demo',
+			'pak_demo',
+			'demo key',
+			'provider_dashscope_primary',
+			'route:provider_dashscope_primary:default',
+			'/v1/chat/completions',
+			'qwen-flash',
+			'qwen-flash',
+			'upstream',
+			'success',
+			200,
+			182,
+			12,
+			6,
+			18,
+			0,
+			2000000,
+			20000000,
+			500000,
+			24,
+			120,
+			0,
+			144,
+			'',
+			'',
+			now() - interval '20 minutes',
+			now() - interval '20 minutes' + interval '182 milliseconds',
+			now() - interval '20 minutes'
+		);
+	`); err != nil {
+		t.Fatalf("seed configured pricing fallback failed: %v", err)
+	}
+
+	payload, err := console.UsageOverview(ctx, service.UsageQuery{Window: "24h"})
+	if err != nil {
+		t.Fatalf("UsageOverview failed: %v", err)
+	}
+
+	if !containsPricingModel(payload.PricingModels, "qwen-flash", "2.00 ￥/M", "20.00 ￥/M", "0.50 ￥/M") {
+		t.Fatalf("expected pricing_models to include qwen-flash pricing, got %#v", payload.PricingModels)
+	}
+	if !containsPricingModel(payload.PricingModels, "mimo-v2.5-pro", "2.00 ￥/M", "20.00 ￥/M", "0.50 ￥/M") {
+		t.Fatalf("expected pricing_models to include mimo-v2.5-pro fallback pricing, got %#v", payload.PricingModels)
+	}
+}
+
 func TestPostgresConsoleServiceUsageLatencyWall(t *testing.T) {
 	t.Parallel()
 
@@ -3593,7 +3797,28 @@ func newUsageConsoleService(t *testing.T, ctx context.Context) (service.ConsoleS
 		t.Fatalf("secret.NewCodec failed: %v", err)
 	}
 
-	return service.NewPostgresConsoleService(conn, nil, nil, nil, "", codec), conn
+	pricingResolver, err := service.NewModelPricingResolver(map[string]service.ModelTokenPrice{
+		"default": {
+			InputMicroyuanPerMillion:  2_000_000,
+			OutputMicroyuanPerMillion: 20_000_000,
+			CachedMicroyuanPerMillion: 500_000,
+		},
+		"qwen-flash": {
+			InputMicroyuanPerMillion:  2_000_000,
+			OutputMicroyuanPerMillion: 20_000_000,
+			CachedMicroyuanPerMillion: 500_000,
+		},
+		"mimo-v2.5-pro": {
+			InputMicroyuanPerMillion:  2_000_000,
+			OutputMicroyuanPerMillion: 20_000_000,
+			CachedMicroyuanPerMillion: 500_000,
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewModelPricingResolver failed: %v", err)
+	}
+
+	return service.NewPostgresConsoleServiceWithPricing(conn, nil, nil, nil, "", pricingResolver, codec), conn
 }
 
 func mustParseUsageTime(t *testing.T, value string) time.Time {

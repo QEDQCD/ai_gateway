@@ -102,10 +102,11 @@ func newDatabaseBackedServerApp(cfg config.Config) *fiber.App {
 		queue.WithPublishFailureTimeout(service.NewUsageAggregator(pool), usageAggregatorPublishFailureTimeout),
 	)
 	smartRouter := newConfiguredSmartRouter(cfg)
+	pricingResolver := mustNewUsagePricingResolver(cfg)
 	chatProxy := service.NewChatProxyService(provider.NewOpenAIClient(http.DefaultClient), usagePublisher, usageRecorder)
 	embeddingProxy := service.NewEmbeddingProxyService(provider.NewOpenAIClient(http.DefaultClient), usagePublisher, usageRecorder)
 	ragProxy := service.NewRAGProxyService(cfg.RAGServiceBaseURL, cfg.RAGServiceUsername, cfg.RAGServicePassword, http.DefaultClient)
-	consoleService := service.NewPostgresConsoleService(pool, authService, chatProxy, ragProxy, cfg.SeedPlatformAPIKey, platformAPIKeySecretCodec)
+	consoleService := service.NewPostgresConsoleServiceWithPricing(pool, authService, chatProxy, ragProxy, cfg.SeedPlatformAPIKey, pricingResolver, platformAPIKeySecretCodec)
 	memberConsoleService := service.NewPostgresMemberConsoleService(pool, service.ConsolePrincipal{}, platformAPIKeySecretCodec)
 
 	return apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{

@@ -47,6 +47,7 @@ type postgresConsoleService struct {
 	ragProxy        RAGProxyService
 	seedPlatformKey string
 	secretService   platformAPIKeySecretService
+	pricingResolver ModelPricingResolver
 }
 
 func NewPostgresConsoleService(
@@ -55,6 +56,26 @@ func NewPostgresConsoleService(
 	chatProxy ChatProxyService,
 	ragProxy RAGProxyService,
 	seedPlatformKey string,
+	secretCodecs ...*secret.Codec,
+) ConsoleService {
+	return NewPostgresConsoleServiceWithPricing(
+		db,
+		authService,
+		chatProxy,
+		ragProxy,
+		seedPlatformKey,
+		ModelPricingResolver{},
+		secretCodecs...,
+	)
+}
+
+func NewPostgresConsoleServiceWithPricing(
+	db consoleDB,
+	authService AuthService,
+	chatProxy ChatProxyService,
+	ragProxy RAGProxyService,
+	seedPlatformKey string,
+	pricingResolver ModelPricingResolver,
 	secretCodecs ...*secret.Codec,
 ) ConsoleService {
 	if db == nil {
@@ -71,6 +92,7 @@ func NewPostgresConsoleService(
 		ragProxy:        ragProxy,
 		seedPlatformKey: seedPlatformKey,
 		secretService:   newPlatformAPIKeySecretService(secretCodec),
+		pricingResolver: pricingResolver,
 	}
 }
 
@@ -202,39 +224,9 @@ func (s postgresConsoleService) Overview(ctx context.Context) (OverviewPageData,
 		return OverviewPageData{}, err
 	}
 
-	routeHealthRows, err := s.collectTableRows(ctx, `
-		with recent as (
-			select
-				request_model,
-				max(provider_credential_id) as provider_credential_id,
-				round(avg(latency_ms))::integer as avg_latency_ms,
-				sum(case when usage_status = 'success' then 1 else 0 end) as success_count,
-				count(*) as total_count
-			from llm_request_logs
-			where request_started_at >= now() - interval '24 hours'
-			group by request_model
-		)
-		select
-			recent.request_model,
-			coalesce(provider_credentials.display_name, '-'),
-			recent.avg_latency_ms::text || ' ms',
-			case
-				when recent.success_count = recent.total_count then '健康'
-				when recent.success_count = 0 then '降级'
-				else '告警'
-			end
-		from recent
-		left join provider_credentials on provider_credentials.id = recent.provider_credential_id
-		order by recent.total_count desc, recent.request_model asc
-		limit 3;
-	`)
+	routeHealthRows, err := s.overviewRouteHealthRows(ctx)
 	if err != nil {
 		return OverviewPageData{}, err
-	}
-	for index := range routeHealthRows {
-		if len(routeHealthRows[index].Columns) > 1 {
-			routeHealthRows[index].Columns[1] = neutralizeConsoleRouteLabel(routeHealthRows[index].Columns[1])
-		}
 	}
 
 	topModelsRows, err := s.collectTableRows(ctx, `
@@ -1823,13 +1815,17 @@ func (s postgresConsoleService) UsageLatencyWall(ctx context.Context, query Usag
 type usageLatencyConfiguredRoute struct {
 	model    string
 	provider string
+	latency  int64
+	status   string
 }
 
 func (s postgresConsoleService) usageLatencyConfiguredChatRoutes(ctx context.Context) ([]usageLatencyConfiguredRoute, error) {
 	rows, err := s.db.Query(ctx, `
 		select distinct
 			rc.requested_model,
-			coalesce(pc.display_name, rc.provider_credential_id)
+			coalesce(pc.display_name, rc.provider_credential_id),
+			coalesce(rc.latency_ms, 0),
+			coalesce(rc.health_status, '')
 		from route_catalog rc
 		left join provider_credentials pc on pc.id = rc.provider_credential_id
 		where rc.endpoint = '/v1/chat/completions'
@@ -1843,11 +1839,12 @@ func (s postgresConsoleService) usageLatencyConfiguredChatRoutes(ctx context.Con
 	routes := make([]usageLatencyConfiguredRoute, 0)
 	for rows.Next() {
 		var route usageLatencyConfiguredRoute
-		if err := rows.Scan(&route.model, &route.provider); err != nil {
+		if err := rows.Scan(&route.model, &route.provider, &route.latency, &route.status); err != nil {
 			return nil, err
 		}
 		route.model = strings.TrimSpace(route.model)
 		route.provider = strings.TrimSpace(route.provider)
+		route.status = strings.TrimSpace(route.status)
 		if route.model == "" || route.provider == "" {
 			continue
 		}
@@ -1887,6 +1884,89 @@ func usageLatencyLaneModel(requestModel string, resolvedModel string) string {
 		return trimmedRequestModel + " -> " + trimmedResolvedModel
 	}
 	return trimmedRequestModel
+}
+
+func (s postgresConsoleService) overviewRouteHealthRows(ctx context.Context) ([]TableRow, error) {
+	configuredRoutes, err := s.usageLatencyConfiguredChatRoutes(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	type recentRouteHealth struct {
+		latencyMS    int64
+		successCount int64
+		totalCount   int64
+	}
+
+	rows, err := s.db.Query(ctx, `
+		select
+			coalesce(nullif(l.resolved_model, ''), coalesce(nullif(l.upstream_model, ''), l.request_model)) as model_name,
+			coalesce(round(avg(l.latency_ms)), 0)::bigint as avg_latency_ms,
+			sum(case when l.usage_status = 'success' then 1 else 0 end) as success_count,
+			count(*) as total_count
+		from llm_request_logs l
+		where l.request_started_at >= now() - interval '24 hours'
+		group by model_name;
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	recentByModel := make(map[string]recentRouteHealth)
+	for rows.Next() {
+		var model string
+		var item recentRouteHealth
+		if err := rows.Scan(&model, &item.latencyMS, &item.successCount, &item.totalCount); err != nil {
+			return nil, err
+		}
+		recentByModel[strings.TrimSpace(model)] = item
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	result := make([]TableRow, 0, len(configuredRoutes))
+	for _, route := range configuredRoutes {
+		status := translateRouteHealthStatus(route.status)
+		latency := fmt.Sprintf("%d ms", route.latency)
+		if recent, ok := recentByModel[route.model]; ok {
+			latency = fmt.Sprintf("%d ms", recent.latencyMS)
+			switch {
+			case recent.totalCount == 0:
+			case recent.successCount == recent.totalCount:
+				status = "健康"
+			case recent.successCount == 0:
+				status = "降级"
+			default:
+				status = "告警"
+			}
+		}
+
+		result = append(result, TableRow{
+			Columns: []string{
+				route.model,
+				neutralizeConsoleRouteLabel(route.provider),
+				latency,
+				status,
+			},
+		})
+	}
+
+	return result, nil
+}
+
+func translateRouteHealthStatus(status string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "healthy":
+		return "健康"
+	case "warning", "degraded":
+		return "告警"
+	case "down", "failed":
+		return "降级"
+	default:
+		return "待观测"
+	}
 }
 
 func (s postgresConsoleService) usageOverviewFromLogs(ctx context.Context, query UsageQuery) (UsageOverviewData, error) {
@@ -2019,6 +2099,43 @@ func (s postgresConsoleService) usagePricingModelsFromLogs(ctx context.Context, 
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+
+	configuredRoutes, err := s.usageLatencyConfiguredChatRoutes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	modelsWithObservedPricing := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		modelsWithObservedPricing[strings.TrimSpace(item.Model)] = struct{}{}
+	}
+	for _, route := range configuredRoutes {
+		if _, ok := modelsWithObservedPricing[route.model]; ok {
+			continue
+		}
+		price, err := s.pricingResolver.Resolve(route.model)
+		if err != nil {
+			continue
+		}
+		items = append(items, PricingModelItem{
+			Model:       route.model,
+			InputPrice:  formatMicroyuanPerMillionPrice(price.InputMicroyuanPerMillion),
+			OutputPrice: formatMicroyuanPerMillionPrice(price.OutputMicroyuanPerMillion),
+			CachedPrice: formatMicroyuanPerMillionPrice(price.CachedMicroyuanPerMillion),
+		})
+		modelsWithObservedPricing[route.model] = struct{}{}
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Model == items[j].Model {
+			if items[i].InputPrice == items[j].InputPrice {
+				if items[i].OutputPrice == items[j].OutputPrice {
+					return items[i].CachedPrice < items[j].CachedPrice
+				}
+				return items[i].OutputPrice < items[j].OutputPrice
+			}
+			return items[i].InputPrice < items[j].InputPrice
+		}
+		return items[i].Model < items[j].Model
+	})
 
 	return items, nil
 }
