@@ -2258,11 +2258,28 @@ describe("控制台路由", () => {
         ],
         items: [
           {
-            requested_model: "gpt-4o-mini",
+            requested_model: "qwen-flash",
             route_label: "default-route",
             credential: providerAlias,
             latency: "218 ms",
             status: "健康",
+            provider_group: "qwen",
+          },
+          {
+            requested_model: "mimo-v2.5-pro",
+            route_label: "default-route",
+            credential: "provider_mimo_primary",
+            latency: "286 ms",
+            status: "健康",
+            provider_group: "mimo",
+          },
+          {
+            requested_model: "rag-query",
+            route_label: "shared-route",
+            credential: "provider_rag_service",
+            latency: "312 ms",
+            status: "告警",
+            provider_group: "other",
           },
         ],
         policy_summary: [
@@ -2275,14 +2292,19 @@ describe("控制台路由", () => {
     renderRoute("/routes");
 
     expect(await screen.findByRole("heading", { level: 1, name: "路由" })).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: "平台路由结果" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 2, name: "Qwen 路由观测" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 2, name: "MIMO 路由观测" })).toBeInTheDocument();
+    expect(screen.getAllByRole("columnheader", { name: "平台路由结果" })).toHaveLength(2);
     expect(screen.getByText("模型优先解析已启用。")).toBeInTheDocument();
     expect(
       screen.getByText("请求会先匹配 平台托管凭证，再按照 平台默认线路分发到内部检索能力链路。"),
     ).toBeInTheDocument();
     expect(screen.getByText("平台接入源")).toBeInTheDocument();
-    expect(screen.getByText("平台托管凭证")).toBeInTheDocument();
-    expect(screen.getByText("平台默认线路")).toBeInTheDocument();
+    expect(screen.getByText("qwen-flash")).toBeInTheDocument();
+    expect(screen.getByText("mimo-v2.5-pro")).toBeInTheDocument();
+    expect(screen.getAllByText("平台托管凭证")).toHaveLength(2);
+    expect(screen.getAllByText("平台默认线路")).toHaveLength(2);
+    expect(screen.queryByText("rag-query")).not.toBeInTheDocument();
     expect(screen.queryByText(new RegExp(providerAlias))).not.toBeInTheDocument();
     expect(screen.queryByText(/DashScope/)).not.toBeInTheDocument();
     expect(screen.queryByText(new RegExp(hiddenKnowledgeTerm))).not.toBeInTheDocument();

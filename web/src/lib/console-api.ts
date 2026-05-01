@@ -120,6 +120,7 @@ export type RouteItem = {
   credential: string;
   latency: string;
   status: string;
+  provider_group: "qwen" | "mimo" | "other";
 };
 
 export type RoutesPageData = {
@@ -460,6 +461,7 @@ function toUsageRequestsPageData(value: unknown): UsageRequestsPageData {
 
 function toRouteItem(value: unknown): RouteItem {
   const record = asRecord(value);
+  const providerGroup = readString(record, "provider_group");
 
   return {
     requested_model: readString(record, "requested_model"),
@@ -467,6 +469,10 @@ function toRouteItem(value: unknown): RouteItem {
     credential: readString(record, "credential"),
     latency: readString(record, "latency"),
     status: readString(record, "status"),
+    provider_group:
+      providerGroup === "qwen" || providerGroup === "mimo" || providerGroup === "other"
+        ? providerGroup
+        : "other",
   };
 }
 
