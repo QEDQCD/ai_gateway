@@ -60,6 +60,73 @@ func TestPostgresConsoleServiceSystemStatus(t *testing.T) {
 	}
 }
 
+func TestPostgresConsoleServiceRoutesGroupsItemsByProvider(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	if _, err := conn.Exec(ctx, `
+		delete from llm_request_events;
+		delete from llm_usage_agg_hourly;
+		delete from llm_request_logs;
+		delete from route_catalog;
+		delete from provider_credentials;
+
+		insert into provider_credentials (id, provider, display_name, supported_models, base_url, encrypted_secret, status) values
+			('provider_dashscope_primary', 'dashscope', 'Qwen', '{"qwen-flash","text-embedding-v4"}', 'https://dashscope.aliyuncs.com/compatible-mode/v1', '', 'active'),
+			('provider_mimo_primary', 'mimo', 'MIMO', '{"mimo-v2.5-pro"}', 'https://api.xiaomimimo.com/v1', '', 'active'),
+			('provider_rag_service', 'rag', 'RAG', '{"rag-query"}', 'http://rag-service:8000', '', 'active');
+
+		insert into route_catalog (id, requested_model, resolved_provider, provider_credential_id, endpoint, latency_ms, health_status, request_mode, updated_at) values
+			('route:provider_dashscope_primary:default', 'qwen-flash', 'Qwen', 'provider_dashscope_primary', '/v1/chat/completions', 218, 'healthy', '聊天', now()),
+			('route:provider_dashscope_primary:text-embedding-v4', 'text-embedding-v4', 'Qwen', 'provider_dashscope_primary', '/v1/embeddings', 64, 'healthy', '向量', now()),
+			('route:provider_mimo_primary:default', 'mimo-v2.5-pro', 'MIMO', 'provider_mimo_primary', '/v1/chat/completions', 286, 'warning', '聊天', now()),
+			('route:provider_rag_service:default', 'rag-query', 'RAG', 'provider_rag_service', '/v1/internal-search', 312, 'warning', '知识库', now());
+	`); err != nil {
+		t.Fatalf("seed routes failed: %v", err)
+	}
+
+	payload, err := console.Routes(ctx)
+	if err != nil {
+		t.Fatalf("Routes failed: %v", err)
+	}
+
+	if len(payload.Items) != 4 {
+		t.Fatalf("expected 4 route items, got %d", len(payload.Items))
+	}
+
+	gotGroups := map[string]string{}
+	for _, item := range payload.Items {
+		gotGroups[item.RequestedModel] = item.ProviderGroup
+	}
+
+	wantGroups := map[string]string{
+		"qwen-flash":        "qwen",
+		"text-embedding-v4": "qwen",
+		"mimo-v2.5-pro":     "mimo",
+		"rag-query":         "other",
+	}
+
+	for requestedModel, wantGroup := range wantGroups {
+		if gotGroups[requestedModel] != wantGroup {
+			t.Fatalf("expected provider_group %q for %s, got %q", wantGroup, requestedModel, gotGroups[requestedModel])
+		}
+	}
+
+	if payload.Items[0].RequestedModel != "qwen-flash" || payload.Items[0].ProviderGroup != "qwen" {
+		t.Fatalf("expected first route item to be qwen-flash/qwen, got %+v", payload.Items[0])
+	}
+	if payload.Items[2].RequestedModel != "mimo-v2.5-pro" || payload.Items[2].ProviderGroup != "mimo" {
+		t.Fatalf("expected third route item to be mimo-v2.5-pro/mimo, got %+v", payload.Items[2])
+	}
+	if payload.Items[3].RequestedModel != "rag-query" || payload.Items[3].ProviderGroup != "other" {
+		t.Fatalf("expected fourth route item to be rag-query/other, got %+v", payload.Items[3])
+	}
+}
+
 func TestPostgresConsoleServiceOverviewIncludesTenantPostureAndPlatformMetrics(t *testing.T) {
 	t.Parallel()
 

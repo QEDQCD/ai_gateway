@@ -155,6 +155,7 @@ type RouteItem struct {
 	Credential     string `json:"credential"`
 	Latency        string `json:"latency"`
 	Status         string `json:"status"`
+	ProviderGroup  string `json:"provider_group"`
 }
 
 type RoutesPageData struct {

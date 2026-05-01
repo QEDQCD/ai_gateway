@@ -1088,9 +1088,44 @@ func (s postgresConsoleService) Routes(ctx context.Context) (RoutesPageData, err
 	}
 
 	rows, err := s.db.Query(ctx, `
-		select requested_model, resolved_provider, provider_credential_id, latency_ms, health_status
-		from route_catalog
-		order by requested_model asc;
+		select
+			rc.requested_model,
+			rc.resolved_provider,
+			rc.provider_credential_id,
+			rc.latency_ms,
+			rc.health_status,
+			case
+				when lower(coalesce(pc.provider, '')) = 'mimo'
+					or lower(coalesce(pc.display_name, '')) like '%mimo%'
+					or lower(coalesce(rc.resolved_provider, '')) like '%mimo%'
+					or lower(coalesce(rc.requested_model, '')) like '%mimo%'
+				then 'mimo'
+				when lower(coalesce(pc.provider, '')) in ('dashscope', 'qwen')
+					or lower(coalesce(pc.display_name, '')) like '%qwen%'
+					or lower(coalesce(rc.resolved_provider, '')) like '%qwen%'
+					or lower(coalesce(rc.requested_model, '')) like 'qwen%'
+					or lower(coalesce(rc.requested_model, '')) like 'text-embedding-v4%'
+				then 'qwen'
+				else 'other'
+			end as provider_group
+		from route_catalog rc
+		left join provider_credentials pc on pc.id = rc.provider_credential_id
+		order by
+			case
+				when lower(coalesce(pc.provider, '')) = 'mimo'
+					or lower(coalesce(pc.display_name, '')) like '%mimo%'
+					or lower(coalesce(rc.resolved_provider, '')) like '%mimo%'
+					or lower(coalesce(rc.requested_model, '')) like '%mimo%'
+				then 1
+				when lower(coalesce(pc.provider, '')) in ('dashscope', 'qwen')
+					or lower(coalesce(pc.display_name, '')) like '%qwen%'
+					or lower(coalesce(rc.resolved_provider, '')) like '%qwen%'
+					or lower(coalesce(rc.requested_model, '')) like 'qwen%'
+					or lower(coalesce(rc.requested_model, '')) like 'text-embedding-v4%'
+				then 0
+				else 2
+			end asc,
+			rc.requested_model asc;
 	`)
 	if err != nil {
 		return RoutesPageData{}, err
@@ -1102,7 +1137,7 @@ func (s postgresConsoleService) Routes(ctx context.Context) (RoutesPageData, err
 		var item RouteItem
 		var latency int
 		var status string
-		if err := rows.Scan(&item.RequestedModel, &item.RouteLabel, &item.Credential, &latency, &status); err != nil {
+		if err := rows.Scan(&item.RequestedModel, &item.RouteLabel, &item.Credential, &latency, &status, &item.ProviderGroup); err != nil {
 			return RoutesPageData{}, err
 		}
 		item.RouteLabel = neutralizeConsoleRouteLabel(item.RouteLabel)
