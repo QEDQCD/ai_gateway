@@ -8,6 +8,12 @@
 
 `账号申请 -> admin 审批 -> 开通租户 -> member 自助创建平台 API Key -> 调用统一接口 -> 按租户统计 token / 请求 / 失败 -> 输出审计记录`
 
+当前默认模型分层是：
+
+- 快模型档位：Qwen（`qwen-flash`）
+- 强模型档位：MIMO（`mimo-v2.5-pro`）
+- 向量能力：仍由 Qwen（`text-embedding-v4`）承担
+
 平台对外提供的是统一入口：
 
 - admin 审批账号申请并开通租户
@@ -124,6 +130,13 @@ GATEWAY_SMART_ROUTING_LONG_PROMPT_THRESHOLD=240
 - 命中编码关键词、代码块、报错/堆栈等信号时切到强模型档位
 - 调用观测与审计会记录 `task_class`、`target_model_tier`、`routing_reason`、`resolved_model`
 
+当前默认部署值：
+
+- `GATEWAY_CHAT_FAST_MODEL=qwen-flash`
+- `GATEWAY_CHAT_REASONING_MODEL=mimo-v2.5-pro`
+- `GATEWAY_SEED_PROVIDER=dashscope`
+- `GATEWAY_MIMO_PROVIDER_BASE_URL=https://api.xiaomimimo.com/v1`
+
 ### 2. 准备 secrets 目录
 
 ```bash
@@ -133,6 +146,7 @@ mkdir -p "${HOME}/.ai_gateway_secrets"
 至少需要准备以下文件：
 
 - `dashscope_api_key`
+- `mimo_api_key`
 - `gateway_seed_platform_api_key`
 - `provider_master_key`
 
@@ -140,6 +154,7 @@ mkdir -p "${HOME}/.ai_gateway_secrets"
 
 ```bash
 printf 'your-dashscope-api-key\n' > "${HOME}/.ai_gateway_secrets/dashscope_api_key"
+printf 'your-mimo-api-key\n' > "${HOME}/.ai_gateway_secrets/mimo_api_key"
 printf 'your-seed-platform-api-key\n' > "${HOME}/.ai_gateway_secrets/gateway_seed_platform_api_key"
 openssl rand -base64 32 > "${HOME}/.ai_gateway_secrets/provider_master_key"
 ```
