@@ -1671,6 +1671,7 @@ func (s postgresConsoleService) UsageLatencyWall(ctx context.Context, query Usag
 	rows, err := s.db.Query(ctx, `
 		select
 			l.request_model,
+			l.resolved_model,
 			coalesce(pc.display_name, l.provider_credential_id),
 			`+bucketExpr+` as bucket_start,
 			count(*) as request_count,
@@ -1680,7 +1681,7 @@ func (s postgresConsoleService) UsageLatencyWall(ctx context.Context, query Usag
 		left join route_catalog r on r.id = l.route_id
 		left join provider_credentials pc on pc.id = l.provider_credential_id
 		where `+whereClause+`
-		group by l.request_model, coalesce(pc.display_name, l.provider_credential_id), bucket_start
+		group by l.request_model, l.resolved_model, coalesce(pc.display_name, l.provider_credential_id), bucket_start
 		order by max(l.request_started_at) desc, l.request_model asc, bucket_start asc;
 	`, args...)
 	if err != nil {
@@ -1704,16 +1705,18 @@ func (s postgresConsoleService) UsageLatencyWall(ctx context.Context, query Usag
 
 	lanesByKey := make(map[string]*laneAccumulator)
 	for rows.Next() {
-		var model string
+		var requestModel string
+		var resolvedModel string
 		var provider string
 		var bucketStart time.Time
 		var requestCount int64
 		var successCount int64
 		var avgLatencyMS int64
-		if err := rows.Scan(&model, &provider, &bucketStart, &requestCount, &successCount, &avgLatencyMS); err != nil {
+		if err := rows.Scan(&requestModel, &resolvedModel, &provider, &bucketStart, &requestCount, &successCount, &avgLatencyMS); err != nil {
 			return UsageLatencyWallData{}, err
 		}
 
+		model := usageLatencyLaneModel(requestModel, resolvedModel)
 		key := model + "::" + provider
 		lane := lanesByKey[key]
 		if lane == nil {
@@ -1798,6 +1801,17 @@ func (s postgresConsoleService) UsageLatencyWall(ctx context.Context, query Usag
 	}
 
 	return result, nil
+}
+
+func usageLatencyLaneModel(requestModel string, resolvedModel string) string {
+	trimmedRequestModel := strings.TrimSpace(requestModel)
+	trimmedResolvedModel := strings.TrimSpace(resolvedModel)
+	if strings.HasPrefix(trimmedRequestModel, "gateway-") &&
+		trimmedResolvedModel != "" &&
+		trimmedResolvedModel != trimmedRequestModel {
+		return trimmedRequestModel + " -> " + trimmedResolvedModel
+	}
+	return trimmedRequestModel
 }
 
 func (s postgresConsoleService) usageOverviewFromLogs(ctx context.Context, query UsageQuery) (UsageOverviewData, error) {

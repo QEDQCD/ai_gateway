@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -2098,6 +2099,8 @@ func TestPostgresConsoleServiceUsageLatencyWall(t *testing.T) {
 	if _, err := conn.Exec(ctx, `
 		update llm_request_logs
 		set
+			request_model = 'gateway-public',
+			resolved_model = 'qwen-flash',
 			request_started_at = now() - interval '30 minutes',
 			request_completed_at = now() - interval '30 minutes' + interval '182 milliseconds',
 			created_at = now() - interval '30 minutes'
@@ -2105,6 +2108,8 @@ func TestPostgresConsoleServiceUsageLatencyWall(t *testing.T) {
 
 		update llm_request_logs
 		set
+			request_model = 'gateway-public',
+			resolved_model = 'mimo-v2.5-pro',
 			request_started_at = now() - interval '20 minutes',
 			request_completed_at = now() - interval '20 minutes' + interval '95 milliseconds',
 			created_at = now() - interval '20 minutes'
@@ -2132,6 +2137,16 @@ func TestPostgresConsoleServiceUsageLatencyWall(t *testing.T) {
 	}
 	if len(payload.Lanes[0].Cells) != len(payload.Buckets) {
 		t.Fatalf("expected cells to align with buckets, got %d cells and %d buckets", len(payload.Lanes[0].Cells), len(payload.Buckets))
+	}
+	models := make([]string, 0, len(payload.Lanes))
+	for _, lane := range payload.Lanes {
+		models = append(models, lane.Model)
+	}
+	if !slices.Contains(models, "gateway-public -> qwen-flash") {
+		t.Fatalf("expected gateway-public -> qwen-flash lane, got %v", models)
+	}
+	if !slices.Contains(models, "gateway-public -> mimo-v2.5-pro") {
+		t.Fatalf("expected gateway-public -> mimo-v2.5-pro lane, got %v", models)
 	}
 }
 
