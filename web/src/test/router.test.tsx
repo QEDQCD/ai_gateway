@@ -2197,8 +2197,8 @@ describe("控制台路由", () => {
     expect(screen.getByText("840")).toBeInTheDocument();
     expect(screen.getByText("1.20 ￥")).toBeInTheDocument();
     expect(screen.getAllByText("qwen-plus").length).toBeGreaterThan(0);
-    expect(screen.getByText("coding_complex")).toBeInTheDocument();
-    expect(screen.getByText("gateway-chat-reasoning")).toBeInTheDocument();
+    expect(screen.getByText("复杂编码请求")).toBeInTheDocument();
+    expect(screen.getByText("强模型档位")).toBeInTheDocument();
     expect(screen.getAllByText("2.00 ￥/M").length).toBeGreaterThan(0);
     expect(fetchMock).toHaveBeenCalledWith("/api/me/usage/overview");
     expect(fetchMock).toHaveBeenCalledWith("/api/me/usage/requests?limit=20&offset=0");
@@ -2362,9 +2362,9 @@ describe("控制台路由", () => {
     expect(screen.getByText("内部检索能力链路回退到 平台默认线路后恢复成功")).toBeInTheDocument();
     expect(screen.getByText("/v1/chat/completions")).toBeInTheDocument();
     expect(screen.getAllByText("qwen-plus").length).toBeGreaterThan(0);
-    expect(screen.getByText("coding_complex")).toBeInTheDocument();
-    expect(screen.getByText("gateway-chat-reasoning")).toBeInTheDocument();
-    expect(screen.getByText("keyword:debug,pattern:code_fence")).toBeInTheDocument();
+    expect(screen.getByText("复杂编码请求")).toBeInTheDocument();
+    expect(screen.getByText("强模型档位")).toBeInTheDocument();
+    expect(screen.getByText("命中关键词：debug；包含代码块")).toBeInTheDocument();
     expect(screen.getAllByText("总费用").length).toBeGreaterThan(0);
     expect(screen.getByText("2.50 ￥")).toBeInTheDocument();
     expect(screen.queryByText(new RegExp(providerAlias))).not.toBeInTheDocument();
@@ -2623,9 +2623,9 @@ describe("控制台路由", () => {
 
     renderRoute("/usage");
 
-    expect(await screen.findByText("coding_complex")).toBeInTheDocument();
-    expect(screen.getByText("gateway-chat-reasoning")).toBeInTheDocument();
-    expect(screen.getByText("keyword:debug,pattern:code_fence")).toBeInTheDocument();
+    expect(await screen.findByText("复杂编码请求")).toBeInTheDocument();
+    expect(screen.getByText("强模型档位")).toBeInTheDocument();
+    expect(screen.getByText("命中关键词：debug；包含代码块")).toBeInTheDocument();
     expect(screen.getByText("qwen-plus")).toBeInTheDocument();
   });
 

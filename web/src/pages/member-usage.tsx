@@ -2,6 +2,7 @@ import { useCallback, useState } from "react";
 
 import { DataTable, ErrorSection, LoadingSection, SourcePill, StatCard, StatusPill } from "../components/console";
 import { getMemberUsageOverview, getMemberUsageRequests } from "../lib/console-api";
+import { formatTargetModelTierLabel, formatTaskClassLabel } from "../lib/smart-routing";
 import { useRemoteData } from "../lib/use-remote-data";
 
 const PAGE_SIZE = 20;
@@ -141,8 +142,8 @@ export function MemberUsagePage() {
             item.endpoint,
             item.model,
             formatValue(item.resolved_model),
-            formatValue(item.task_class),
-            formatValue(item.target_model_tier),
+            formatTaskClassLabel(item.task_class),
+            formatTargetModelTierLabel(item.target_model_tier),
             <StatusPill
               key={`${item.request_id}-status`}
               label={item.status}

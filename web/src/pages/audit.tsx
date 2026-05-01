@@ -4,6 +4,11 @@ import { DataTable, ErrorSection, LoadingSection, StatCard } from "../components
 import { getAudit, getMemberAuditEvents } from "../lib/console-api";
 import { neutralizeLineLabel, neutralizePlatformNarrative } from "../lib/platform-routing";
 import { useConsoleSession } from "../lib/session";
+import {
+  formatRoutingReasonLabel,
+  formatTargetModelTierLabel,
+  formatTaskClassLabel,
+} from "../lib/smart-routing";
 import { useRemoteData } from "../lib/use-remote-data";
 
 function formatValue(value: string) {
@@ -85,9 +90,9 @@ export function AuditPage() {
             formatValue(item.request_model),
             formatValue(item.resolved_model),
             formatValue(item.upstream_model),
-            formatValue(item.task_class),
-            formatValue(item.target_model_tier),
-            formatValue(item.routing_reason),
+            formatTaskClassLabel(item.task_class),
+            formatTargetModelTierLabel(item.target_model_tier),
+            formatRoutingReasonLabel(item.routing_reason),
             item.status,
             neutralizeLineLabel(item.route_label),
             item.latency,

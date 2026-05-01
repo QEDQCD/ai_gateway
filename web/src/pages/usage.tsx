@@ -17,6 +17,11 @@ import {
   getUsageTrends,
 } from "../lib/console-api";
 import { neutralizeLineLabel, neutralizePlatformNarrative } from "../lib/platform-routing";
+import {
+  formatRoutingReasonLabel,
+  formatTargetModelTierLabel,
+  formatTaskClassLabel,
+} from "../lib/smart-routing";
 import { useRemoteData } from "../lib/use-remote-data";
 
 const PAGE_SIZE = 20;
@@ -339,9 +344,9 @@ export function UsagePage() {
             item.endpoint,
             item.model,
             formatValue(item.resolved_model),
-            formatValue(item.task_class),
-            formatValue(item.target_model_tier),
-            formatValue(item.routing_reason),
+            formatTaskClassLabel(item.task_class),
+            formatTargetModelTierLabel(item.target_model_tier),
+            formatRoutingReasonLabel(item.routing_reason),
             <StatusPill
               key={`${item.request_id}-status`}
               label={item.status}
