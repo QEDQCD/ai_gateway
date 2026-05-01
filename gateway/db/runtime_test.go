@@ -20,6 +20,25 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
+func seedConfigForTests(codec *secret.Codec) SeedConfig {
+	return SeedConfig{
+		PlatformAPIKey: "platform-live-key",
+		QwenProvider: SeedProviderConfig{
+			BaseURL:     "https://dashscope.aliyuncs.com/compatible-mode/v1",
+			APIKey:      "qwen-seed-provider-key",
+			Provider:    "dashscope",
+			DisplayName: "Qwen",
+		},
+		MIMOProvider: SeedProviderConfig{
+			BaseURL:     "https://api.xiaomimimo.example/v1",
+			APIKey:      "mimo-seed-provider-key",
+			Provider:    "mimo",
+			DisplayName: "MIMO",
+		},
+		SecretCodec: codec,
+	}
+}
+
 func TestSeedDemoDataEncryptsProviderSecrets(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -48,26 +67,25 @@ func TestSeedDemoDataEncryptsProviderSecrets(t *testing.T) {
 		t.Fatalf("secret.NewCodec failed: %v", err)
 	}
 
-	if err := SeedDemoData(ctx, conn, SeedConfig{
-		PlatformAPIKey:      "platform-live-key",
-		ProviderBaseURL:     "https://dashscope.aliyuncs.com/compatible-mode/v1",
-		ProviderAPIKey:      "seed-provider-key",
-		Provider:            "dashscope",
-		ProviderDisplayName: "DashScope Primary",
-		SecretCodec:         codec,
-	}); err != nil {
+	if err := SeedDemoData(ctx, conn, seedConfigForTests(codec)); err != nil {
 		t.Fatalf("SeedDemoData failed: %v", err)
 	}
 
-	var encryptedSecret string
-	if err := conn.QueryRow(ctx, `select encrypted_secret from provider_credentials where id = 'provider_dashscope_primary';`).Scan(&encryptedSecret); err != nil {
-		t.Fatalf("QueryRow failed: %v", err)
+	wantEncrypted := map[string]string{
+		"provider_dashscope_primary": "qwen-seed-provider-key",
+		"provider_mimo_primary":      "mimo-seed-provider-key",
 	}
-	if encryptedSecret == "seed-provider-key" {
-		t.Fatal("expected encrypted_secret to be ciphertext")
-	}
-	if !strings.HasPrefix(encryptedSecret, secret.EncryptedSecretPrefix) {
-		t.Fatalf("expected encrypted secret prefix %q, got %q", secret.EncryptedSecretPrefix, encryptedSecret)
+	for credentialID, rawSecret := range wantEncrypted {
+		var encryptedSecret string
+		if err := conn.QueryRow(ctx, `select encrypted_secret from provider_credentials where id = $1`, credentialID).Scan(&encryptedSecret); err != nil {
+			t.Fatalf("QueryRow failed for %s: %v", credentialID, err)
+		}
+		if encryptedSecret == rawSecret {
+			t.Fatalf("expected encrypted_secret for %s to be ciphertext", credentialID)
+		}
+		if !strings.HasPrefix(encryptedSecret, secret.EncryptedSecretPrefix) {
+			t.Fatalf("expected encrypted secret prefix %q for %s, got %q", secret.EncryptedSecretPrefix, credentialID, encryptedSecret)
+		}
 	}
 
 	queries := store.New(conn)
@@ -77,15 +95,15 @@ func TestSeedDemoDataEncryptsProviderSecrets(t *testing.T) {
 		t.Fatalf("ListActiveProviderCredentials failed: %v", err)
 	}
 
-	var providerSecret string
+	gotSecrets := map[string]string{}
 	for _, credential := range credentials {
-		if credential.ID == "provider_dashscope_primary" {
-			providerSecret = credential.APIKey
-			break
-		}
+		gotSecrets[credential.ID] = credential.APIKey
 	}
-	if providerSecret != "seed-provider-key" {
-		t.Fatalf("expected decrypted provider key %q, got %q", "seed-provider-key", providerSecret)
+	if gotSecrets["provider_dashscope_primary"] != "qwen-seed-provider-key" {
+		t.Fatalf("expected decrypted Qwen provider key %q, got %q", "qwen-seed-provider-key", gotSecrets["provider_dashscope_primary"])
+	}
+	if gotSecrets["provider_mimo_primary"] != "mimo-seed-provider-key" {
+		t.Fatalf("expected decrypted MIMO provider key %q, got %q", "mimo-seed-provider-key", gotSecrets["provider_mimo_primary"])
 	}
 }
 
@@ -117,15 +135,9 @@ func TestSeedDemoDataEncryptsPlatformAPIKeys(t *testing.T) {
 		t.Fatalf("secret.NewCodec failed: %v", err)
 	}
 
-	if err := SeedDemoData(ctx, conn, SeedConfig{
-		PlatformAPIKey:      "platform-live-key",
-		ProviderBaseURL:     "https://dashscope.aliyuncs.com/compatible-mode/v1",
-		ProviderAPIKey:      "seed-provider-key",
-		Provider:            "dashscope",
-		ProviderDisplayName: "DashScope Primary",
-		SecretCodec:         codec,
-		PlatformKeyCodec:    codec,
-	}); err != nil {
+	cfg := seedConfigForTests(codec)
+	cfg.PlatformKeyCodec = codec
+	if err := SeedDemoData(ctx, conn, cfg); err != nil {
 		t.Fatalf("SeedDemoData failed: %v", err)
 	}
 
@@ -176,50 +188,54 @@ func TestSeedDemoDataAlignsProviderCredentialAndRouteSemantics(t *testing.T) {
 		t.Fatalf("secret.NewCodec failed: %v", err)
 	}
 
-	cfg := SeedConfig{
-		PlatformAPIKey:      "platform-live-key",
-		ProviderBaseURL:     "https://api.openai.example/v1",
-		ProviderAPIKey:      "seed-provider-key",
-		Provider:            "openai",
-		ProviderDisplayName: "OpenAI Primary",
-		SecretCodec:         codec,
-	}
+	cfg := seedConfigForTests(codec)
 	if err := SeedDemoData(ctx, conn, cfg); err != nil {
 		t.Fatalf("SeedDemoData failed: %v", err)
 	}
 
-	wantCredentialID := "provider_openai_primary"
-	wantChatRouteID := service.RouteIDForCredential(wantCredentialID, []string{"gpt-4o-mini", "text-embedding-3-small"}, "gpt-4o-mini")
-	wantEmbeddingRouteID := service.RouteIDForCredential(wantCredentialID, []string{"gpt-4o-mini", "text-embedding-3-small"}, "text-embedding-3-small")
-
-	var provider string
-	var displayName string
-	if err := conn.QueryRow(ctx, `
-		select provider, display_name
-		from provider_credentials
-		where id = $1
-	`, wantCredentialID).Scan(&provider, &displayName); err != nil {
-		t.Fatalf("QueryRow provider_credentials failed: %v", err)
+	wantCredentials := map[string]struct {
+		provider    string
+		displayName string
+	}{
+		"provider_dashscope_primary": {provider: cfg.QwenProvider.Provider, displayName: cfg.QwenProvider.DisplayName},
+		"provider_mimo_primary":      {provider: cfg.MIMOProvider.Provider, displayName: cfg.MIMOProvider.DisplayName},
+		"provider_rag_service":       {provider: "rag", displayName: "RAG"},
 	}
-	if provider != cfg.Provider {
-		t.Fatalf("expected provider %q, got %q", cfg.Provider, provider)
-	}
-	if displayName != cfg.ProviderDisplayName {
-		t.Fatalf("expected display_name %q, got %q", cfg.ProviderDisplayName, displayName)
+	for credentialID, want := range wantCredentials {
+		var provider string
+		var displayName string
+		if err := conn.QueryRow(ctx, `
+			select provider, display_name
+			from provider_credentials
+			where id = $1
+		`, credentialID).Scan(&provider, &displayName); err != nil {
+			t.Fatalf("QueryRow provider_credentials failed for %s: %v", credentialID, err)
+		}
+		if provider != want.provider {
+			t.Fatalf("expected provider %q for %s, got %q", want.provider, credentialID, provider)
+		}
+		if displayName != want.displayName {
+			t.Fatalf("expected display_name %q for %s, got %q", want.displayName, credentialID, displayName)
+		}
 	}
 
 	rows, err := conn.Query(ctx, `
 		select id, requested_model, resolved_provider, provider_credential_id
 		from route_catalog
-		where provider_credential_id = $1
+		where requested_model in ('qwen-flash', 'text-embedding-v4', 'mimo-v2.5-pro', 'rag-query')
 		order by requested_model
-	`, wantCredentialID)
+	`)
 	if err != nil {
 		t.Fatalf("Query route_catalog failed: %v", err)
 	}
 	defer rows.Close()
 
-	gotRoutes := map[string]string{}
+	type routeRecord struct {
+		id                   string
+		resolvedProvider     string
+		providerCredentialID string
+	}
+	gotRoutes := map[string]routeRecord{}
 	for rows.Next() {
 		var id string
 		var requestedModel string
@@ -228,23 +244,55 @@ func TestSeedDemoDataAlignsProviderCredentialAndRouteSemantics(t *testing.T) {
 		if err := rows.Scan(&id, &requestedModel, &resolvedProvider, &providerCredentialID); err != nil {
 			t.Fatalf("rows.Scan failed: %v", err)
 		}
-		if providerCredentialID != wantCredentialID {
-			t.Fatalf("expected provider_credential_id %q, got %q", wantCredentialID, providerCredentialID)
+		gotRoutes[requestedModel] = routeRecord{
+			id:                   id,
+			resolvedProvider:     resolvedProvider,
+			providerCredentialID: providerCredentialID,
 		}
-		if resolvedProvider != cfg.ProviderDisplayName {
-			t.Fatalf("expected resolved_provider %q, got %q", cfg.ProviderDisplayName, resolvedProvider)
-		}
-		gotRoutes[requestedModel] = id
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("rows.Err failed: %v", err)
 	}
 
-	if gotRoutes["gpt-4o-mini"] != wantChatRouteID {
-		t.Fatalf("expected chat route_id %q, got %q", wantChatRouteID, gotRoutes["gpt-4o-mini"])
+	wantRoutes := map[string]routeRecord{
+		"mimo-v2.5-pro": {
+			id:                   service.RouteIDForCredential("provider_mimo_primary", []string{"mimo-v2.5-pro"}, "mimo-v2.5-pro"),
+			resolvedProvider:     "MIMO",
+			providerCredentialID: "provider_mimo_primary",
+		},
+		"qwen-flash": {
+			id:                   service.RouteIDForCredential("provider_dashscope_primary", []string{"qwen-flash", "qwen-plus", "text-embedding-v4"}, "qwen-flash"),
+			resolvedProvider:     "Qwen",
+			providerCredentialID: "provider_dashscope_primary",
+		},
+		"rag-query": {
+			id:                   service.RouteIDForCredential("provider_rag_service", []string{"rag-query"}, "rag-query"),
+			resolvedProvider:     "RAG",
+			providerCredentialID: "provider_rag_service",
+		},
+		"text-embedding-v4": {
+			id:                   service.RouteIDForCredential("provider_dashscope_primary", []string{"qwen-flash", "qwen-plus", "text-embedding-v4"}, "text-embedding-v4"),
+			resolvedProvider:     "Qwen",
+			providerCredentialID: "provider_dashscope_primary",
+		},
 	}
-	if gotRoutes["text-embedding-3-small"] != wantEmbeddingRouteID {
-		t.Fatalf("expected embedding route_id %q, got %q", wantEmbeddingRouteID, gotRoutes["text-embedding-3-small"])
+	if len(gotRoutes) != len(wantRoutes) {
+		t.Fatalf("expected %d seeded routes, got %d", len(wantRoutes), len(gotRoutes))
+	}
+	for requestedModel, want := range wantRoutes {
+		got, ok := gotRoutes[requestedModel]
+		if !ok {
+			t.Fatalf("expected route for %s", requestedModel)
+		}
+		if got.id != want.id {
+			t.Fatalf("expected %s route_id %q, got %q", requestedModel, want.id, got.id)
+		}
+		if got.resolvedProvider != want.resolvedProvider {
+			t.Fatalf("expected %s resolved_provider %q, got %q", requestedModel, want.resolvedProvider, got.resolvedProvider)
+		}
+		if got.providerCredentialID != want.providerCredentialID {
+			t.Fatalf("expected %s provider_credential_id %q, got %q", requestedModel, want.providerCredentialID, got.providerCredentialID)
+		}
 	}
 }
 
@@ -278,69 +326,77 @@ func TestSeedDemoDataReseedingProviderPreservesRouteIDs(t *testing.T) {
 		t.Fatalf("secret.NewCodec failed: %v", err)
 	}
 
-	firstCfg := SeedConfig{
-		PlatformAPIKey:      "platform-live-key",
-		ProviderBaseURL:     "https://api.openai.example/v1",
-		ProviderAPIKey:      "seed-provider-key",
-		Provider:            "openai",
-		ProviderDisplayName: "OpenAI Primary",
-		SecretCodec:         codec,
-	}
+	firstCfg := seedConfigForTests(codec)
 	if err := SeedDemoData(ctx, conn, firstCfg); err != nil {
 		t.Fatalf("first SeedDemoData failed: %v", err)
 	}
 
-	var initialChatRouteID string
-	var initialEmbeddingRouteID string
-	if err := conn.QueryRow(ctx, `
-		select id
-		from route_catalog
-		where requested_model = 'gpt-4o-mini'
-	`).Scan(&initialChatRouteID); err != nil {
-		t.Fatalf("QueryRow initial chat route failed: %v", err)
-	}
-	if err := conn.QueryRow(ctx, `
-		select id
-		from route_catalog
-		where requested_model = 'text-embedding-3-small'
-	`).Scan(&initialEmbeddingRouteID); err != nil {
-		t.Fatalf("QueryRow initial embedding route failed: %v", err)
+	initialRouteIDs := map[string]string{}
+	for _, requestedModel := range []string{"qwen-flash", "text-embedding-v4", "mimo-v2.5-pro"} {
+		var routeID string
+		if err := conn.QueryRow(ctx, `
+			select id
+			from route_catalog
+			where requested_model = $1
+		`, requestedModel).Scan(&routeID); err != nil {
+			t.Fatalf("QueryRow initial route failed for %s: %v", requestedModel, err)
+		}
+		initialRouteIDs[requestedModel] = routeID
 	}
 
-	secondCfg := SeedConfig{
-		PlatformAPIKey:      "platform-live-key",
-		ProviderBaseURL:     "https://api.open'ai.example/v1",
-		ProviderAPIKey:      "seed-provider-key-2",
-		Provider:            "open'ai",
-		ProviderDisplayName: "OpenAI O'Hare",
-		SecretCodec:         codec,
-	}
+	secondCfg := seedConfigForTests(codec)
+	secondCfg.QwenProvider.BaseURL = "https://dashscope.o'hare.example/v1"
+	secondCfg.QwenProvider.DisplayName = "Qwen O'Hare"
+	secondCfg.QwenProvider.APIKey = "qwen-seed-provider-key-2"
+	secondCfg.MIMOProvider.BaseURL = "https://mimo.o'hare.example/v1"
+	secondCfg.MIMOProvider.DisplayName = "MIMO O'Hare"
+	secondCfg.MIMOProvider.APIKey = "mimo-seed-provider-key-2"
 	if err := SeedDemoData(ctx, conn, secondCfg); err != nil {
 		t.Fatalf("second SeedDemoData failed: %v", err)
 	}
 
-	wantCredentialID := seedProviderCredentialID(secondCfg.Provider)
-
-	var provider string
-	var displayName string
-	if err := conn.QueryRow(ctx, `
-		select provider, display_name
-		from provider_credentials
-		where id = $1
-	`, wantCredentialID).Scan(&provider, &displayName); err != nil {
-		t.Fatalf("QueryRow provider_credentials failed: %v", err)
+	wantCredentials := map[string]struct {
+		provider    string
+		displayName string
+		baseURL     string
+	}{
+		"provider_dashscope_primary": {
+			provider:    secondCfg.QwenProvider.Provider,
+			displayName: secondCfg.QwenProvider.DisplayName,
+			baseURL:     secondCfg.QwenProvider.BaseURL,
+		},
+		"provider_mimo_primary": {
+			provider:    secondCfg.MIMOProvider.Provider,
+			displayName: secondCfg.MIMOProvider.DisplayName,
+			baseURL:     secondCfg.MIMOProvider.BaseURL,
+		},
 	}
-	if provider != secondCfg.Provider {
-		t.Fatalf("expected provider %q, got %q", secondCfg.Provider, provider)
-	}
-	if displayName != secondCfg.ProviderDisplayName {
-		t.Fatalf("expected display_name %q, got %q", secondCfg.ProviderDisplayName, displayName)
+	for credentialID, want := range wantCredentials {
+		var provider string
+		var displayName string
+		var baseURL string
+		if err := conn.QueryRow(ctx, `
+			select provider, display_name, base_url
+			from provider_credentials
+			where id = $1
+		`, credentialID).Scan(&provider, &displayName, &baseURL); err != nil {
+			t.Fatalf("QueryRow provider_credentials failed for %s: %v", credentialID, err)
+		}
+		if provider != want.provider {
+			t.Fatalf("expected provider %q for %s, got %q", want.provider, credentialID, provider)
+		}
+		if displayName != want.displayName {
+			t.Fatalf("expected display_name %q for %s, got %q", want.displayName, credentialID, displayName)
+		}
+		if baseURL != want.baseURL {
+			t.Fatalf("expected base_url %q for %s, got %q", want.baseURL, credentialID, baseURL)
+		}
 	}
 
 	rows, err := conn.Query(ctx, `
 		select id, requested_model, resolved_provider, provider_credential_id
 		from route_catalog
-		where requested_model in ('gpt-4o-mini', 'text-embedding-3-small')
+		where requested_model in ('qwen-flash', 'text-embedding-v4', 'mimo-v2.5-pro')
 		order by requested_model
 	`)
 	if err != nil {
@@ -375,18 +431,23 @@ func TestSeedDemoDataReseedingProviderPreservesRouteIDs(t *testing.T) {
 		t.Fatalf("rows.Err failed: %v", err)
 	}
 
-	if gotRoutes["gpt-4o-mini"].id != initialChatRouteID {
-		t.Fatalf("expected chat route_id to remain %q, got %q", initialChatRouteID, gotRoutes["gpt-4o-mini"].id)
+	wantRouteOwners := map[string]struct {
+		providerCredentialID string
+		resolvedProvider     string
+	}{
+		"qwen-flash":        {providerCredentialID: "provider_dashscope_primary", resolvedProvider: "Qwen"},
+		"text-embedding-v4": {providerCredentialID: "provider_dashscope_primary", resolvedProvider: "Qwen"},
+		"mimo-v2.5-pro":     {providerCredentialID: "provider_mimo_primary", resolvedProvider: "MIMO"},
 	}
-	if gotRoutes["text-embedding-3-small"].id != initialEmbeddingRouteID {
-		t.Fatalf("expected embedding route_id to remain %q, got %q", initialEmbeddingRouteID, gotRoutes["text-embedding-3-small"].id)
-	}
-	for _, requestedModel := range []string{"gpt-4o-mini", "text-embedding-3-small"} {
-		if gotRoutes[requestedModel].providerCredentialID != wantCredentialID {
-			t.Fatalf("expected %s provider_credential_id %q, got %q", requestedModel, wantCredentialID, gotRoutes[requestedModel].providerCredentialID)
+	for requestedModel, want := range wantRouteOwners {
+		if gotRoutes[requestedModel].id != initialRouteIDs[requestedModel] {
+			t.Fatalf("expected %s route_id to remain %q, got %q", requestedModel, initialRouteIDs[requestedModel], gotRoutes[requestedModel].id)
 		}
-		if gotRoutes[requestedModel].resolvedProvider != secondCfg.ProviderDisplayName {
-			t.Fatalf("expected %s resolved_provider %q, got %q", requestedModel, secondCfg.ProviderDisplayName, gotRoutes[requestedModel].resolvedProvider)
+		if gotRoutes[requestedModel].providerCredentialID != want.providerCredentialID {
+			t.Fatalf("expected %s provider_credential_id %q, got %q", requestedModel, want.providerCredentialID, gotRoutes[requestedModel].providerCredentialID)
+		}
+		if gotRoutes[requestedModel].resolvedProvider != want.resolvedProvider {
+			t.Fatalf("expected %s resolved_provider %q, got %q", requestedModel, want.resolvedProvider, gotRoutes[requestedModel].resolvedProvider)
 		}
 	}
 }
@@ -1146,14 +1207,7 @@ func TestSeedDemoDataPopulatesTenantGovernanceDemoData(t *testing.T) {
 		t.Fatalf("secret.NewCodec failed: %v", err)
 	}
 
-	cfg := SeedConfig{
-		PlatformAPIKey:      "platform-live-key",
-		ProviderBaseURL:     "https://api.openai.example/v1",
-		ProviderAPIKey:      "seed-provider-key",
-		Provider:            "openai",
-		ProviderDisplayName: "OpenAI Primary",
-		SecretCodec:         codec,
-	}
+	cfg := seedConfigForTests(codec)
 	if err := SeedDemoData(ctx, conn, cfg); err != nil {
 		t.Fatalf("SeedDemoData failed: %v", err)
 	}

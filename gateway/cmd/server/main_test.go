@@ -204,7 +204,7 @@ func TestNewServerAppDatabaseModeWritesUsageObservability(t *testing.T) {
 
 	providerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"model":"gpt-4o-mini","choices":[{"message":{"content":"db-mode-answer"}}],"usage":{"prompt_tokens":11,"completion_tokens":7,"total_tokens":18}}`)
+		_, _ = io.WriteString(w, `{"model":"qwen-flash","choices":[{"message":{"content":"db-mode-answer"}}],"usage":{"prompt_tokens":11,"completion_tokens":7,"total_tokens":18}}`)
 	}))
 	t.Cleanup(providerServer.Close)
 
@@ -214,14 +214,17 @@ func TestNewServerAppDatabaseModeWritesUsageObservability(t *testing.T) {
 		SeedPlatformAPIKey:      "platform-live-key",
 		SeedProviderBaseURL:     providerServer.URL + "/v1",
 		SeedProviderAPIKey:      "provider-secret-key",
-		SeedProvider:            "openai",
-		SeedProviderDisplayName: "OpenAI Primary",
+		SeedProvider:            "dashscope",
+		SeedProviderDisplayName: "Qwen",
+		MIMOProviderBaseURL:     "https://api.xiaomimimo.example/v1",
+		MIMOProviderAPIKey:      "mimo-provider-secret-key",
+		MIMOProviderDisplayName: "MIMO",
 		ProviderSecretKey:       "0123456789abcdef0123456789abcdef",
-		ChatFastModel:           "gpt-4o-mini",
-		ChatReasoningModel:      "gpt-4o-mini",
+		ChatFastModel:           "qwen-flash",
+		ChatReasoningModel:      "mimo-v2.5-pro",
 	})
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hello"}]}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"model":"qwen-flash","messages":[{"role":"user","content":"hello"}]}`))
 	req.Header.Set("Authorization", "Bearer platform-live-key")
 	req.Header.Set("Content-Type", "application/json")
 
@@ -252,8 +255,8 @@ func TestNewServerAppDatabaseModeWritesUsageObservability(t *testing.T) {
 	`).Scan(&requestLogID, &routeID, &requestCompletedAt); err != nil {
 		t.Fatalf("QueryRow llm_request_logs failed: %v", err)
 	}
-	if routeID != "route:provider_openai_primary:default" {
-		t.Fatalf("expected route_id %q, got %q", "route:provider_openai_primary:default", routeID)
+	if routeID != "route:provider_dashscope_primary:default" {
+		t.Fatalf("expected route_id %q, got %q", "route:provider_dashscope_primary:default", routeID)
 	}
 
 	var eventType string
@@ -278,8 +281,8 @@ func TestNewServerAppDatabaseModeWritesUsageObservability(t *testing.T) {
 		where bucket_start = date_trunc('hour', $1::timestamptz)
 		  and tenant_id = 'tenant_alpha'
 		  and platform_api_key_id = 'pak_live_console'
-		  and provider_credential_id = 'provider_openai_primary'
-		  and route_id = 'route:provider_openai_primary:default'
+		  and provider_credential_id = 'provider_dashscope_primary'
+		  and route_id = 'route:provider_dashscope_primary:default'
 		  and request_path = '/v1/chat/completions'
 		  and usage_source = 'upstream'
 		  and usage_status = 'success'
@@ -313,10 +316,13 @@ func TestNewServerAppDatabaseModeWiresMemberOverview(t *testing.T) {
 		DatabaseURL:             dsn,
 		RedisURL:                redisURL,
 		SeedPlatformAPIKey:      "platform-live-key",
-		SeedProviderBaseURL:     "https://api.openai.example/v1",
+		SeedProviderBaseURL:     "https://dashscope.aliyuncs.com/compatible-mode/v1",
 		SeedProviderAPIKey:      "provider-secret-key",
-		SeedProvider:            "openai",
-		SeedProviderDisplayName: "OpenAI Primary",
+		SeedProvider:            "dashscope",
+		SeedProviderDisplayName: "Qwen",
+		MIMOProviderBaseURL:     "https://api.xiaomimimo.example/v1",
+		MIMOProviderAPIKey:      "mimo-provider-secret-key",
+		MIMOProviderDisplayName: "MIMO",
 		ProviderSecretKey:       "0123456789abcdef0123456789abcdef",
 	})
 

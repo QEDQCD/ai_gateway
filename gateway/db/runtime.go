@@ -24,15 +24,20 @@ var migrationFS embed.FS
 const migrationAdvisoryLockKey int64 = 5504261723447799379
 
 type SeedConfig struct {
-	PlatformAPIKey      string
-	ProviderBaseURL     string
-	ProviderAPIKey      string
-	Provider            string
-	ProviderDisplayName string
-	SecretCodec         *secret.Codec
-	PlatformKeyCodec    *secret.Codec
-	AdminPassword       string
-	MemberPassword      string
+	PlatformAPIKey   string
+	QwenProvider     SeedProviderConfig
+	MIMOProvider     SeedProviderConfig
+	SecretCodec      *secret.Codec
+	PlatformKeyCodec *secret.Codec
+	AdminPassword    string
+	MemberPassword   string
+}
+
+type SeedProviderConfig struct {
+	BaseURL     string
+	APIKey      string
+	Provider    string
+	DisplayName string
 }
 
 type governanceSeedConfig struct {
@@ -147,21 +152,30 @@ func ApplyMigrations(ctx context.Context, pool *pgxpool.Pool) (err error) {
 
 func SeedDemoData(ctx context.Context, db seedDB, cfg SeedConfig) error {
 	keyHash := hashPlatformAPIKey(cfg.PlatformAPIKey)
-	if cfg.Provider == "" {
-		cfg.Provider = "dashscope"
-	}
-	if cfg.ProviderDisplayName == "" {
-		cfg.ProviderDisplayName = defaultSeedProviderDisplayName(cfg.Provider)
-	}
+	cfg = normalizeSeedConfig(cfg)
+	const (
+		qwenRouteProvider = "Qwen"
+		mimoRouteProvider = "MIMO"
+		ragRouteProvider  = "RAG"
+	)
 
-	providerCredentialID := seedProviderCredentialID(cfg.Provider)
-	chatModel, embeddingModel, supportedModels := seededModels(cfg.Provider)
-	chatRouteID := service.RouteIDForCredential(providerCredentialID, supportedModels, chatModel)
-	embeddingRouteID := service.RouteIDForCredential(providerCredentialID, supportedModels, embeddingModel)
+	qwenCredentialID := seedProviderCredentialID(cfg.QwenProvider.Provider)
+	qwenChatModel, qwenEmbeddingModel, qwenSupportedModels := seededModels(cfg.QwenProvider.Provider)
+	mimoCredentialID := seedProviderCredentialID(cfg.MIMOProvider.Provider)
+	mimoChatModel, _, mimoSupportedModels := seededModels(cfg.MIMOProvider.Provider)
+	qwenChatRouteID := service.RouteIDForCredential(qwenCredentialID, qwenSupportedModels, qwenChatModel)
+	qwenEmbeddingRouteID := service.RouteIDForCredential(qwenCredentialID, qwenSupportedModels, qwenEmbeddingModel)
+	mimoChatRouteID := service.RouteIDForCredential(mimoCredentialID, mimoSupportedModels, mimoChatModel)
 	ragRouteID := service.RouteIDForCredential("provider_rag_service", []string{"rag-query"}, "rag-query")
-	providerName := escapeLiteral(cfg.Provider)
-	providerDisplayName := escapeLiteral(cfg.ProviderDisplayName)
-	providerSecret, err := encryptSeedSecret(cfg.SecretCodec, cfg.ProviderAPIKey)
+	qwenProviderName := escapeLiteral(cfg.QwenProvider.Provider)
+	qwenProviderDisplayName := escapeLiteral(cfg.QwenProvider.DisplayName)
+	mimoProviderName := escapeLiteral(cfg.MIMOProvider.Provider)
+	mimoProviderDisplayName := escapeLiteral(cfg.MIMOProvider.DisplayName)
+	qwenProviderSecret, err := encryptSeedSecret(cfg.SecretCodec, cfg.QwenProvider.APIKey)
+	if err != nil {
+		return err
+	}
+	mimoProviderSecret, err := encryptSeedSecret(cfg.SecretCodec, cfg.MIMOProvider.APIKey)
 	if err != nil {
 		return err
 	}
@@ -239,14 +253,29 @@ func SeedDemoData(ctx context.Context, db seedDB, cfg SeedConfig) error {
 			expires_at = excluded.expires_at;`, keyHash, escapeLiteral(platformKeyCiphertext)),
 		fmt.Sprintf(`insert into provider_credentials (id, provider, display_name, encrypted_secret, status, supported_models, base_url) values
 			('%s', '%s', '%s', '%s', 'active', '{%s}', '%s'),
-			('provider_rag_service', 'rag', '知识库检索服务', '%s', 'active', '{"rag-query"}', 'http://rag-service:8000')
+			('%s', '%s', '%s', '%s', 'active', '{%s}', '%s'),
+			('provider_rag_service', 'rag', 'RAG', '%s', 'active', '{"rag-query"}', 'http://rag-service:8000')
 		on conflict (id) do update set
 			provider = excluded.provider,
 			display_name = excluded.display_name,
 			encrypted_secret = excluded.encrypted_secret,
 			status = excluded.status,
 			supported_models = excluded.supported_models,
-			base_url = excluded.base_url;`, providerCredentialID, providerName, providerDisplayName, escapeLiteral(providerSecret), joinArrayLiteral(supportedModels), escapeLiteral(cfg.ProviderBaseURL), escapeLiteral(ragSecret)),
+			base_url = excluded.base_url;`,
+			qwenCredentialID,
+			qwenProviderName,
+			qwenProviderDisplayName,
+			escapeLiteral(qwenProviderSecret),
+			joinArrayLiteral(qwenSupportedModels),
+			escapeLiteral(cfg.QwenProvider.BaseURL),
+			mimoCredentialID,
+			mimoProviderName,
+			mimoProviderDisplayName,
+			escapeLiteral(mimoProviderSecret),
+			joinArrayLiteral(mimoSupportedModels),
+			escapeLiteral(cfg.MIMOProvider.BaseURL),
+			escapeLiteral(ragSecret),
+		),
 		`insert into knowledge_bases (id, tenant_id, name, status, document_count, chunk_count, updated_at) values
 			('kb_product_docs', 'tenant_alpha', '产品文档库', 'ready', 84, 8400, now() - interval '12 minutes'),
 			('kb_support_archive', 'tenant_beta', '支持工单库', 'indexing', 62, 4000, now() - interval '28 minutes')
@@ -271,8 +300,9 @@ func SeedDemoData(ctx context.Context, db seedDB, cfg SeedConfig) error {
 			updated_at = excluded.updated_at;`,
 		fmt.Sprintf(`insert into route_catalog (id, requested_model, resolved_provider, provider_credential_id, endpoint, latency_ms, health_status, request_mode, updated_at) values
 			('%s', '%s', '%s', '%s', '/v1/chat/completions', 218, 'healthy', '聊天', now() - interval '2 minutes'),
+			('%s', '%s', '%s', '%s', '/v1/chat/completions', 286, 'healthy', '推理', now() - interval '2 minutes'),
 			('%s', '%s', '%s', '%s', '/v1/embeddings', 64, 'healthy', '向量', now() - interval '3 minutes'),
-			('%s', 'rag-query', '知识库检索服务', 'provider_rag_service', '/v1/rag/query', 312, 'warning', '知识库', now() - interval '5 minutes')
+			('%s', 'rag-query', '%s', 'provider_rag_service', '/v1/rag/query', 312, 'warning', '知识库', now() - interval '5 minutes')
 		on conflict (requested_model) do update set
 			resolved_provider = excluded.resolved_provider,
 			provider_credential_id = excluded.provider_credential_id,
@@ -280,26 +310,41 @@ func SeedDemoData(ctx context.Context, db seedDB, cfg SeedConfig) error {
 			latency_ms = excluded.latency_ms,
 			health_status = excluded.health_status,
 			request_mode = excluded.request_mode,
-			updated_at = excluded.updated_at;`, chatRouteID, escapeLiteral(chatModel), providerDisplayName, providerCredentialID, embeddingRouteID, escapeLiteral(embeddingModel), providerDisplayName, providerCredentialID, ragRouteID),
+			updated_at = excluded.updated_at;`,
+			qwenChatRouteID,
+			escapeLiteral(qwenChatModel),
+			qwenRouteProvider,
+			qwenCredentialID,
+			mimoChatRouteID,
+			escapeLiteral(mimoChatModel),
+			mimoRouteProvider,
+			mimoCredentialID,
+			qwenEmbeddingRouteID,
+			escapeLiteral(qwenEmbeddingModel),
+			qwenRouteProvider,
+			qwenCredentialID,
+			ragRouteID,
+			ragRouteProvider,
+		),
 		fmt.Sprintf(`insert into audit_logs (tenant_id, platform_api_key_id, requested_model, endpoint, status_code, provider_display_name, latency_ms, created_at)
 		select * from (values
 			('tenant_alpha', 'pak_live_console', '%s', '/v1/chat/completions', 200, '%s', 218, now() - interval '3 minutes'),
-			('tenant_beta', 'pak_batch_worker', 'rag-query', '/v1/rag/query', 200, '知识库检索服务', 312, now() - interval '6 minutes'),
+			('tenant_beta', 'pak_batch_worker', 'rag-query', '/v1/rag/query', 200, '%s', 312, now() - interval '6 minutes'),
 			('tenant_gamma', 'pak_batch_worker', '%s', '/v1/embeddings', 429, '%s', 64, now() - interval '9 minutes')
 		) as seed(tenant_id, platform_api_key_id, requested_model, endpoint, status_code, provider_display_name, latency_ms, created_at)
-		where not exists (select 1 from audit_logs);`, escapeLiteral(chatModel), providerDisplayName, escapeLiteral(embeddingModel), providerDisplayName),
+		where not exists (select 1 from audit_logs);`, escapeLiteral(qwenChatModel), qwenRouteProvider, ragRouteProvider, escapeLiteral(qwenEmbeddingModel), qwenRouteProvider),
 		fmt.Sprintf(`insert into operational_alerts (alert_type, scope, severity, created_at)
 		select * from (values
 			('quota_warning', 'tenant_beta', 'warning', now() - interval '8 minutes'),
 			('route_fallback', '%s', 'warning', now() - interval '17 minutes'),
 			('latency_spike', 'rag-service', 'warning', now() - interval '27 minutes')
 		) as seed(alert_type, scope, severity, created_at)
-		where not exists (select 1 from operational_alerts);`, escapeLiteral(chatModel)),
+		where not exists (select 1 from operational_alerts);`, escapeLiteral(qwenChatModel)),
 		fmt.Sprintf(`insert into playground_runs (tenant_id, platform_api_key_id, requested_model, prompt, response_excerpt, endpoint, resolved_provider, status_code, latency_ms, created_at)
 		select * from (values
 			('tenant_alpha', 'pak_live_console', '%s', '请介绍 AI Gateway', 'AI Gateway 已就绪，可统一路由聊天、向量和 RAG 请求。', '/v1/chat/completions', '%s', 200, 218, now() - interval '10 minutes')
 		) as seed(tenant_id, platform_api_key_id, requested_model, prompt, response_excerpt, endpoint, resolved_provider, status_code, latency_ms, created_at)
-		where not exists (select 1 from playground_runs);`, escapeLiteral(chatModel), providerDisplayName),
+		where not exists (select 1 from playground_runs);`, escapeLiteral(qwenChatModel), qwenRouteProvider),
 		`insert into system_settings (key, value) values
 			('credential_mode', '平台 API Key 与上游凭据分离，支持 BYOK 扩展'),
 			('fallback_policy', '已启用'),
@@ -391,6 +436,25 @@ func hashPlatformAPIKey(rawKey string) string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
+func normalizeSeedConfig(cfg SeedConfig) SeedConfig {
+	cfg.QwenProvider = normalizeSeedProviderConfig(cfg.QwenProvider, "dashscope")
+	cfg.MIMOProvider = normalizeSeedProviderConfig(cfg.MIMOProvider, "mimo")
+	return cfg
+}
+
+func normalizeSeedProviderConfig(cfg SeedProviderConfig, fallbackProvider string) SeedProviderConfig {
+	if strings.TrimSpace(cfg.Provider) == "" {
+		cfg.Provider = fallbackProvider
+	}
+	if strings.TrimSpace(cfg.BaseURL) == "" {
+		cfg.BaseURL = defaultSeedProviderBaseURL(cfg.Provider)
+	}
+	if strings.TrimSpace(cfg.DisplayName) == "" {
+		cfg.DisplayName = defaultSeedProviderDisplayName(cfg.Provider)
+	}
+	return cfg
+}
+
 func escapeLiteral(value string) string {
 	return strings.ReplaceAll(value, `'`, `''`)
 }
@@ -399,6 +463,8 @@ func seededModels(provider string) (chatModel string, embeddingModel string, sup
 	switch strings.ToLower(strings.TrimSpace(provider)) {
 	case "dashscope":
 		return "qwen-flash", "text-embedding-v4", []string{"qwen-flash", "qwen-plus", "text-embedding-v4"}
+	case "mimo":
+		return "mimo-v2.5-pro", "", []string{"mimo-v2.5-pro"}
 	default:
 		return "gpt-4o-mini", "text-embedding-3-small", []string{"gpt-4o-mini", "text-embedding-3-small"}
 	}
@@ -408,8 +474,21 @@ func defaultSeedProviderDisplayName(provider string) string {
 	switch strings.ToLower(strings.TrimSpace(provider)) {
 	case "dashscope":
 		return "DashScope Primary"
+	case "mimo":
+		return "Xiaomi MIMO"
 	default:
 		return "模型服务主路由"
+	}
+}
+
+func defaultSeedProviderBaseURL(provider string) string {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "dashscope":
+		return "https://dashscope.aliyuncs.com/compatible-mode/v1"
+	case "mimo":
+		return "https://api.xiaomimimo.com/v1"
+	default:
+		return "https://api.openai.example/v1"
 	}
 }
 

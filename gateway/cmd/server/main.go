@@ -68,15 +68,23 @@ func newDatabaseBackedServerApp(cfg config.Config) *fiber.App {
 		panic(err)
 	}
 	if err := gatewaydb.SeedDemoData(ctx, pool, gatewaydb.SeedConfig{
-		PlatformAPIKey:      cfg.SeedPlatformAPIKey,
-		ProviderBaseURL:     cfg.SeedProviderBaseURL,
-		ProviderAPIKey:      cfg.SeedProviderAPIKey,
-		Provider:            cfg.SeedProvider,
-		ProviderDisplayName: cfg.SeedProviderDisplayName,
-		SecretCodec:         providerSecretCodec,
-		PlatformKeyCodec:    platformAPIKeySecretCodec,
-		AdminPassword:       cfg.SeedAdminPassword,
-		MemberPassword:      cfg.SeedMemberPassword,
+		PlatformAPIKey: cfg.SeedPlatformAPIKey,
+		QwenProvider: gatewaydb.SeedProviderConfig{
+			BaseURL:     cfg.SeedProviderBaseURL,
+			APIKey:      cfg.SeedProviderAPIKey,
+			Provider:    cfg.SeedProvider,
+			DisplayName: cfg.SeedProviderDisplayName,
+		},
+		MIMOProvider: gatewaydb.SeedProviderConfig{
+			BaseURL:     cfg.MIMOProviderBaseURL,
+			APIKey:      cfg.MIMOProviderAPIKey,
+			Provider:    "mimo",
+			DisplayName: cfg.MIMOProviderDisplayName,
+		},
+		SecretCodec:      providerSecretCodec,
+		PlatformKeyCodec: platformAPIKeySecretCodec,
+		AdminPassword:    cfg.SeedAdminPassword,
+		MemberPassword:   cfg.SeedMemberPassword,
 	}); err != nil {
 		panic(err)
 	}
