@@ -297,6 +297,203 @@ func TestNewServerAppDatabaseModeWritesUsageObservability(t *testing.T) {
 	}
 }
 
+func TestNewServerAppDatabaseModeRoutesComplexChatToMIMO(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	container, dsn := startPostgresContainer(ctx, t)
+	t.Cleanup(func() {
+		_ = container.Terminate(context.Background())
+	})
+	redisContainer, redisURL := startRedisContainer(ctx, t)
+	t.Cleanup(func() {
+		_ = redisContainer.Terminate(context.Background())
+	})
+
+	qwenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("qwen provider should not receive complex coding chat requests, got %s", r.URL.Path)
+	}))
+	t.Cleanup(qwenServer.Close)
+
+	var mimoModel string
+	mimoServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+
+		var payload struct {
+			Model string `json:"model"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("json.NewDecoder failed: %v", err)
+		}
+		mimoModel = payload.Model
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"model":"mimo-v2.5-pro","choices":[{"message":{"content":"mimo-answer"}}],"usage":{"prompt_tokens":21,"completion_tokens":9,"total_tokens":30}}`)
+	}))
+	t.Cleanup(mimoServer.Close)
+
+	app := newServerApp(config.Config{
+		DatabaseURL:             dsn,
+		RedisURL:                redisURL,
+		SeedPlatformAPIKey:      "platform-live-key",
+		SeedProviderBaseURL:     qwenServer.URL + "/v1",
+		SeedProviderAPIKey:      "qwen-provider-secret-key",
+		SeedProvider:            "dashscope",
+		SeedProviderDisplayName: "Qwen",
+		MIMOProviderBaseURL:     mimoServer.URL + "/v1",
+		MIMOProviderAPIKey:      "mimo-provider-secret-key",
+		MIMOProviderDisplayName: "MIMO",
+		ProviderSecretKey:       "0123456789abcdef0123456789abcdef",
+		ChatFastModel:           "qwen-flash",
+		ChatReasoningModel:      "mimo-v2.5-pro",
+	})
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/chat/completions",
+		bytes.NewBufferString("{\"model\":\"gateway-public\",\"messages\":[{\"role\":\"user\",\"content\":\"请帮我 debug 这段 Go panic，并给出修复代码 ```go\\npanic(\\\"x\\\")\\n```\"}]}"),
+	)
+	req.Header.Set("Authorization", "Bearer platform-live-key")
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if mimoModel != "mimo-v2.5-pro" {
+		t.Fatalf("expected MIMO upstream model %q, got %q", "mimo-v2.5-pro", mimoModel)
+	}
+
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("pgx.Connect failed: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = conn.Close(context.Background())
+	})
+
+	var routeID string
+	var resolvedModel string
+	if err := conn.QueryRow(ctx, `
+		select route_id, resolved_model
+		from llm_request_logs
+		order by created_at desc
+		limit 1
+	`).Scan(&routeID, &resolvedModel); err != nil {
+		t.Fatalf("QueryRow llm_request_logs failed: %v", err)
+	}
+	if routeID != "route:provider_mimo_primary:default" {
+		t.Fatalf("expected route_id %q, got %q", "route:provider_mimo_primary:default", routeID)
+	}
+	if resolvedModel != "mimo-v2.5-pro" {
+		t.Fatalf("expected resolved_model %q, got %q", "mimo-v2.5-pro", resolvedModel)
+	}
+}
+
+func TestNewServerAppDatabaseModeRoutesEmbeddingsToQwen(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	container, dsn := startPostgresContainer(ctx, t)
+	t.Cleanup(func() {
+		_ = container.Terminate(context.Background())
+	})
+	redisContainer, redisURL := startRedisContainer(ctx, t)
+	t.Cleanup(func() {
+		_ = redisContainer.Terminate(context.Background())
+	})
+
+	var qwenPath string
+	var qwenModel string
+	qwenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+
+		var payload struct {
+			Model string `json:"model"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("json.NewDecoder failed: %v", err)
+		}
+		qwenPath = r.URL.Path
+		qwenModel = payload.Model
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"data":[{"embedding":[0.1,0.2,0.3]}]}`)
+	}))
+	t.Cleanup(qwenServer.Close)
+
+	mimoServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("mimo provider should not receive embeddings requests, got %s", r.URL.Path)
+	}))
+	t.Cleanup(mimoServer.Close)
+
+	app := newServerApp(config.Config{
+		DatabaseURL:             dsn,
+		RedisURL:                redisURL,
+		SeedPlatformAPIKey:      "platform-live-key",
+		SeedProviderBaseURL:     qwenServer.URL + "/v1",
+		SeedProviderAPIKey:      "qwen-provider-secret-key",
+		SeedProvider:            "dashscope",
+		SeedProviderDisplayName: "Qwen",
+		MIMOProviderBaseURL:     mimoServer.URL + "/v1",
+		MIMOProviderAPIKey:      "mimo-provider-secret-key",
+		MIMOProviderDisplayName: "MIMO",
+		ProviderSecretKey:       "0123456789abcdef0123456789abcdef",
+		ChatFastModel:           "qwen-flash",
+		ChatReasoningModel:      "mimo-v2.5-pro",
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/embeddings", bytes.NewBufferString(`{"model":"text-embedding-v4","input":"hello"}`))
+	req.Header.Set("Authorization", "Bearer platform-live-key")
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if qwenPath != "/v1/embeddings" {
+		t.Fatalf("expected qwen path %q, got %q", "/v1/embeddings", qwenPath)
+	}
+	if qwenModel != "text-embedding-v4" {
+		t.Fatalf("expected qwen model %q, got %q", "text-embedding-v4", qwenModel)
+	}
+
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("pgx.Connect failed: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = conn.Close(context.Background())
+	})
+
+	var routeID string
+	var providerCredentialID string
+	if err := conn.QueryRow(ctx, `
+		select route_id, provider_credential_id
+		from llm_request_logs
+		order by created_at desc
+		limit 1
+	`).Scan(&routeID, &providerCredentialID); err != nil {
+		t.Fatalf("QueryRow llm_request_logs failed: %v", err)
+	}
+	if routeID != "route:provider_dashscope_primary:text-embedding-v4" {
+		t.Fatalf("expected route_id %q, got %q", "route:provider_dashscope_primary:text-embedding-v4", routeID)
+	}
+	if providerCredentialID != "provider_dashscope_primary" {
+		t.Fatalf("expected provider_credential_id %q, got %q", "provider_dashscope_primary", providerCredentialID)
+	}
+}
+
 func TestNewServerAppDatabaseModeWiresMemberOverview(t *testing.T) {
 	t.Parallel()
 
