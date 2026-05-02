@@ -40,6 +40,40 @@ func TestNewQuotaGuardPanicsInDatabaseModeWithInvalidRedisURL(t *testing.T) {
 	})
 }
 
+func TestValidateDatabaseModeSecurityRequiresServiceAuthCredentials(t *testing.T) {
+	t.Parallel()
+
+	assertPanicContains(t, "GATEWAY_SERVICE_AUTH_USERNAME and GATEWAY_SERVICE_AUTH_PASSWORD are required in database mode", func() {
+		validateDatabaseModeSecurity(config.Config{
+			DatabaseURL: "postgres://gateway.example/db",
+		})
+	})
+}
+
+func TestValidateDatabaseModeSecurityRejectsDefaultWeakSecrets(t *testing.T) {
+	t.Parallel()
+
+	assertPanicContains(t, "GATEWAY_CONSOLE_SESSION_SECRET must be changed from the example value", func() {
+		validateDatabaseModeSecurity(config.Config{
+			DatabaseURL:             "postgres://gateway.example/db",
+			ServiceAuthUsername:     "example-console-user",
+			ServiceAuthPassword:     "strong-service-password",
+			ConsoleSessionSecret:    "change-me-console-session-secret",
+			SeedAdminPassword:       "strong-admin-password",
+			SeedMemberPassword:      "strong-member-password",
+			RAGServiceUsername:      "example-rag-user",
+			RAGServicePassword:      "strong-rag-password",
+			ProviderSecretKey:       "0123456789abcdef0123456789abcdef",
+			SeedPlatformAPIKey:      "strong-platform-key",
+			SeedProviderAPIKey:      "strong-provider-key",
+			MIMOProviderAPIKey:      "strong-mimo-key",
+			RabbitMQURL:             "amqp://example:strong-rabbit@rabbitmq:5672/ai_gateway",
+			RedisURL:                "redis://example:strong-redis@redis:6379/0",
+			PlatformAPIKeySecretKey: "abcdefghijklmnopqrstuvwxyz123456",
+		})
+	})
+}
+
 func TestNewServerAppAuthenticatesBootstrapRequest(t *testing.T) {
 	t.Parallel()
 
@@ -208,7 +242,7 @@ func TestNewServerAppDatabaseModeWritesUsageObservability(t *testing.T) {
 	}))
 	t.Cleanup(providerServer.Close)
 
-	app := newServerApp(config.Config{
+	app := newServerApp(secureDatabaseConfig(config.Config{
 		DatabaseURL:             dsn,
 		RedisURL:                redisURL,
 		SeedPlatformAPIKey:      "platform-live-key",
@@ -222,7 +256,7 @@ func TestNewServerAppDatabaseModeWritesUsageObservability(t *testing.T) {
 		ProviderSecretKey:       "0123456789abcdef0123456789abcdef",
 		ChatFastModel:           "qwen-flash",
 		ChatReasoningModel:      "mimo-v2.5-pro",
-	})
+	}))
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"model":"qwen-flash","messages":[{"role":"user","content":"hello"}]}`))
 	req.Header.Set("Authorization", "Bearer platform-live-key")
@@ -334,7 +368,7 @@ func TestNewServerAppDatabaseModeRoutesComplexChatToMIMO(t *testing.T) {
 	}))
 	t.Cleanup(mimoServer.Close)
 
-	app := newServerApp(config.Config{
+	app := newServerApp(secureDatabaseConfig(config.Config{
 		DatabaseURL:             dsn,
 		RedisURL:                redisURL,
 		SeedPlatformAPIKey:      "platform-live-key",
@@ -348,7 +382,7 @@ func TestNewServerAppDatabaseModeRoutesComplexChatToMIMO(t *testing.T) {
 		ProviderSecretKey:       "0123456789abcdef0123456789abcdef",
 		ChatFastModel:           "qwen-flash",
 		ChatReasoningModel:      "mimo-v2.5-pro",
-	})
+	}))
 
 	req := httptest.NewRequest(
 		http.MethodPost,
@@ -434,7 +468,7 @@ func TestNewServerAppDatabaseModeRoutesEmbeddingsToQwen(t *testing.T) {
 	}))
 	t.Cleanup(mimoServer.Close)
 
-	app := newServerApp(config.Config{
+	app := newServerApp(secureDatabaseConfig(config.Config{
 		DatabaseURL:             dsn,
 		RedisURL:                redisURL,
 		SeedPlatformAPIKey:      "platform-live-key",
@@ -448,7 +482,7 @@ func TestNewServerAppDatabaseModeRoutesEmbeddingsToQwen(t *testing.T) {
 		ProviderSecretKey:       "0123456789abcdef0123456789abcdef",
 		ChatFastModel:           "qwen-flash",
 		ChatReasoningModel:      "mimo-v2.5-pro",
-	})
+	}))
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/embeddings", bytes.NewBufferString(`{"model":"text-embedding-v4","input":"hello"}`))
 	req.Header.Set("Authorization", "Bearer platform-live-key")
@@ -509,7 +543,7 @@ func TestNewServerAppDatabaseModeWiresMemberOverview(t *testing.T) {
 		_ = redisContainer.Terminate(context.Background())
 	})
 
-	app := newServerApp(config.Config{
+	app := newServerApp(secureDatabaseConfig(config.Config{
 		DatabaseURL:             dsn,
 		RedisURL:                redisURL,
 		SeedPlatformAPIKey:      "platform-live-key",
@@ -521,10 +555,31 @@ func TestNewServerAppDatabaseModeWiresMemberOverview(t *testing.T) {
 		MIMOProviderAPIKey:      "mimo-provider-secret-key",
 		MIMOProviderDisplayName: "MIMO",
 		ProviderSecretKey:       "0123456789abcdef0123456789abcdef",
-	})
+	}))
+
+	loginReq := httptest.NewRequest(http.MethodPost, "/console/session/login", bytes.NewBufferString(`{"email":"member-a@example.com","password":"test-member-password"}`))
+	loginReq.Header.Set("Content-Type", "application/json")
+	loginResp, err := app.Test(loginReq)
+	if err != nil {
+		t.Fatalf("login app.Test failed: %v", err)
+	}
+	if loginResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected login 200, got %d", loginResp.StatusCode)
+	}
+	var loginPayload struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(loginResp.Body).Decode(&loginPayload); err != nil {
+		t.Fatalf("json.NewDecoder login failed: %v", err)
+	}
+	if loginPayload.Token == "" {
+		t.Fatal("expected login token")
+	}
 
 	req := httptest.NewRequest(http.MethodGet, "/me/overview", nil)
-	req.Header.Set("X-Console-Subject", "member-a@example.com")
+	req.Header.Set("X-Service-User", "test-service-user")
+	req.Header.Set("X-Service-Password", "test-service-password")
+	req.Header.Set("X-Console-Session", loginPayload.Token)
 
 	resp, err := app.Test(req)
 	if err != nil {
@@ -562,6 +617,15 @@ func TestNewServerAppDatabaseModeWiresMemberOverview(t *testing.T) {
 	if payload.Quota.RequestLimit == 0 || payload.Quota.TokenLimit == 0 {
 		t.Fatalf("expected quota limits to be populated, got %+v", payload.Quota)
 	}
+}
+
+func secureDatabaseConfig(cfg config.Config) config.Config {
+	cfg.ServiceAuthUsername = "test-service-user"
+	cfg.ServiceAuthPassword = "test-service-password"
+	cfg.ConsoleSessionSecret = "test-console-session-secret"
+	cfg.SeedAdminPassword = "test-admin-password"
+	cfg.SeedMemberPassword = "test-member-password"
+	return cfg
 }
 
 func startPostgresContainer(ctx context.Context, t *testing.T) (testcontainers.Container, string) {

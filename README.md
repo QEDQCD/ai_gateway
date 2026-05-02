@@ -67,6 +67,12 @@ cp deploy/compose/.env.example deploy/compose/.env.local
 
 按需编辑 `deploy/compose/.env.local`，填入本地账号、密码与端口配置。
 
+安全要求：
+
+- 不要直接使用 `.env.example` 中的 `change-me-*` 示例值启动服务。
+- 数据库模式下，`gateway` 会拒绝空的控制台服务认证、空的控制台会话密钥，以及未替换的示例控制台密码。
+- Compose 默认只把宿主机端口绑定到 `127.0.0.1`；如需公网访问，请通过受控的反向代理、VPN 或 frp 隧道暴露必要入口，不要直接暴露数据库、Redis 或 RabbitMQ。
+
 ### 模型计价配置
 
 Token 计价由 `gateway` 进程读取环境变量，单位是“`微元 / 百万 Token`”：

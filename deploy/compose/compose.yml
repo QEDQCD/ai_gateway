@@ -5,9 +5,9 @@ services:
     environment:
       POSTGRES_DB: "${POSTGRES_DB:-ai_gateway}"
       POSTGRES_USER: "${POSTGRES_USER:-example-db-user}"
-      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-change-me-db-password}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/compose/.env.local}"
     ports:
-      - "32143:5432"
+      - "127.0.0.1:32143:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
@@ -21,11 +21,11 @@ services:
         umask 077
         cat >/tmp/users.acl <<EOF
         user default off
-        user ${REDIS_USERNAME:-example-cache-user} on >${REDIS_PASSWORD:-change-me-cache-password} ~* +@all
+        user ${REDIS_USERNAME:-example-cache-user} on >${REDIS_PASSWORD:?set REDIS_PASSWORD in deploy/compose/.env.local} ~* +@all
         EOF
         exec redis-server /usr/local/etc/redis/redis.conf --aclfile /tmp/users.acl
     ports:
-      - "31879:6379"
+      - "127.0.0.1:31879:6379"
     volumes:
       - ../../deploy/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
 
@@ -34,11 +34,11 @@ services:
     restart: unless-stopped
     environment:
       RABBITMQ_DEFAULT_USER: "${RABBITMQ_DEFAULT_USER:-example-mq-user}"
-      RABBITMQ_DEFAULT_PASS: "${RABBITMQ_DEFAULT_PASS:-change-me-mq-password}"
+      RABBITMQ_DEFAULT_PASS: "${RABBITMQ_DEFAULT_PASS:?set RABBITMQ_DEFAULT_PASS in deploy/compose/.env.local}"
       RABBITMQ_DEFAULT_VHOST: "${RABBITMQ_DEFAULT_VHOST:-ai_gateway}"
     ports:
-      - "32361:5672"
-      - "32704:15672"
+      - "127.0.0.1:32361:5672"
+      - "127.0.0.1:32704:15672"
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
 
@@ -56,9 +56,9 @@ services:
     depends_on:
       - postgres
     environment:
-      RAG_DATABASE_URL: "postgres://${POSTGRES_USER:-example-db-user}:${POSTGRES_PASSWORD:-change-me-db-password}@postgres:5432/${POSTGRES_DB:-ai_gateway}"
+      RAG_DATABASE_URL: "postgres://${POSTGRES_USER:-example-db-user}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/compose/.env.local}@postgres:5432/${POSTGRES_DB:-ai_gateway}"
       RAG_SERVICE_BASIC_AUTH_USERNAME: "${RAG_SERVICE_BASIC_AUTH_USERNAME:-example-rag-user}"
-      RAG_SERVICE_BASIC_AUTH_PASSWORD: "${RAG_SERVICE_BASIC_AUTH_PASSWORD:-change-me-rag-password}"
+      RAG_SERVICE_BASIC_AUTH_PASSWORD: "${RAG_SERVICE_BASIC_AUTH_PASSWORD:?set RAG_SERVICE_BASIC_AUTH_PASSWORD in deploy/compose/.env.local}"
       RAG_LLM_BASE_URL: "https://dashscope.aliyuncs.com/compatible-mode/v1"
       RAG_LLM_API_KEY_FILE: "/run/secrets/dashscope_api_key"
       RAG_LLM_CHAT_MODEL: "qwen-flash"
@@ -79,14 +79,14 @@ services:
       - model-service
     environment:
       GATEWAY_LISTEN_ADDR: ":8080"
-      GATEWAY_DATABASE_URL: "postgres://${POSTGRES_USER:-example-db-user}:${POSTGRES_PASSWORD:-change-me-db-password}@postgres:5432/${POSTGRES_DB:-ai_gateway}?sslmode=disable"
-      GATEWAY_REDIS_URL: "redis://${REDIS_USERNAME:-example-cache-user}:${REDIS_PASSWORD:-change-me-cache-password}@redis:6379/0"
-      GATEWAY_RABBITMQ_URL: "amqp://${RABBITMQ_DEFAULT_USER:-example-mq-user}:${RABBITMQ_DEFAULT_PASS:-change-me-mq-password}@rabbitmq:5672/${RABBITMQ_DEFAULT_VHOST:-ai_gateway}"
+      GATEWAY_DATABASE_URL: "postgres://${POSTGRES_USER:-example-db-user}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/compose/.env.local}@postgres:5432/${POSTGRES_DB:-ai_gateway}?sslmode=disable"
+      GATEWAY_REDIS_URL: "redis://${REDIS_USERNAME:-example-cache-user}:${REDIS_PASSWORD:?set REDIS_PASSWORD in deploy/compose/.env.local}@redis:6379/0"
+      GATEWAY_RABBITMQ_URL: "amqp://${RABBITMQ_DEFAULT_USER:-example-mq-user}:${RABBITMQ_DEFAULT_PASS:?set RABBITMQ_DEFAULT_PASS in deploy/compose/.env.local}@rabbitmq:5672/${RABBITMQ_DEFAULT_VHOST:-ai_gateway}"
       GATEWAY_RAG_SERVICE_BASE_URL: "http://internal-search:8000"
       GATEWAY_RAG_SERVICE_USERNAME: "${RAG_SERVICE_BASIC_AUTH_USERNAME:-example-rag-user}"
-      GATEWAY_RAG_SERVICE_PASSWORD: "${RAG_SERVICE_BASIC_AUTH_PASSWORD:-change-me-rag-password}"
+      GATEWAY_RAG_SERVICE_PASSWORD: "${RAG_SERVICE_BASIC_AUTH_PASSWORD:?set RAG_SERVICE_BASIC_AUTH_PASSWORD in deploy/compose/.env.local}"
       GATEWAY_SERVICE_AUTH_USERNAME: "${GATEWAY_SERVICE_AUTH_USERNAME:-example-console-user}"
-      GATEWAY_SERVICE_AUTH_PASSWORD: "${GATEWAY_SERVICE_AUTH_PASSWORD:-change-me-console-password}"
+      GATEWAY_SERVICE_AUTH_PASSWORD: "${GATEWAY_SERVICE_AUTH_PASSWORD:?set GATEWAY_SERVICE_AUTH_PASSWORD in deploy/compose/.env.local}"
       GATEWAY_SEED_PLATFORM_API_KEY_FILE: "/run/secrets/gateway_seed_platform_api_key"
       GATEWAY_SEED_PROVIDER: "dashscope"
       GATEWAY_SEED_PROVIDER_DISPLAY_NAME: "Platform Default Route"
@@ -96,9 +96,9 @@ services:
       GATEWAY_MIMO_PROVIDER_DISPLAY_NAME: "${GATEWAY_MIMO_PROVIDER_DISPLAY_NAME:-Xiaomi MIMO}"
       GATEWAY_MIMO_PROVIDER_API_KEY_FILE: "/run/secrets/mimo_api_key"
       GATEWAY_PROVIDER_SECRET_KEY_FILE: "/run/secrets/provider_master_key"
-      GATEWAY_CONSOLE_SESSION_SECRET: "${GATEWAY_CONSOLE_SESSION_SECRET:-change-me-console-session-secret}"
-      GATEWAY_CONSOLE_ADMIN_PASSWORD: "${GATEWAY_CONSOLE_ADMIN_PASSWORD:-change-me-admin-password}"
-      GATEWAY_CONSOLE_MEMBER_PASSWORD: "${GATEWAY_CONSOLE_MEMBER_PASSWORD:-change-me-member-password}"
+      GATEWAY_CONSOLE_SESSION_SECRET: "${GATEWAY_CONSOLE_SESSION_SECRET:?set GATEWAY_CONSOLE_SESSION_SECRET in deploy/compose/.env.local}"
+      GATEWAY_CONSOLE_ADMIN_PASSWORD: "${GATEWAY_CONSOLE_ADMIN_PASSWORD:?set GATEWAY_CONSOLE_ADMIN_PASSWORD in deploy/compose/.env.local}"
+      GATEWAY_CONSOLE_MEMBER_PASSWORD: "${GATEWAY_CONSOLE_MEMBER_PASSWORD:?set GATEWAY_CONSOLE_MEMBER_PASSWORD in deploy/compose/.env.local}"
       GATEWAY_CHAT_FAST_MODEL: "${GATEWAY_CHAT_FAST_MODEL:-qwen-flash}"
       GATEWAY_CHAT_REASONING_MODEL: "${GATEWAY_CHAT_REASONING_MODEL:-mimo-v2.5-pro}"
       GATEWAY_SMART_ROUTING_CODING_KEYWORDS: "${GATEWAY_SMART_ROUTING_CODING_KEYWORDS:-写代码,实现,重构,debug,报错,异常,单元测试,架构设计}"
@@ -110,7 +110,7 @@ services:
       GATEWAY_MODEL_TOKEN_PRICING_QWEN_FLASH_OUTPUT_MICROYUAN_PER_MILLION: "${GATEWAY_MODEL_TOKEN_PRICING_QWEN_FLASH_OUTPUT_MICROYUAN_PER_MILLION:-20000000}"
       GATEWAY_MODEL_TOKEN_PRICING_QWEN_FLASH_CACHED_MICROYUAN_PER_MILLION: "${GATEWAY_MODEL_TOKEN_PRICING_QWEN_FLASH_CACHED_MICROYUAN_PER_MILLION:-500000}"
     ports:
-      - "32658:8080"
+      - "127.0.0.1:32658:8080"
     volumes:
       - ${AI_GATEWAY_SECRET_DIR:-../../.ai_gateway_secrets}/gateway_seed_platform_api_key:/run/secrets/gateway_seed_platform_api_key:ro
       - ${AI_GATEWAY_SECRET_DIR:-../../.ai_gateway_secrets}/dashscope_api_key:/run/secrets/dashscope_api_key:ro
@@ -126,9 +126,9 @@ services:
       - gateway
     environment:
       GATEWAY_SERVICE_AUTH_USERNAME: "${GATEWAY_SERVICE_AUTH_USERNAME:-example-console-user}"
-      GATEWAY_SERVICE_AUTH_PASSWORD: "${GATEWAY_SERVICE_AUTH_PASSWORD:-change-me-console-password}"
+      GATEWAY_SERVICE_AUTH_PASSWORD: "${GATEWAY_SERVICE_AUTH_PASSWORD:?set GATEWAY_SERVICE_AUTH_PASSWORD in deploy/compose/.env.local}"
     ports:
-      - "31873:8080"
+      - "127.0.0.1:31873:8080"
 
 volumes:
   postgres_data:

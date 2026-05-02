@@ -57,6 +57,7 @@ func newServerApp(cfg config.Config) *fiber.App {
 
 func newDatabaseBackedServerApp(cfg config.Config) *fiber.App {
 	ctx := context.Background()
+	validateDatabaseModeSecurity(cfg)
 	providerSecretCodec := mustNewProviderSecretCodec(cfg)
 	platformAPIKeySecretCodec := mustNewPlatformAPIKeySecretCodec(cfg)
 
@@ -160,6 +161,38 @@ func newBootstrapProviderClients(cfg config.Config) (service.UpstreamChatClient,
 	default:
 		client := provider.NewOpenAIClient(nil)
 		return client, client
+	}
+}
+
+func validateDatabaseModeSecurity(cfg config.Config) {
+	if strings.TrimSpace(cfg.DatabaseURL) == "" {
+		return
+	}
+
+	requireDatabaseModeSecret(cfg.ServiceAuthUsername, "GATEWAY_SERVICE_AUTH_USERNAME")
+	requireDatabaseModeSecret(cfg.ServiceAuthPassword, "GATEWAY_SERVICE_AUTH_PASSWORD")
+	requireDatabaseModeSecret(cfg.ConsoleSessionSecret, "GATEWAY_CONSOLE_SESSION_SECRET")
+	requireDatabaseModeSecret(cfg.SeedAdminPassword, "GATEWAY_CONSOLE_ADMIN_PASSWORD")
+	requireDatabaseModeSecret(cfg.SeedMemberPassword, "GATEWAY_CONSOLE_MEMBER_PASSWORD")
+
+	rejectExampleSecret(cfg.ServiceAuthPassword, "change-me-console-password", "GATEWAY_SERVICE_AUTH_PASSWORD")
+	rejectExampleSecret(cfg.ConsoleSessionSecret, "change-me-console-session-secret", "GATEWAY_CONSOLE_SESSION_SECRET")
+	rejectExampleSecret(cfg.SeedAdminPassword, "change-me-admin-password", "GATEWAY_CONSOLE_ADMIN_PASSWORD")
+	rejectExampleSecret(cfg.SeedMemberPassword, "change-me-member-password", "GATEWAY_CONSOLE_MEMBER_PASSWORD")
+}
+
+func requireDatabaseModeSecret(value string, name string) {
+	if strings.TrimSpace(value) == "" {
+		if name == "GATEWAY_SERVICE_AUTH_USERNAME" || name == "GATEWAY_SERVICE_AUTH_PASSWORD" {
+			panic("gateway: GATEWAY_SERVICE_AUTH_USERNAME and GATEWAY_SERVICE_AUTH_PASSWORD are required in database mode")
+		}
+		panic(fmt.Sprintf("gateway: %s is required in database mode", name))
+	}
+}
+
+func rejectExampleSecret(value string, example string, name string) {
+	if strings.TrimSpace(value) == example {
+		panic(fmt.Sprintf("gateway: %s must be changed from the example value", name))
 	}
 }
 
