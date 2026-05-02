@@ -241,7 +241,7 @@ docker compose --env-file deploy/compose/.env.local -f deploy/compose/compose.ym
 ```bash
 SESSION_TOKEN=$(curl -s -X POST http://127.0.0.1:32658/console/session/login \
   -H 'Content-Type: application/json' \
-  -d '{"email":"admin@example.com","password":"<GATEWAY_CONSOLE_ADMIN_PASSWORD>"}' | jq -r '.token')
+  -d '{"email":"<ADMIN_CONSOLE_EMAIL>","password":"<GATEWAY_CONSOLE_ADMIN_PASSWORD>"}' | jq -r '.token')
 
 curl -u <GATEWAY_SERVICE_AUTH_USERNAME>:<GATEWAY_SERVICE_AUTH_PASSWORD> \
   -H "X-Console-Session: ${SESSION_TOKEN}" \
@@ -311,10 +311,10 @@ member 侧使用同一组 Basic Auth，并改为 member 登录拿到 `X-Console-
 
 ### 前端登录
 
-前端 `31873` 不再使用浏览器 Basic Auth，而是直接打开应用内登录页。登录账号密码同样来自 `deploy/compose/.env.local`：
+前端 `31873` 不再使用浏览器 Basic Auth，而是直接打开应用内登录页。登录邮箱和密码以实际部署配置为准，不要把真实账号或密码写入文档：
 
-- 管理员账号：固定使用 `admin@example.com`
-- 普通用户账号：固定使用 `member-a@example.com`
+- 管理员邮箱：`<ADMIN_CONSOLE_EMAIL>`
+- 普通用户邮箱：`<MEMBER_CONSOLE_EMAIL>`
 - 对应密码：`GATEWAY_CONSOLE_ADMIN_PASSWORD`、`GATEWAY_CONSOLE_MEMBER_PASSWORD`
 
 ### 公开申请注册
