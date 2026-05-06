@@ -23,19 +23,30 @@ func ChatCompletion(proxy service.ChatProxyService, router service.SmartRouter, 
 			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
 		}
 
-		decision := router.Decide(req)
-		resolved, err := authService.Resolve(chatScopedRequestContext(c), bearerToken(c), decision.TargetModelTier)
+		requestedModel := strings.TrimSpace(req.Model)
+		decision := chatRoutingDecision(req, router)
+		resolvedModel := decision.TargetModelTier
+		if requestedModel != "" {
+			resolvedModel = normalizeExplicitChatModel(requestedModel)
+			decision = service.SmartRoutingDecision{
+				TaskClass:       "explicit_model",
+				TargetModelTier: resolvedModel,
+				MatchedRules:    []string{"explicit_model:" + requestedModel},
+			}
+		}
+
+		resolved, err := authService.Resolve(chatScopedRequestContext(c), bearerToken(c), resolvedModel)
 		if err != nil {
 			proxy.RecordFailure(c.UserContext(), c.Locals("requestContext"), authStatusCode(err))
 			return chatAuthError(err)
 		}
-		resolved.RequestedModel = strings.TrimSpace(req.Model)
+		resolved.RequestedModel = requestedModel
 		resolved.TaskClass = decision.TaskClass
 		resolved.TargetModelTier = decision.TargetModelTier
 		resolved.RoutingReason = strings.Join(decision.MatchedRules, ",")
-		resolved.ResolvedModel = decision.TargetModelTier
-		if strings.TrimSpace(decision.TargetModelTier) != "" {
-			req.Model = decision.TargetModelTier
+		resolved.ResolvedModel = resolvedModel
+		if resolvedModel != "" {
+			req.Model = resolvedModel
 		}
 		c.Locals("requestContext", resolved)
 
@@ -68,6 +79,21 @@ func ChatCompletion(proxy service.ChatProxyService, router service.SmartRouter, 
 	}
 }
 
+func chatRoutingDecision(req service.ChatRequest, router service.SmartRouter) service.SmartRoutingDecision {
+	if router == nil {
+		return service.SmartRoutingDecision{}
+	}
+	return router.Decide(req)
+}
+
+func normalizeExplicitChatModel(model string) string {
+	model = strings.TrimSpace(model)
+	if strings.EqualFold(model, "mimo") {
+		return "mimo-v2.5-pro"
+	}
+	return model
+}
+
 func bearerToken(c *fiber.Ctx) string {
 	return strings.TrimSpace(strings.TrimPrefix(c.Get("Authorization"), "Bearer "))
 }
@@ -82,6 +108,8 @@ func authStatusCode(err error) int {
 		return fiber.StatusUnauthorized
 	case errors.Is(err, service.ErrQuotaExceeded):
 		return fiber.StatusTooManyRequests
+	case errors.Is(err, service.ErrModelNotAllowed):
+		return fiber.StatusForbidden
 	case errors.Is(err, service.ErrRouteNotFound):
 		return fiber.StatusBadGateway
 	default:
@@ -95,6 +123,8 @@ func authMessage(err error) string {
 		return "unauthorized"
 	case errors.Is(err, service.ErrQuotaExceeded):
 		return "quota exceeded"
+	case errors.Is(err, service.ErrModelNotAllowed):
+		return "model not allowed"
 	case errors.Is(err, service.ErrRouteNotFound):
 		return "route resolution failed"
 	default:

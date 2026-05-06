@@ -1543,10 +1543,11 @@ func TestPostgresConsoleServiceApproveApplicationCreatesUserMembershipAndAudit(t
 	}
 
 	result, err := console.ApproveApplication(ctx, "app_service_pending", service.ApproveApplicationRequest{
-		ActorID:    "user_admin_demo",
-		Comment:    "approved via service",
-		TenantID:   "tenant_demo",
-		TokenLimit: 23456789,
+		ActorID:       "user_admin_demo",
+		Comment:       "approved via service",
+		TenantID:      "tenant_demo",
+		TokenLimit:    23456789,
+		AllowedModels: []string{"qwen-flash", "mimo-v2.5-pro"},
 	})
 	if err != nil {
 		t.Fatalf("ApproveApplication failed: %v", err)
@@ -1664,15 +1665,19 @@ func TestPostgresConsoleServiceApproveApplicationCreatesUserMembershipAndAudit(t
 	}
 
 	var tokenLimit int64
+	var allowedModels []string
 	if err := conn.QueryRow(ctx, `
-		select token_limit
+		select token_limit, allowed_models
 		from tenant_quota_policies
 		where tenant_id = 'tenant_demo'
-	`).Scan(&tokenLimit); err != nil {
+	`).Scan(&tokenLimit, &allowedModels); err != nil {
 		t.Fatalf("select tenant quota policy failed: %v", err)
 	}
 	if tokenLimit != 23456789 {
 		t.Fatalf("expected token_limit %d, got %d", 23456789, tokenLimit)
+	}
+	if !slices.Equal(allowedModels, []string{"qwen-flash", "mimo-v2.5-pro"}) {
+		t.Fatalf("expected allowed_models to be persisted, got %#v", allowedModels)
 	}
 }
 
@@ -1716,10 +1721,11 @@ func TestPostgresConsoleServiceApproveApplicationCreatesTenantWhenMissing(t *tes
 	}
 
 	result, err := console.ApproveApplication(ctx, "app_create_tenant_pending", service.ApproveApplicationRequest{
-		ActorID:    "user_admin_demo",
-		Comment:    "approved with new tenant",
-		TenantID:   "tenant_create_tenant_co",
-		TokenLimit: 8765432,
+		ActorID:       "user_admin_demo",
+		Comment:       "approved with new tenant",
+		TenantID:      "tenant_create_tenant_co",
+		TokenLimit:    8765432,
+		AllowedModels: []string{"qwen-flash"},
 	})
 	if err != nil {
 		t.Fatalf("ApproveApplication failed: %v", err)
@@ -1761,11 +1767,12 @@ func TestPostgresConsoleServiceApproveApplicationCreatesTenantWhenMissing(t *tes
 
 	var requestLimit int64
 	var tokenLimit int64
+	var allowedModels []string
 	if err := conn.QueryRow(ctx, `
-		select request_limit, token_limit
+		select request_limit, token_limit, allowed_models
 		from tenant_quota_policies
 		where tenant_id = 'tenant_create_tenant_co'
-	`).Scan(&requestLimit, &tokenLimit); err != nil {
+	`).Scan(&requestLimit, &tokenLimit, &allowedModels); err != nil {
 		t.Fatalf("select created tenant quota policy failed: %v", err)
 	}
 	if requestLimit <= 0 {
@@ -1773,6 +1780,9 @@ func TestPostgresConsoleServiceApproveApplicationCreatesTenantWhenMissing(t *tes
 	}
 	if tokenLimit != 8765432 {
 		t.Fatalf("expected token_limit %d, got %d", 8765432, tokenLimit)
+	}
+	if !slices.Equal(allowedModels, []string{"qwen-flash"}) {
+		t.Fatalf("expected created tenant allowed_models qwen-flash, got %#v", allowedModels)
 	}
 }
 
@@ -1870,6 +1880,134 @@ func TestPostgresConsoleServiceRejectApplicationUpdatesStatusAndAudit(t *testing
 	}
 	if auditCount != 1 {
 		t.Fatalf("expected 1 rejection audit event, got %d", auditCount)
+	}
+}
+
+func TestPostgresConsoleServiceApproveAccountDeletionApplicationDisablesUserMembershipAndKeys(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	if _, err := conn.Exec(ctx, `
+		insert into platform_api_keys (
+			id,
+			tenant_id,
+			name,
+			key_hash,
+			status,
+			scopes,
+			created_by_user_id,
+			created_at,
+			expires_at
+		) values (
+			'pak_delete_member_owned',
+			'tenant_demo',
+			'delete-member-owned',
+			'sha256:delete-member-owned',
+			'active',
+			ARRAY['chat'],
+			'user_member_a',
+			now(),
+			now() + interval '30 days'
+		), (
+			'pak_delete_other_member',
+			'tenant_demo',
+			'delete-other-member',
+			'sha256:delete-other-member',
+			'active',
+			ARRAY['chat'],
+			'user_member_b',
+			now(),
+			now() + interval '30 days'
+		);
+
+		insert into account_deletion_applications (
+			id,
+			user_id,
+			tenant_id,
+			reason,
+			status,
+			created_at
+		) values (
+			'ada_service_pending',
+			'user_member_a',
+			'tenant_demo',
+			'不再使用',
+			'pending',
+			timestamptz '2026-05-06T01:02:03Z'
+		);
+	`); err != nil {
+		t.Fatalf("seed account deletion application failed: %v", err)
+	}
+
+	result, err := console.ApproveAccountDeletionApplication(ctx, "ada_service_pending", service.ReviewAccountDeletionApplicationRequest{
+		ActorID: "user_admin_demo",
+		Comment: "同意注销",
+	})
+	if err != nil {
+		t.Fatalf("ApproveAccountDeletionApplication failed: %v", err)
+	}
+
+	if result.Item.ID != "ada_service_pending" {
+		t.Fatalf("expected item id %q, got %q", "ada_service_pending", result.Item.ID)
+	}
+	if result.Item.Status != "approved" {
+		t.Fatalf("expected status %q, got %q", "approved", result.Item.Status)
+	}
+	if result.Item.DisabledAPIKeys != 1 {
+		t.Fatalf("expected disabled_api_keys 1, got %d", result.Item.DisabledAPIKeys)
+	}
+
+	var userStatus string
+	if err := conn.QueryRow(ctx, `select status from users where id = 'user_member_a';`).Scan(&userStatus); err != nil {
+		t.Fatalf("QueryRow user status failed: %v", err)
+	}
+	if userStatus != "disabled" {
+		t.Fatalf("expected user status disabled, got %q", userStatus)
+	}
+
+	var membershipStatus string
+	if err := conn.QueryRow(ctx, `
+		select status
+		from tenant_memberships
+		where tenant_id = 'tenant_demo'
+		  and user_id = 'user_member_a';
+	`).Scan(&membershipStatus); err != nil {
+		t.Fatalf("QueryRow membership status failed: %v", err)
+	}
+	if membershipStatus != "disabled" {
+		t.Fatalf("expected membership status disabled, got %q", membershipStatus)
+	}
+
+	statuses := map[string]string{}
+	rows, err := conn.Query(ctx, `
+		select id, status
+		from platform_api_keys
+		where id in ('pak_delete_member_owned', 'pak_delete_other_member');
+	`)
+	if err != nil {
+		t.Fatalf("Query platform_api_keys failed: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		var status string
+		if err := rows.Scan(&id, &status); err != nil {
+			t.Fatalf("Scan platform_api_keys failed: %v", err)
+		}
+		statuses[id] = status
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("platform_api_keys rows error: %v", err)
+	}
+	if statuses["pak_delete_member_owned"] != "disabled" {
+		t.Fatalf("expected owned key disabled, got %q", statuses["pak_delete_member_owned"])
+	}
+	if statuses["pak_delete_other_member"] != "active" {
+		t.Fatalf("expected other key active, got %q", statuses["pak_delete_other_member"])
 	}
 }
 

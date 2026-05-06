@@ -72,8 +72,23 @@ func routeFromCredential(credential store.ProviderCredentialRecord, requestedMod
 		RouteID:      RouteIDForCredential(credential.ID, credential.SupportedModels, requestedModel),
 		ProviderID:   credential.ID,
 		ProviderName: credential.DisplayName,
+		Model:        routeModelForCredential(credential.SupportedModels, requestedModel),
 		Target:       providerTargetFromCredential(credential),
 	}
+}
+
+func routeModelForCredential(supportedModels []string, requestedModel string) string {
+	requestedModel = strings.TrimSpace(requestedModel)
+	for _, supportedModel := range supportedModels {
+		supportedModel = strings.TrimSpace(supportedModel)
+		if supportedModel == "" {
+			continue
+		}
+		if requestedModel == "" || strings.EqualFold(supportedModel, requestedModel) {
+			return supportedModel
+		}
+	}
+	return requestedModel
 }
 
 func RouteIDForCredential(providerCredentialID string, supportedModels []string, requestedModel string) string {

@@ -855,8 +855,183 @@ a {
   background: rgba(124, 92, 255, 0.08);
 }
 
+.model-scope-picker__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.model-scope-picker__count {
+  border: 1px solid rgba(129, 149, 222, 0.22);
+  border-radius: 999px;
+  padding: 4px 10px;
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.model-scope-picker {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.model-scope-card {
+  position: relative;
+  display: flex;
+  gap: 12px;
+  min-height: 116px;
+  border: 1px solid rgba(129, 149, 222, 0.18);
+  border-radius: 16px;
+  padding: 14px;
+  cursor: pointer;
+  background:
+    radial-gradient(circle at top left, rgba(43, 196, 255, 0.1), transparent 34%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.025));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  transition:
+    border-color 160ms ease,
+    background 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease;
+}
+
+.model-scope-card:hover {
+  border-color: rgba(43, 196, 255, 0.42);
+  background:
+    radial-gradient(circle at top left, rgba(43, 196, 255, 0.16), transparent 36%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.075), rgba(255, 255, 255, 0.035));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    0 14px 32px rgba(2, 8, 24, 0.22);
+  transform: translateY(-1px);
+}
+
+.model-scope-card--selected {
+  border-color: rgba(43, 196, 255, 0.66);
+  background:
+    radial-gradient(circle at top left, rgba(43, 196, 255, 0.22), transparent 38%),
+    linear-gradient(180deg, rgba(49, 110, 255, 0.18), rgba(255, 255, 255, 0.045));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 18px 42px rgba(16, 74, 180, 0.22);
+}
+
+.model-scope-card--disabled {
+  cursor: not-allowed;
+  opacity: 0.72;
+  transform: none;
+}
+
+.model-scope-card input {
+  width: 18px;
+  height: 18px;
+  margin: 2px 0 0;
+  flex-shrink: 0;
+  accent-color: #2bc4ff;
+}
+
+.model-scope-card__content {
+  display: grid;
+  gap: 5px;
+}
+
+.model-scope-card__title {
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.model-scope-card__id {
+  justify-self: start;
+  border: 1px solid rgba(129, 149, 222, 0.18);
+  border-radius: 999px;
+  padding: 2px 8px;
+  color: #9fc4ff;
+  background: rgba(129, 149, 222, 0.08);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.model-scope-card__meta,
+.model-scope-picker__hint {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.55;
+}
+
 .form-error {
   color: #ffb8c1;
+}
+
+.form-success {
+  color: #9ef0c2;
+}
+
+.danger-zone-card {
+  border-color: rgba(255, 126, 148, 0.26);
+  background:
+    radial-gradient(circle at top left, rgba(255, 97, 129, 0.12), transparent 30%),
+    var(--surface-card);
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 28px;
+  background: rgba(3, 7, 18, 0.72);
+  backdrop-filter: blur(14px);
+}
+
+.modal-card {
+  width: min(620px, 100%);
+  max-height: calc(100vh - 56px);
+  overflow: auto;
+  border: 1px solid rgba(129, 149, 222, 0.24);
+  border-radius: 24px;
+  padding: 22px;
+  background:
+    radial-gradient(circle at top left, rgba(43, 196, 255, 0.12), transparent 28%),
+    linear-gradient(180deg, rgba(11, 16, 38, 0.98), rgba(7, 10, 24, 0.98));
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.46);
+}
+
+.modal-card--wide {
+  width: min(860px, 100%);
+}
+
+.modal-card__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.modal-card__header h3,
+.modal-card__header p {
+  margin: 0;
+}
+
+.modal-card__header p {
+  margin-top: 6px;
+  color: var(--text-secondary);
+}
+
+.modal-card__eyebrow {
+  display: inline-block;
+  margin-bottom: 6px;
+  color: #8bb8ff;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
 }
 
 .api-key-secret {

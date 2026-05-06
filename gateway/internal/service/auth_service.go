@@ -14,8 +14,9 @@ import (
 )
 
 var (
-	ErrUnauthorized  = errors.New("unauthorized")
-	ErrQuotaExceeded = errors.New("quota exceeded")
+	ErrUnauthorized    = errors.New("unauthorized")
+	ErrQuotaExceeded   = errors.New("quota exceeded")
+	ErrModelNotAllowed = errors.New("requested model is not allowed for tenant")
 )
 
 type AuthService interface {
@@ -159,6 +160,9 @@ func (s authService) Resolve(ctx context.Context, rawKey string, requestedModel 
 	if err != nil {
 		return domain.RequestContext{}, err
 	}
+	if err := ensureModelAllowed(tenant.AllowedModels, requestedModel, route.Model); err != nil {
+		return domain.RequestContext{}, err
+	}
 
 	return domain.RequestContext{
 		TenantID:             tenant.ID,
@@ -300,6 +304,25 @@ func (unauthorizedAuthService) AuthenticateConsoleSession(context.Context, strin
 
 func (unauthorizedAuthService) ResolveConsoleSession(context.Context, string) (ConsolePrincipal, error) {
 	return ConsolePrincipal{}, fmt.Errorf("%w: auth service not configured", ErrUnauthorized)
+}
+
+func ensureModelAllowed(allowedModels []string, requestedModel string, resolvedModel string) error {
+	if len(allowedModels) == 0 {
+		return nil
+	}
+
+	requestedModel = strings.TrimSpace(requestedModel)
+	resolvedModel = strings.TrimSpace(resolvedModel)
+	for _, allowedModel := range allowedModels {
+		allowedModel = strings.TrimSpace(allowedModel)
+		if allowedModel == "" {
+			continue
+		}
+		if strings.EqualFold(allowedModel, requestedModel) || strings.EqualFold(allowedModel, resolvedModel) {
+			return nil
+		}
+	}
+	return ErrModelNotAllowed
 }
 
 func hashPlatformAPIKey(rawKey string) string {

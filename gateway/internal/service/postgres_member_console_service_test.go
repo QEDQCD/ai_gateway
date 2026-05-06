@@ -119,6 +119,52 @@ func TestPostgresMemberConsoleServiceAPIKeysOnlyReturnsCreatorsKeys(t *testing.T
 	}
 }
 
+func TestPostgresMemberConsoleServiceCreateAccountDeletionApplicationPersistsPendingRow(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	member, conn := newUsageMemberConsoleService(t, ctx, service.ConsolePrincipal{
+		UserID:   "user_member_a",
+		Email:    "member-a@example.com",
+		Role:     "member",
+		TenantID: "tenant_demo",
+	})
+
+	result, err := member.CreateAccountDeletionApplication(ctx, service.CreateAccountDeletionApplicationRequest{
+		Reason: "不再使用该平台",
+	})
+	if err != nil {
+		t.Fatalf("CreateAccountDeletionApplication failed: %v", err)
+	}
+
+	if result.Item.UserID != "user_member_a" {
+		t.Fatalf("expected user_id %q, got %q", "user_member_a", result.Item.UserID)
+	}
+	if result.Item.TenantID != "tenant_demo" {
+		t.Fatalf("expected tenant_id %q, got %q", "tenant_demo", result.Item.TenantID)
+	}
+	if result.Item.Status != "pending" {
+		t.Fatalf("expected status %q, got %q", "pending", result.Item.Status)
+	}
+
+	var count int
+	if err := conn.QueryRow(ctx, `
+		select count(*)
+		from account_deletion_applications
+		where user_id = 'user_member_a'
+		  and tenant_id = 'tenant_demo'
+		  and reason = '不再使用该平台'
+		  and status = 'pending';
+	`).Scan(&count); err != nil {
+		t.Fatalf("QueryRow account_deletion_applications failed: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 pending deletion application, got %d", count)
+	}
+}
+
 func TestPostgresMemberConsoleServiceRevealAPIKeySecretReturnsOwnedSecret(t *testing.T) {
 	t.Parallel()
 

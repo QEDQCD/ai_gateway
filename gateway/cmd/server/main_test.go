@@ -139,7 +139,7 @@ func TestNewServerAppUsesConfiguredSmartRoutingTiersForChat(t *testing.T) {
 	req := httptest.NewRequest(
 		http.MethodPost,
 		"/v1/chat/completions",
-		bytes.NewBufferString(`{"model":"gateway-public","messages":[{"role":"user","content":"请用一句话解释什么是 API Gateway。"}]}`),
+		bytes.NewBufferString(`{"messages":[{"role":"user","content":"请用一句话解释什么是 API Gateway。"}]}`),
 	)
 	req.Header.Set("Authorization", "Bearer platform-live-key")
 	req.Header.Set("Content-Type", "application/json")
@@ -387,7 +387,7 @@ func TestNewServerAppDatabaseModeRoutesComplexChatToMIMO(t *testing.T) {
 	req := httptest.NewRequest(
 		http.MethodPost,
 		"/v1/chat/completions",
-		bytes.NewBufferString("{\"model\":\"gateway-public\",\"messages\":[{\"role\":\"user\",\"content\":\"请帮我 debug 这段 Go panic，并给出修复代码 ```go\\npanic(\\\"x\\\")\\n```\"}]}"),
+		bytes.NewBufferString("{\"messages\":[{\"role\":\"user\",\"content\":\"请帮我 debug 这段 Go panic，并给出修复代码 ```go\\npanic(\\\"x\\\")\\n```\"}]}"),
 	)
 	req.Header.Set("Authorization", "Bearer platform-live-key")
 	req.Header.Set("Content-Type", "application/json")

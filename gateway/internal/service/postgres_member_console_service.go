@@ -460,6 +460,100 @@ func (s postgresMemberConsoleService) CopyAPIKeySecret(ctx context.Context, id s
 	return buildAPIKeySecretCopyView(record.ID, record.FullKey, record.Recoverable, record.ExpiresAt), nil
 }
 
+func (s postgresMemberConsoleService) CreateAccountDeletionApplication(ctx context.Context, req CreateAccountDeletionApplicationRequest) (AccountDeletionApplicationMutationResult, error) {
+	principal, err := s.resolvePrincipal(ctx)
+	if err != nil {
+		return AccountDeletionApplicationMutationResult{}, err
+	}
+
+	reason := strings.TrimSpace(req.Reason)
+	if reason == "" {
+		return AccountDeletionApplicationMutationResult{}, StatusError{
+			Code:    http.StatusBadRequest,
+			Message: "reason is required",
+		}
+	}
+
+	row := s.db.QueryRow(ctx, `
+		with selected_user as (
+			select id, email, name
+			from users
+			where id = $2
+			  and role = 'member'
+			  and status = 'active'
+		),
+		selected_membership as (
+			select tenant_id
+			from tenant_memberships
+			where user_id = $2
+			  and tenant_id = $3
+			  and status = 'active'
+		),
+		inserted_application as (
+			insert into account_deletion_applications (
+				id,
+				user_id,
+				tenant_id,
+				reason,
+				status
+			)
+			select $1, selected_user.id, selected_membership.tenant_id, $4, 'pending'
+			from selected_user
+			join selected_membership on true
+			returning id, user_id, tenant_id, reason, status, disabled_api_keys, created_at, reviewed_at
+		),
+		inserted_audit as (
+			insert into audit_events (
+				id,
+				actor_type,
+				actor_user_id,
+				tenant_id,
+				event_type,
+				target_type,
+				target_id,
+				detail
+			)
+			select
+				$5,
+				'member',
+				user_id,
+				tenant_id,
+				'account_deletion_requested',
+				'account_deletion_application',
+				id,
+				$4
+			from inserted_application
+		)
+		select
+			inserted_application.id,
+			inserted_application.user_id,
+			inserted_application.tenant_id,
+			selected_user.email,
+			selected_user.name,
+			inserted_application.reason,
+			inserted_application.status,
+			inserted_application.disabled_api_keys,
+			inserted_application.created_at,
+			inserted_application.reviewed_at
+		from inserted_application
+		join selected_user on selected_user.id = inserted_application.user_id;
+	`, newAccountDeletionApplicationID(), principal.UserID, principal.TenantID, reason, newAuditEventID())
+
+	item, err := scanAccountDeletionApplicationItem(row)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return AccountDeletionApplicationMutationResult{}, StatusError{
+				Code:    http.StatusNotFound,
+				Message: "active member not found",
+				Err:     err,
+			}
+		}
+		return AccountDeletionApplicationMutationResult{}, mapAccountDeletionApplicationWriteError(err)
+	}
+
+	return AccountDeletionApplicationMutationResult{Item: item}, nil
+}
+
 func (s postgresMemberConsoleService) UsageOverview(ctx context.Context, query UsageQuery) (UsageOverviewData, error) {
 	principal, err := s.resolvePrincipal(ctx)
 	if err != nil {

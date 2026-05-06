@@ -396,6 +396,80 @@ func TestResolveRequestContextUsesPlatformKeyAndProviderCredential(t *testing.T)
 			wantCredentialLookups: 1,
 		},
 		{
+			name:           "tenant model scope rejects disallowed model",
+			requestedModel: "mimo-v2.5-pro",
+			platformKey: store.PlatformAPIKeyRecord{
+				ID:       "pak_model_scope",
+				TenantID: "tenant_123",
+				Name:     "scoped key",
+				Status:   domain.StatusActive,
+			},
+			tenant: store.TenantRecord{
+				ID:            "tenant_123",
+				Name:          "demo tenant",
+				Status:        domain.StatusActive,
+				AllowedModels: []string{"qwen-flash"},
+			},
+			providerCredentials: []store.ProviderCredentialRecord{
+				{
+					ID:          "pc_qwen",
+					Provider:    "dashscope",
+					DisplayName: "Qwen Primary",
+					Status:      domain.StatusActive,
+					SupportedModels: []string{
+						"qwen-flash",
+					},
+				},
+				{
+					ID:          "pc_mimo",
+					Provider:    "mimo",
+					DisplayName: "MIMO Primary",
+					Status:      domain.StatusActive,
+					SupportedModels: []string{
+						"mimo-v2.5-pro",
+					},
+				},
+			},
+			wantErr:               service.ErrModelNotAllowed,
+			wantCredentialLookups: 1,
+		},
+		{
+			name:           "tenant model scope allows configured model",
+			requestedModel: "qwen-flash",
+			platformKey: store.PlatformAPIKeyRecord{
+				ID:       "pak_model_scope_allowed",
+				TenantID: "tenant_123",
+				Name:     "scoped key",
+				Status:   domain.StatusActive,
+			},
+			tenant: store.TenantRecord{
+				ID:            "tenant_123",
+				Name:          "demo tenant",
+				Status:        domain.StatusActive,
+				AllowedModels: []string{"qwen-flash"},
+			},
+			providerCredentials: []store.ProviderCredentialRecord{
+				{
+					ID:          "pc_qwen",
+					Provider:    "dashscope",
+					DisplayName: "Qwen Primary",
+					Status:      domain.StatusActive,
+					SupportedModels: []string{
+						"qwen-flash",
+					},
+				},
+			},
+			wantContext: domain.RequestContext{
+				TenantID:             "tenant_123",
+				PlatformAPIKeyID:     "pak_model_scope_allowed",
+				PlatformAPIKeyName:   "scoped key",
+				SelectedProviderID:   "pc_qwen",
+				SelectedProviderName: "Qwen Primary",
+				RouteID:              "route:pc_qwen:default",
+			},
+			wantCredentialLookups: 1,
+		},
+		{
 			name: "quota exhausted returns quota exceeded",
 			platformKey: store.PlatformAPIKeyRecord{
 				ID:       "pak_123",

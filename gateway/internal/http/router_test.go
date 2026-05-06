@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -812,7 +813,7 @@ func TestAdminApproveApplicationCreatesUserMembershipAndAudit(t *testing.T) {
 	req := httptest.NewRequest(
 		http.MethodPost,
 		"/admin/applications/app_router_pending/approve",
-		strings.NewReader(`{"actor_id":"user_admin_demo","comment":"approved via route","tenant_id":"tenant_demo","token_limit":3456789}`),
+		strings.NewReader(`{"actor_id":"user_admin_demo","comment":"approved via route","tenant_id":"tenant_demo","token_limit":3456789,"allowed_models":["qwen-flash","mimo-v2.5-pro"]}`),
 	)
 	req.Header.Set("Content-Type", "application/json")
 	req.SetBasicAuth("test-console-user", "test-console-password")
@@ -847,6 +848,9 @@ func TestAdminApproveApplicationCreatesUserMembershipAndAudit(t *testing.T) {
 	}
 	if capturedReq.TokenLimit != 3456789 {
 		t.Fatalf("expected token_limit %d, got %d", 3456789, capturedReq.TokenLimit)
+	}
+	if !reflect.DeepEqual(capturedReq.AllowedModels, []string{"qwen-flash", "mimo-v2.5-pro"}) {
+		t.Fatalf("expected allowed_models to be forwarded, got %#v", capturedReq.AllowedModels)
 	}
 }
 
@@ -973,6 +977,70 @@ func TestAdminUsageOverviewRouteReturnsConsoleData(t *testing.T) {
 	}
 }
 
+func TestAdminApproveAccountDeletionApplicationRouteReturnsConsoleData(t *testing.T) {
+	t.Parallel()
+
+	var capturedID string
+	var capturedReq service.ReviewAccountDeletionApplicationRequest
+
+	app := apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+		ServiceAuthUsername: "test-console-user",
+		ServiceAuthPassword: "test-console-password",
+		ConsoleService: stubConsoleService{
+			accountDeletionMutation: service.AccountDeletionApplicationMutationResult{
+				Item: service.AccountDeletionApplicationItem{
+					ID:              "ada_router_pending",
+					UserID:          "user_member_a",
+					TenantID:        "tenant_demo",
+					UserEmail:       "member-a@example.com",
+					UserName:        "Member A",
+					Reason:          "不再使用",
+					Status:          "approved",
+					DisabledAPIKeys: 2,
+					CreatedAt:       "2026-05-06T09:02:03+08:00",
+					ReviewedAt:      "2026-05-06T09:05:03+08:00",
+				},
+			},
+			approveAccountDeletionIDRef:  &capturedID,
+			approveAccountDeletionReqRef: &capturedReq,
+		},
+	})
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/admin/account-deletion-applications/ada_router_pending/approve",
+		strings.NewReader(`{"actor_id":"user_admin_demo","comment":"同意注销"}`),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	req.SetBasicAuth("test-console-user", "test-console-password")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("io.ReadAll failed: %v", err)
+	}
+	expected := `{"item":{"id":"ada_router_pending","user_id":"user_member_a","tenant_id":"tenant_demo","user_email":"member-a@example.com","user_name":"Member A","reason":"不再使用","status":"approved","disabled_api_keys":2,"created_at":"2026-05-06T09:02:03+08:00","reviewed_at":"2026-05-06T09:05:03+08:00"}}`
+	if string(body) != expected {
+		t.Fatalf("expected body %q, got %q", expected, string(body))
+	}
+	if capturedID != "ada_router_pending" {
+		t.Fatalf("expected id %q, got %q", "ada_router_pending", capturedID)
+	}
+	if capturedReq.ActorID != "user_admin_demo" {
+		t.Fatalf("expected actor_id %q, got %q", "user_admin_demo", capturedReq.ActorID)
+	}
+	if capturedReq.Comment != "同意注销" {
+		t.Fatalf("expected comment %q, got %q", "同意注销", capturedReq.Comment)
+	}
+}
+
 func TestMemberOverviewRouteResolvesPrincipalAndReturnsMemberData(t *testing.T) {
 	t.Parallel()
 
@@ -1033,6 +1101,64 @@ func TestMemberOverviewRouteResolvesPrincipalAndReturnsMemberData(t *testing.T) 
 	}
 	if captured.TenantID != "tenant_demo" {
 		t.Fatalf("expected captured principal tenant_id %q, got %q", "tenant_demo", captured.TenantID)
+	}
+}
+
+func TestMemberAccountDeletionApplicationRouteReturnsPendingPayload(t *testing.T) {
+	t.Parallel()
+
+	var capturedReq service.CreateAccountDeletionApplicationRequest
+	app := apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+		ServiceAuthUsername: "test-console-user",
+		ServiceAuthPassword: "test-console-password",
+		AuthService: stubConsoleAuthService{
+			principal: service.ConsolePrincipal{
+				UserID:   "user_member_a",
+				Email:    "member-a@example.com",
+				Role:     "member",
+				TenantID: "tenant_demo",
+			},
+		},
+		MemberConsoleService: stubMemberConsoleService{
+			accountDeletionMutation: service.AccountDeletionApplicationMutationResult{
+				Item: service.AccountDeletionApplicationItem{
+					ID:        "ada_router_pending",
+					UserID:    "user_member_a",
+					TenantID:  "tenant_demo",
+					UserEmail: "member-a@example.com",
+					UserName:  "Member A",
+					Reason:    "不再使用",
+					Status:    "pending",
+					CreatedAt: "2026-05-06T09:02:03+08:00",
+				},
+			},
+			createAccountDeletionReqRef: &capturedReq,
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/me/account-deletion-applications", strings.NewReader(`{"reason":"不再使用"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Console-Subject", "member-a@example.com")
+	req.SetBasicAuth("test-console-user", "test-console-password")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("io.ReadAll failed: %v", err)
+	}
+	expected := `{"item":{"id":"ada_router_pending","user_id":"user_member_a","tenant_id":"tenant_demo","user_email":"member-a@example.com","user_name":"Member A","reason":"不再使用","status":"pending","disabled_api_keys":0,"created_at":"2026-05-06T09:02:03+08:00"}}`
+	if string(body) != expected {
+		t.Fatalf("expected body %q, got %q", expected, string(body))
+	}
+	if capturedReq.Reason != "不再使用" {
+		t.Fatalf("expected reason %q, got %q", "不再使用", capturedReq.Reason)
 	}
 }
 
@@ -1717,7 +1843,7 @@ func TestChatCompletionRouteUsesSmartRoutingDecisionBeforeAuthResolve(t *testing
 	req := httptest.NewRequest(
 		http.MethodPost,
 		"/v1/chat/completions",
-		strings.NewReader("{\"model\":\"qwen-flash\",\"messages\":[{\"role\":\"user\",\"content\":\"please debug this panic ```go\\npanic(\\\"x\\\")\\n```\"}]}"),
+		strings.NewReader("{\"messages\":[{\"role\":\"user\",\"content\":\"please debug this panic ```go\\npanic(\\\"x\\\")\\n```\"}]}"),
 	)
 	req.Header.Set("Authorization", "Bearer platform-live-key")
 	req.Header.Set("Content-Type", "application/json")
@@ -1735,8 +1861,8 @@ func TestChatCompletionRouteUsesSmartRoutingDecisionBeforeAuthResolve(t *testing
 	if chatProxy.request.Model != "gateway-chat-reasoning" {
 		t.Fatalf("expected proxy request model %q, got %q", "gateway-chat-reasoning", chatProxy.request.Model)
 	}
-	if chatProxy.requestContext.RequestedModel != "qwen-flash" {
-		t.Fatalf("expected request context requested model %q, got %q", "qwen-flash", chatProxy.requestContext.RequestedModel)
+	if chatProxy.requestContext.RequestedModel != "" {
+		t.Fatalf("expected request context requested model %q, got %q", "", chatProxy.requestContext.RequestedModel)
 	}
 	if chatProxy.requestContext.ResolvedModel != "gateway-chat-reasoning" {
 		t.Fatalf("expected resolved model %q, got %q", "gateway-chat-reasoning", chatProxy.requestContext.ResolvedModel)
@@ -1749,6 +1875,107 @@ func TestChatCompletionRouteUsesSmartRoutingDecisionBeforeAuthResolve(t *testing
 	}
 	if chatProxy.requestContext.RoutingReason != "keyword:debug,pattern:code_fence" {
 		t.Fatalf("expected routing reason to be recorded, got %q", chatProxy.requestContext.RoutingReason)
+	}
+}
+
+func TestChatCompletionRouteHonorsExplicitModelBeforeSmartRouting(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name              string
+		requestModel      string
+		wantResolvedModel string
+	}{
+		{
+			name:              "qwen flash",
+			requestModel:      "qwen-flash",
+			wantResolvedModel: "qwen-flash",
+		},
+		{
+			name:              "mimo alias",
+			requestModel:      "mimo",
+			wantResolvedModel: "mimo-v2.5-pro",
+		},
+	}
+
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			authService := &capturingAuthService{
+				requestContext: domain.RequestContext{
+					TenantID:             "tenant_123",
+					PlatformAPIKeyID:     "pak_123",
+					PlatformAPIKeyName:   "demo key",
+					SelectedProviderID:   "pc_explicit",
+					SelectedProviderName: "Explicit Route",
+					RouteID:              "route:pc_explicit:default",
+					ProviderTarget: domain.ProviderTarget{
+						CredentialID: "pc_explicit",
+						Provider:     "openai",
+						BaseURL:      "https://example.com",
+						APIKey:       "upstream-key",
+					},
+				},
+			}
+			chatProxy := &capturingChatProxyService{
+				response: service.ChatResponse{
+					Model: tc.wantResolvedModel,
+					Choices: []service.ChatChoice{
+						{Message: service.ChatMessage{Role: "assistant", Content: "done"}},
+					},
+				},
+			}
+			app := apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+				AuthService: authService,
+				ChatProxy:   chatProxy,
+				SmartRouter: stubSmartRouter{
+					decision: service.SmartRoutingDecision{
+						TaskClass:       "coding_complex",
+						TargetModelTier: "gateway-chat-reasoning",
+						MatchedRules:    []string{"keyword:debug", "pattern:code_fence"},
+					},
+				},
+			})
+
+			req := httptest.NewRequest(
+				http.MethodPost,
+				"/v1/chat/completions",
+				strings.NewReader(fmt.Sprintf("{\"model\":%q,\"messages\":[{\"role\":\"user\",\"content\":\"please debug this panic ```go\\npanic(\\\"x\\\")\\n```\"}]}", tc.requestModel)),
+			)
+			req.Header.Set("Authorization", "Bearer platform-live-key")
+			req.Header.Set("Content-Type", "application/json")
+
+			resp, err := app.Test(req)
+			if err != nil {
+				t.Fatalf("app.Test failed: %v", err)
+			}
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("expected 200, got %d", resp.StatusCode)
+			}
+			if authService.requestedModel != tc.wantResolvedModel {
+				t.Fatalf("expected auth requested model %q, got %q", tc.wantResolvedModel, authService.requestedModel)
+			}
+			if chatProxy.request.Model != tc.wantResolvedModel {
+				t.Fatalf("expected proxy request model %q, got %q", tc.wantResolvedModel, chatProxy.request.Model)
+			}
+			if chatProxy.requestContext.RequestedModel != tc.requestModel {
+				t.Fatalf("expected request context requested model %q, got %q", tc.requestModel, chatProxy.requestContext.RequestedModel)
+			}
+			if chatProxy.requestContext.ResolvedModel != tc.wantResolvedModel {
+				t.Fatalf("expected resolved model %q, got %q", tc.wantResolvedModel, chatProxy.requestContext.ResolvedModel)
+			}
+			if chatProxy.requestContext.TargetModelTier != tc.wantResolvedModel {
+				t.Fatalf("expected target model tier %q, got %q", tc.wantResolvedModel, chatProxy.requestContext.TargetModelTier)
+			}
+			if chatProxy.requestContext.TaskClass != "explicit_model" {
+				t.Fatalf("expected task class %q, got %q", "explicit_model", chatProxy.requestContext.TaskClass)
+			}
+			if chatProxy.requestContext.RoutingReason != "explicit_model:"+tc.requestModel {
+				t.Fatalf("expected explicit routing reason, got %q", chatProxy.requestContext.RoutingReason)
+			}
+		})
 	}
 }
 
@@ -1973,39 +2200,47 @@ func (s stubConsoleAuthService) ResolveConsoleSession(context.Context, string) (
 }
 
 type stubConsoleService struct {
-	systemStatus             service.ConsoleSystemStatus
-	captchaChallenge         service.CaptchaChallenge
-	captchaPassResult        service.CaptchaPassResult
-	apiKeys                  service.APIKeysPageData
-	apiKeyMutationResult     service.APIKeyMutationResult
-	apiKeySecretView         service.APIKeySecretView
-	applications             service.ApplicationsPageData
-	applicationMutation      service.ApplicationMutationResult
-	createApplicationReqRef  *service.CreateApplicationRequest
-	approveApplicationIDRef  *string
-	approveApplicationReqRef *service.ApproveApplicationRequest
-	rejectApplicationIDRef   *string
-	rejectApplicationReqRef  *service.RejectApplicationRequest
-	usageOverview            service.UsageOverviewData
-	usageTrends              service.UsageTrendData
-	usageLatencyWall         service.UsageLatencyWallData
-	usageFailures            service.UsageFailureData
-	usageRequests            service.UsageRequestsPageData
-	usageQueryRef            *service.UsageQuery
-	streamPlaygroundReqRef   *service.PlaygroundRunRequest
-	streamPlaygroundSession  service.PlaygroundStreamSession
+	systemStatus                 service.ConsoleSystemStatus
+	captchaChallenge             service.CaptchaChallenge
+	captchaPassResult            service.CaptchaPassResult
+	apiKeys                      service.APIKeysPageData
+	apiKeyMutationResult         service.APIKeyMutationResult
+	apiKeySecretView             service.APIKeySecretView
+	applications                 service.ApplicationsPageData
+	applicationMutation          service.ApplicationMutationResult
+	accountDeletions             service.AccountDeletionApplicationsPageData
+	accountDeletionMutation      service.AccountDeletionApplicationMutationResult
+	createApplicationReqRef      *service.CreateApplicationRequest
+	approveApplicationIDRef      *string
+	approveApplicationReqRef     *service.ApproveApplicationRequest
+	rejectApplicationIDRef       *string
+	rejectApplicationReqRef      *service.RejectApplicationRequest
+	approveAccountDeletionIDRef  *string
+	approveAccountDeletionReqRef *service.ReviewAccountDeletionApplicationRequest
+	rejectAccountDeletionIDRef   *string
+	rejectAccountDeletionReqRef  *service.ReviewAccountDeletionApplicationRequest
+	usageOverview                service.UsageOverviewData
+	usageTrends                  service.UsageTrendData
+	usageLatencyWall             service.UsageLatencyWallData
+	usageFailures                service.UsageFailureData
+	usageRequests                service.UsageRequestsPageData
+	usageQueryRef                *service.UsageQuery
+	streamPlaygroundReqRef       *service.PlaygroundRunRequest
+	streamPlaygroundSession      service.PlaygroundStreamSession
 }
 
 type stubMemberConsoleService struct {
-	overview         service.MemberOverviewPageData
-	apiKeys          service.MemberAPIKeysPageData
-	apiKeyResult     service.APIKeyMutationResult
-	apiKeySecretView service.APIKeySecretView
-	usageOverview    service.UsageOverviewData
-	usageRequests    service.UsageRequestsPageData
-	failures         service.MemberFailurePageData
-	auditEvents      service.MemberAuditPageData
-	principalRef     *service.ConsolePrincipal
+	overview                    service.MemberOverviewPageData
+	apiKeys                     service.MemberAPIKeysPageData
+	apiKeyResult                service.APIKeyMutationResult
+	apiKeySecretView            service.APIKeySecretView
+	usageOverview               service.UsageOverviewData
+	usageRequests               service.UsageRequestsPageData
+	failures                    service.MemberFailurePageData
+	auditEvents                 service.MemberAuditPageData
+	principalRef                *service.ConsolePrincipal
+	accountDeletionMutation     service.AccountDeletionApplicationMutationResult
+	createAccountDeletionReqRef *service.CreateAccountDeletionApplicationRequest
 }
 
 func (s stubMemberConsoleService) capturePrincipal(ctx context.Context) {
@@ -2052,6 +2287,14 @@ func (s stubMemberConsoleService) CopyAPIKeySecret(ctx context.Context, _ string
 	return s.apiKeySecretView, nil
 }
 
+func (s stubMemberConsoleService) CreateAccountDeletionApplication(ctx context.Context, req service.CreateAccountDeletionApplicationRequest) (service.AccountDeletionApplicationMutationResult, error) {
+	s.capturePrincipal(ctx)
+	if s.createAccountDeletionReqRef != nil {
+		*s.createAccountDeletionReqRef = req
+	}
+	return s.accountDeletionMutation, nil
+}
+
 func (s stubMemberConsoleService) UsageOverview(ctx context.Context, _ service.UsageQuery) (service.UsageOverviewData, error) {
 	s.capturePrincipal(ctx)
 	return s.usageOverview, nil
@@ -2096,6 +2339,10 @@ func (s stubConsoleService) Applications(context.Context) (service.ApplicationsP
 	return s.applications, nil
 }
 
+func (s stubConsoleService) AccountDeletionApplications(context.Context) (service.AccountDeletionApplicationsPageData, error) {
+	return s.accountDeletions, nil
+}
+
 func (s stubConsoleService) CreateApplication(_ context.Context, req service.CreateApplicationRequest) (service.ApplicationMutationResult, error) {
 	if s.createApplicationReqRef != nil {
 		*s.createApplicationReqRef = req
@@ -2125,6 +2372,26 @@ func (s stubConsoleService) RejectApplication(_ context.Context, id string, req 
 		*s.rejectApplicationReqRef = req
 	}
 	return s.applicationMutation, nil
+}
+
+func (s stubConsoleService) ApproveAccountDeletionApplication(_ context.Context, id string, req service.ReviewAccountDeletionApplicationRequest) (service.AccountDeletionApplicationMutationResult, error) {
+	if s.approveAccountDeletionIDRef != nil {
+		*s.approveAccountDeletionIDRef = id
+	}
+	if s.approveAccountDeletionReqRef != nil {
+		*s.approveAccountDeletionReqRef = req
+	}
+	return s.accountDeletionMutation, nil
+}
+
+func (s stubConsoleService) RejectAccountDeletionApplication(_ context.Context, id string, req service.ReviewAccountDeletionApplicationRequest) (service.AccountDeletionApplicationMutationResult, error) {
+	if s.rejectAccountDeletionIDRef != nil {
+		*s.rejectAccountDeletionIDRef = id
+	}
+	if s.rejectAccountDeletionReqRef != nil {
+		*s.rejectAccountDeletionReqRef = req
+	}
+	return s.accountDeletionMutation, nil
 }
 
 func (s stubConsoleService) RotateAPIKey(context.Context, string, service.RotateAPIKeyRequest) (service.APIKeyMutationResult, error) {

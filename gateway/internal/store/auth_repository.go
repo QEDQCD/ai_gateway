@@ -27,9 +27,10 @@ type PlatformAPIKeyRecord struct {
 }
 
 type TenantRecord struct {
-	ID     string
-	Name   string
-	Status domain.Status
+	ID            string
+	Name          string
+	Status        domain.Status
+	AllowedModels []string
 }
 
 type ProviderCredentialRecord struct {
@@ -193,9 +194,10 @@ func (r *SQLAuthRepository) FindTenantByID(ctx context.Context, tenantID string)
 	}
 
 	return TenantRecord{
-		ID:     row.ID,
-		Name:   row.Name,
-		Status: domain.Status(row.Status),
+		ID:            row.ID,
+		Name:          row.Name,
+		Status:        domain.Status(row.Status),
+		AllowedModels: append([]string(nil), row.AllowedModels...),
 	}, nil
 }
 

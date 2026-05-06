@@ -133,8 +133,16 @@ function mockFetch(responses: MockResponseMap, requestAssertions: MockRequestAss
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.toString();
     requestAssertions[url]?.(init);
+    const responseKey =
+      url === "/api/admin/usage/overview?window=24h" && "/api/admin/usage/overview" in responses
+        ? "/api/admin/usage/overview"
+        : url === "/api/admin/usage/trends?window=24h" && "/api/admin/usage/trends" in responses
+          ? "/api/admin/usage/trends"
+          : url === "/api/admin/usage/failures?window=24h" && "/api/admin/usage/failures" in responses
+            ? "/api/admin/usage/failures"
+            : url;
 
-    if (!(url in responses)) {
+    if (!(responseKey in responses)) {
       if (url === "/api/admin/system/status") {
         return new Response(JSON.stringify(defaultSystemStatus()), {
           status: 200,
@@ -145,7 +153,7 @@ function mockFetch(responses: MockResponseMap, requestAssertions: MockRequestAss
       throw new Error(`Unexpected fetch url: ${url}`);
     }
 
-    return new Response(JSON.stringify(responses[url]), {
+    return new Response(JSON.stringify(responses[responseKey]), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     });
@@ -596,6 +604,62 @@ describe("控制台路由", () => {
     expect(await screen.findByText("本月请求额度")).toBeInTheDocument();
     expect(screen.getByText("120,000 / 500,000")).toBeInTheDocument();
     expect(screen.getByText("2,400,000 / 10,000,000")).toBeInTheDocument();
+  });
+
+  test("member 总览页支持提交账户注销申请", async () => {
+    mockSession({ role: "member", tenant_id: "tenant_demo", user_id: "user_member_a" });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+
+      if (url === "/api/me/overview") {
+        return new Response(
+          JSON.stringify({
+            tenant_id: "tenant_demo",
+            tenant_name: "Demo Tenant",
+            active_api_keys: 2,
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+
+      if (url === "/api/me/account-deletion-applications" && init?.method === "POST") {
+        expect(JSON.parse(String(init.body))).toEqual({ reason: "项目结束，不再使用" });
+        return new Response(
+          JSON.stringify({
+            item: {
+              id: "ada_member_pending",
+              user_id: "user_member_a",
+              tenant_id: "tenant_demo",
+              user_email: "member-a@example.com",
+              user_name: "Member A",
+              reason: "项目结束，不再使用",
+              status: "pending",
+              disabled_api_keys: 0,
+              created_at: "2026-05-06T09:02:03+08:00",
+            },
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+
+      throw new Error(`Unexpected fetch url: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderRoute("/me");
+
+    fireEvent.change(await screen.findByLabelText("注销原因"), {
+      target: { value: "项目结束，不再使用" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "提交注销申请" }));
+
+    expect(await screen.findByText("注销申请已提交：pending")).toBeInTheDocument();
   });
 
   test("AppLayout 在空导航时使用安全兜底元信息", async () => {
@@ -1339,6 +1403,36 @@ describe("控制台路由", () => {
           headers: { "Content-Type": "application/json" },
         });
       }
+      if (url === "/api/admin/routes" && !init?.method) {
+        return new Response(
+          JSON.stringify({
+            items: [
+              {
+                requested_model: "qwen-flash",
+                route_label: "Qwen",
+                credential: "qwen",
+                latency: "10 ms",
+                status: "healthy",
+                provider_group: "qwen",
+              },
+              {
+                requested_model: "mimo-v2.5-pro",
+                route_label: "MIMO",
+                credential: "mimo",
+                latency: "20 ms",
+                status: "healthy",
+                provider_group: "mimo",
+              },
+            ],
+            stats: [],
+            policy_summary: [],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
       if (url === "/api/admin/applications" && !init?.method) {
         return new Response(
           JSON.stringify({
@@ -1366,6 +1460,7 @@ describe("控制台路由", () => {
           comment: "通过控制台审批",
           tenant_id: "tenant_demo",
           token_limit: 10000000,
+          allowed_models: ["qwen-flash", "mimo-v2.5-pro"],
         });
 
         return new Response(
@@ -1404,6 +1499,104 @@ describe("控制台路由", () => {
     expect(screen.getByText("approved")).toBeInTheDocument();
   });
 
+  test("账号申请页支持审批账户注销申请并提交清理动作", async () => {
+    mockSession({ role: "admin", user_id: "user_admin_demo" });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+
+      if (url === "/api/admin/system/status") {
+        return new Response(JSON.stringify(defaultSystemStatus()), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url === "/api/admin/routes" && !init?.method) {
+        return new Response(
+          JSON.stringify({
+            items: [],
+            stats: [],
+            policy_summary: [],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+      if (url === "/api/admin/applications" && !init?.method) {
+        return new Response(JSON.stringify({ items: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url === "/api/admin/account-deletion-applications" && !init?.method) {
+        return new Response(
+          JSON.stringify({
+            items: [
+              {
+                id: "ada_pending",
+                user_id: "user_member_a",
+                tenant_id: "tenant_demo",
+                user_email: "member-a@example.com",
+                user_name: "Member A",
+                reason: "不再使用",
+                status: "pending",
+                disabled_api_keys: 0,
+                created_at: "2026-05-06T09:02:03+08:00",
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+      if (
+        url === "/api/admin/account-deletion-applications/ada_pending/approve" &&
+        init?.method === "POST"
+      ) {
+        expect(JSON.parse(String(init.body))).toEqual({
+          actor_id: "user_admin_demo",
+          comment: "同意注销申请",
+        });
+        return new Response(
+          JSON.stringify({
+            item: {
+              id: "ada_pending",
+              user_id: "user_member_a",
+              tenant_id: "tenant_demo",
+              user_email: "member-a@example.com",
+              user_name: "Member A",
+              reason: "不再使用",
+              status: "approved",
+              disabled_api_keys: 1,
+              created_at: "2026-05-06T09:02:03+08:00",
+              reviewed_at: "2026-05-06T09:05:03+08:00",
+            },
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+
+      throw new Error(`Unexpected fetch url: ${url}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderRoute("/applications");
+
+    fireEvent.click(await screen.findByRole("button", { name: "选择 Member A" }));
+    expect(await screen.findByRole("dialog", { name: "注销审批" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "审批注销" }));
+
+    expect(await screen.findByText("注销审批已通过")).toBeInTheDocument();
+    expect(screen.getByText("已清理 API Key：1 个")).toBeInTheDocument();
+  });
+
   test("账号申请页支持拒绝审批", async () => {
     mockSession({ role: "admin", user_id: "user_admin_demo" });
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -1414,6 +1607,36 @@ describe("控制台路由", () => {
           status: 200,
           headers: { "Content-Type": "application/json" },
         });
+      }
+      if (url === "/api/admin/routes" && !init?.method) {
+        return new Response(
+          JSON.stringify({
+            items: [
+              {
+                requested_model: "qwen-flash",
+                route_label: "Qwen",
+                credential: "qwen",
+                latency: "10 ms",
+                status: "healthy",
+                provider_group: "qwen",
+              },
+              {
+                requested_model: "mimo-v2.5-pro",
+                route_label: "MIMO",
+                credential: "mimo",
+                latency: "20 ms",
+                status: "healthy",
+                provider_group: "mimo",
+              },
+            ],
+            stats: [],
+            policy_summary: [],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
       }
       if (url === "/api/admin/applications" && !init?.method) {
         return new Response(
@@ -1487,6 +1710,36 @@ describe("控制台路由", () => {
           headers: { "Content-Type": "application/json" },
         });
       }
+      if (url === "/api/admin/routes" && !init?.method) {
+        return new Response(
+          JSON.stringify({
+            items: [
+              {
+                requested_model: "qwen-flash",
+                route_label: "Qwen",
+                credential: "qwen",
+                latency: "10 ms",
+                status: "healthy",
+                provider_group: "qwen",
+              },
+              {
+                requested_model: "mimo-v2.5-pro",
+                route_label: "MIMO",
+                credential: "mimo",
+                latency: "20 ms",
+                status: "healthy",
+                provider_group: "mimo",
+              },
+            ],
+            stats: [],
+            policy_summary: [],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
       if (url === "/api/admin/applications" && !init?.method) {
         return new Response(
           JSON.stringify({
@@ -1523,6 +1776,7 @@ describe("控制台路由", () => {
           comment: "通过控制台审批",
           tenant_id: "tenant_alice",
           token_limit: 10000000,
+          allowed_models: ["qwen-flash", "mimo-v2.5-pro"],
         });
 
         return new Promise<Response>((resolve) => {
@@ -1556,7 +1810,8 @@ describe("控制台路由", () => {
 
     renderRoute("/applications");
 
-    expect(await screen.findByRole("button", { name: "选择 Alice" })).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "选择 Alice" }));
+    expect(await screen.findByRole("dialog", { name: "审批操作" })).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("租户 ID"), { target: { value: "tenant_alice" } });
     fireEvent.change(screen.getByLabelText("Token 上限"), { target: { value: "10000000" } });
     fireEvent.click(screen.getByRole("button", { name: "审批通过" }));
@@ -1627,6 +1882,7 @@ describe("控制台路由", () => {
           comment: "通过控制台审批",
           tenant_id: "tenant_alice",
           token_limit: 10000000,
+          allowed_models: ["qwen-flash", "mimo-v2.5-pro"],
         });
 
         return new Response(
@@ -1655,7 +1911,9 @@ describe("控制台路由", () => {
 
     renderRoute("/applications");
 
-    fireEvent.change(await screen.findByLabelText("租户 ID"), { target: { value: "tenant_alice" } });
+    fireEvent.click(await screen.findByRole("button", { name: "选择 Alice" }));
+    expect(await screen.findByRole("dialog", { name: "审批操作" })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("租户 ID"), { target: { value: "tenant_alice" } });
     fireEvent.click(screen.getByRole("button", { name: "审批通过" }));
 
     expect(await screen.findByText("审批已完成")).toBeInTheDocument();
@@ -1738,7 +1996,7 @@ describe("控制台路由", () => {
     expect(screen.getAllByText("gpt-4o-mini").length).toBeGreaterThan(0);
     expect(fetchMock).toHaveBeenCalledWith("/api/admin/overview");
     expect(fetchMock).toHaveBeenCalledWith("/api/admin/api-keys");
-    expect(fetchMock).toHaveBeenCalledWith("/api/admin/usage/overview");
+    expect(fetchMock).toHaveBeenCalledWith("/api/admin/usage/overview?window=24h");
   });
 
   test("member 总览页使用 /me/overview 数据", async () => {
@@ -2593,10 +2851,10 @@ describe("控制台路由", () => {
     expect(screen.queryByText(/DashScope/)).not.toBeInTheDocument();
     expect(screen.queryByText(new RegExp(hiddenKnowledgeTerm))).not.toBeInTheDocument();
 
-    expect(fetchMock).toHaveBeenCalledWith("/api/admin/usage/overview");
-    expect(fetchMock).toHaveBeenCalledWith("/api/admin/usage/trends");
+    expect(fetchMock).toHaveBeenCalledWith("/api/admin/usage/overview?window=24h");
+    expect(fetchMock).toHaveBeenCalledWith("/api/admin/usage/trends?window=24h");
     expect(fetchMock).toHaveBeenCalledWith("/api/admin/usage/latency-wall?window=24h");
-    expect(fetchMock).toHaveBeenCalledWith("/api/admin/usage/failures");
+    expect(fetchMock).toHaveBeenCalledWith("/api/admin/usage/failures?window=24h");
     expect(fetchMock).toHaveBeenCalledWith("/api/admin/usage/requests?limit=20&offset=0");
   });
 
@@ -2699,7 +2957,7 @@ describe("控制台路由", () => {
     renderRoute("/usage");
 
     expect(await screen.findByText("实时运行视图")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "最近 24 小时" })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "最近 24 小时" }).length).toBeGreaterThan(0);
     expect(screen.getByText("异常事件流")).toBeInTheDocument();
     expect(screen.getByLabelText("状态 限流")).toBeInTheDocument();
     expect(screen.getByLabelText("来源 估算")).toBeInTheDocument();
@@ -2711,10 +2969,10 @@ describe("控制台路由", () => {
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input.toString();
 
-      if (url === "/api/admin/usage/overview") {
+      if (url === "/api/admin/usage/overview?window=24h") {
         return Promise.resolve(new Response("boom", { status: 500 }));
       }
-      if (url === "/api/admin/usage/trends") {
+      if (url === "/api/admin/usage/trends?window=24h") {
         return new Promise<Response>(() => {});
       }
       if (url === "/api/admin/usage/latency-wall?window=24h") {
@@ -2725,7 +2983,7 @@ describe("控制台路由", () => {
           }),
         );
       }
-      if (url === "/api/admin/usage/failures") {
+      if (url === "/api/admin/usage/failures?window=24h") {
         return Promise.resolve(
           new Response(JSON.stringify({ breakdown: [], recent_events: [] }), {
             status: 200,

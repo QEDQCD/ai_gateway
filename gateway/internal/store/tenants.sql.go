@@ -10,21 +10,27 @@ import (
 )
 
 const getTenantByID = `-- name: GetTenantByID :one
-select id, name, status
-from tenants
-where id = $1
+select
+  t.id,
+  t.name,
+  t.status,
+  coalesce(q.allowed_models, '{}')::text[] as allowed_models
+from tenants t
+left join tenant_quota_policies q on q.tenant_id = t.id
+where t.id = $1
 `
 
 type GetTenantByIDRow struct {
-	ID     string `json:"id"`
-	Name   string `json:"name"`
-	Status string `json:"status"`
+	ID            string   `json:"id"`
+	Name          string   `json:"name"`
+	Status        string   `json:"status"`
+	AllowedModels []string `json:"allowed_models"`
 }
 
 func (q *Queries) GetTenantByID(ctx context.Context, id string) (GetTenantByIDRow, error) {
 	row := q.db.QueryRow(ctx, getTenantByID, id)
 	var i GetTenantByIDRow
-	err := row.Scan(&i.ID, &i.Name, &i.Status)
+	err := row.Scan(&i.ID, &i.Name, &i.Status, &i.AllowedModels)
 	return i, err
 }
 

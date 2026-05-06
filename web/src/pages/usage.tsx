@@ -92,11 +92,14 @@ export function UsagePage() {
     [offset],
   );
   const loadLatencyWall = useCallback(() => getUsageLatencyWall(wallWindow), [wallWindow]);
+  const loadOverview = useCallback(() => getUsageOverview(wallWindow), [wallWindow]);
+  const loadTrends = useCallback(() => getUsageTrends(wallWindow), [wallWindow]);
+  const loadFailures = useCallback(() => getUsageFailures(wallWindow), [wallWindow]);
 
-  const overview = useRemoteData(getUsageOverview);
-  const trends = useRemoteData(getUsageTrends);
+  const overview = useRemoteData(loadOverview);
+  const trends = useRemoteData(loadTrends);
   const latencyWall = useRemoteData(loadLatencyWall);
-  const failures = useRemoteData(getUsageFailures);
+  const failures = useRemoteData(loadFailures);
   const requests = useRemoteData(loadRequests);
 
   const error =
@@ -129,7 +132,19 @@ export function UsagePage() {
         <div className="section-card__header">
           <div>
             <h2>实时运行视图</h2>
-            <p>请求量、Token、费用、成功率与估算占比全部来自 usage 接口。</p>
+            <p>请求量、Token、费用、成功率与估算占比全部来自 usage 接口，当前范围：{visibleWallLabel}。</p>
+          </div>
+          <div className="usage-wall__toolbar">
+            {wallWindows.map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                className={`button-shell ${wallWindow === item.key ? "button-shell--primary" : ""}`}
+                onClick={() => setWallWindow(item.key)}
+              >
+                {item.label}
+              </button>
+            ))}
           </div>
         </div>
         <div className="stats-grid">

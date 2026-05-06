@@ -53,6 +53,8 @@ func authError(err error) error {
 		return fiber.NewError(fiber.StatusUnauthorized, "unauthorized")
 	case errors.Is(err, service.ErrQuotaExceeded):
 		return fiber.NewError(fiber.StatusTooManyRequests, "quota exceeded")
+	case errors.Is(err, service.ErrModelNotAllowed):
+		return fiber.NewError(fiber.StatusForbidden, "model not allowed")
 	case errors.Is(err, service.ErrRouteNotFound):
 		return fiber.NewError(fiber.StatusBadGateway, "route resolution failed")
 	default:

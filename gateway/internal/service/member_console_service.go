@@ -56,6 +56,7 @@ type MemberConsoleService interface {
 	DeactivateAPIKey(ctx context.Context, id string) (APIKeyMutationResult, error)
 	RevealAPIKeySecret(ctx context.Context, id string) (APIKeySecretView, error)
 	CopyAPIKeySecret(ctx context.Context, id string, ip string, userAgent string) (APIKeySecretView, error)
+	CreateAccountDeletionApplication(ctx context.Context, req CreateAccountDeletionApplicationRequest) (AccountDeletionApplicationMutationResult, error)
 	UsageOverview(ctx context.Context, query UsageQuery) (UsageOverviewData, error)
 	UsageRequests(ctx context.Context, query UsageQuery) (UsageRequestsPageData, error)
 	Failures(ctx context.Context, query UsageQuery) (MemberFailurePageData, error)
@@ -112,6 +113,10 @@ func (unavailableMemberConsoleService) RevealAPIKeySecret(context.Context, strin
 
 func (unavailableMemberConsoleService) CopyAPIKeySecret(context.Context, string, string, string) (APIKeySecretView, error) {
 	return APIKeySecretView{}, ErrConsoleServiceUnavailable
+}
+
+func (unavailableMemberConsoleService) CreateAccountDeletionApplication(context.Context, CreateAccountDeletionApplicationRequest) (AccountDeletionApplicationMutationResult, error) {
+	return AccountDeletionApplicationMutationResult{}, ErrConsoleServiceUnavailable
 }
 
 func (unavailableMemberConsoleService) UsageOverview(context.Context, UsageQuery) (UsageOverviewData, error) {

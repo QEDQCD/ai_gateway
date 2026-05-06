@@ -90,6 +90,21 @@ func MemberCopyAPIKeySecret(member service.MemberConsoleService) fiber.Handler {
 	}
 }
 
+func MemberCreateAccountDeletionApplication(member service.MemberConsoleService) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		var req service.CreateAccountDeletionApplicationRequest
+		if err := c.BodyParser(&req); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
+		}
+
+		payload, err := member.CreateAccountDeletionApplication(c.UserContext(), req)
+		if err != nil {
+			return consoleError(err)
+		}
+		return c.JSON(payload)
+	}
+}
+
 func MemberUsageOverview(member service.MemberConsoleService) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		query, err := parseUsageQuery(c)

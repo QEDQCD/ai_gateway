@@ -3,7 +3,9 @@ package handlers
 import (
 	"bufio"
 	"errors"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/example/ai_gateway/gateway/internal/service"
@@ -27,6 +29,62 @@ func ConsoleSystemStatus(console service.ConsoleService) fiber.Handler {
 			return consoleError(err)
 		}
 		return c.JSON(payload)
+	}
+}
+
+type consoleTenantItem struct {
+	Tenant         string   `json:"tenant"`
+	KeyCount       int      `json:"key_count"`
+	ActiveKeyCount int      `json:"active_key_count"`
+	Scopes         []string `json:"scopes"`
+	SampleKeyName  string   `json:"sample_key_name"`
+}
+
+type consoleTenantsPayload struct {
+	Items []consoleTenantItem `json:"items"`
+}
+
+func ConsoleTenants(console service.ConsoleService) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		apiKeys, err := console.APIKeys(c.UserContext())
+		if err != nil {
+			return consoleError(err)
+		}
+
+		itemsByTenant := map[string]*consoleTenantItem{}
+		for _, apiKey := range apiKeys.Items {
+			tenant := strings.TrimSpace(apiKey.Tenant)
+			if tenant == "" {
+				continue
+			}
+			item := itemsByTenant[tenant]
+			if item == nil {
+				item = &consoleTenantItem{Tenant: tenant, SampleKeyName: apiKey.Name}
+				itemsByTenant[tenant] = item
+			}
+			item.KeyCount++
+			if apiKey.Status == "启用" {
+				item.ActiveKeyCount++
+			}
+			for _, scope := range apiKey.Scopes {
+				scope = strings.TrimSpace(scope)
+				if scope == "" || containsString(item.Scopes, scope) {
+					continue
+				}
+				item.Scopes = append(item.Scopes, scope)
+			}
+			item.SampleKeyName = apiKey.Name
+		}
+
+		items := make([]consoleTenantItem, 0, len(itemsByTenant))
+		for _, item := range itemsByTenant {
+			sort.Strings(item.Scopes)
+			items = append(items, *item)
+		}
+		sort.Slice(items, func(i, j int) bool {
+			return items[i].Tenant < items[j].Tenant
+		})
+		return c.JSON(consoleTenantsPayload{Items: items})
 	}
 }
 
@@ -78,6 +136,46 @@ func ConsoleRejectApplication(console service.ConsoleService) fiber.Handler {
 		}
 
 		payload, err := console.RejectApplication(c.UserContext(), c.Params("id"), req)
+		if err != nil {
+			return consoleError(err)
+		}
+		return c.JSON(payload)
+	}
+}
+
+func ConsoleAccountDeletionApplications(console service.ConsoleService) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		payload, err := console.AccountDeletionApplications(c.UserContext())
+		if err != nil {
+			return consoleError(err)
+		}
+		return c.JSON(payload)
+	}
+}
+
+func ConsoleApproveAccountDeletionApplication(console service.ConsoleService) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		var req service.ReviewAccountDeletionApplicationRequest
+		if err := c.BodyParser(&req); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
+		}
+
+		payload, err := console.ApproveAccountDeletionApplication(c.UserContext(), c.Params("id"), req)
+		if err != nil {
+			return consoleError(err)
+		}
+		return c.JSON(payload)
+	}
+}
+
+func ConsoleRejectAccountDeletionApplication(console service.ConsoleService) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		var req service.ReviewAccountDeletionApplicationRequest
+		if err := c.BodyParser(&req); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
+		}
+
+		payload, err := console.RejectAccountDeletionApplication(c.UserContext(), c.Params("id"), req)
 		if err != nil {
 			return consoleError(err)
 		}
@@ -311,6 +409,15 @@ func ConsoleUsageRequests(console service.ConsoleService) fiber.Handler {
 		}
 		return c.JSON(payload)
 	}
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func consoleError(err error) error {

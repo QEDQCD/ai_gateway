@@ -113,10 +113,11 @@ type CreateApplicationRequest struct {
 }
 
 type ApproveApplicationRequest struct {
-	ActorID    string `json:"actor_id"`
-	Comment    string `json:"comment"`
-	TenantID   string `json:"tenant_id"`
-	TokenLimit int64  `json:"token_limit"`
+	ActorID       string   `json:"actor_id"`
+	Comment       string   `json:"comment"`
+	TenantID      string   `json:"tenant_id"`
+	TokenLimit    int64    `json:"token_limit"`
+	AllowedModels []string `json:"allowed_models"`
 }
 
 type CaptchaChallenge struct {
@@ -142,6 +143,36 @@ type RejectApplicationRequest struct {
 
 type ApplicationMutationResult struct {
 	Item ApplicationItem `json:"item"`
+}
+
+type AccountDeletionApplicationItem struct {
+	ID              string `json:"id"`
+	UserID          string `json:"user_id"`
+	TenantID        string `json:"tenant_id"`
+	UserEmail       string `json:"user_email"`
+	UserName        string `json:"user_name"`
+	Reason          string `json:"reason"`
+	Status          string `json:"status"`
+	DisabledAPIKeys int    `json:"disabled_api_keys"`
+	CreatedAt       string `json:"created_at"`
+	ReviewedAt      string `json:"reviewed_at,omitempty"`
+}
+
+type AccountDeletionApplicationsPageData struct {
+	Items []AccountDeletionApplicationItem `json:"items"`
+}
+
+type CreateAccountDeletionApplicationRequest struct {
+	Reason string `json:"reason"`
+}
+
+type ReviewAccountDeletionApplicationRequest struct {
+	ActorID string `json:"actor_id"`
+	Comment string `json:"comment"`
+}
+
+type AccountDeletionApplicationMutationResult struct {
+	Item AccountDeletionApplicationItem `json:"item"`
 }
 
 type RouteMetric struct {
@@ -357,6 +388,9 @@ type ConsoleService interface {
 	CreateApplication(ctx context.Context, req CreateApplicationRequest) (ApplicationMutationResult, error)
 	ApproveApplication(ctx context.Context, id string, req ApproveApplicationRequest) (ApplicationMutationResult, error)
 	RejectApplication(ctx context.Context, id string, req RejectApplicationRequest) (ApplicationMutationResult, error)
+	AccountDeletionApplications(ctx context.Context) (AccountDeletionApplicationsPageData, error)
+	ApproveAccountDeletionApplication(ctx context.Context, id string, req ReviewAccountDeletionApplicationRequest) (AccountDeletionApplicationMutationResult, error)
+	RejectAccountDeletionApplication(ctx context.Context, id string, req ReviewAccountDeletionApplicationRequest) (AccountDeletionApplicationMutationResult, error)
 	APIKeys(ctx context.Context) (APIKeysPageData, error)
 	CreateAPIKey(ctx context.Context, req CreateAPIKeyRequest) (APIKeyMutationResult, error)
 	RotateAPIKey(ctx context.Context, id string, req RotateAPIKeyRequest) (APIKeyMutationResult, error)
@@ -433,6 +467,18 @@ func (unavailableConsoleService) ApproveApplication(context.Context, string, App
 
 func (unavailableConsoleService) RejectApplication(context.Context, string, RejectApplicationRequest) (ApplicationMutationResult, error) {
 	return ApplicationMutationResult{}, ErrConsoleServiceUnavailable
+}
+
+func (unavailableConsoleService) AccountDeletionApplications(context.Context) (AccountDeletionApplicationsPageData, error) {
+	return AccountDeletionApplicationsPageData{}, ErrConsoleServiceUnavailable
+}
+
+func (unavailableConsoleService) ApproveAccountDeletionApplication(context.Context, string, ReviewAccountDeletionApplicationRequest) (AccountDeletionApplicationMutationResult, error) {
+	return AccountDeletionApplicationMutationResult{}, ErrConsoleServiceUnavailable
+}
+
+func (unavailableConsoleService) RejectAccountDeletionApplication(context.Context, string, ReviewAccountDeletionApplicationRequest) (AccountDeletionApplicationMutationResult, error) {
+	return AccountDeletionApplicationMutationResult{}, ErrConsoleServiceUnavailable
 }
 
 func (unavailableConsoleService) APIKeys(context.Context) (APIKeysPageData, error) {

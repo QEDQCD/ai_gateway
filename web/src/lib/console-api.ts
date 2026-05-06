@@ -98,6 +98,7 @@ export type ApproveApplicationPayload = {
   comment: string;
   tenant_id: string;
   token_limit: number;
+  allowed_models: string[];
 };
 
 export type RejectApplicationPayload = {
@@ -107,6 +108,36 @@ export type RejectApplicationPayload = {
 
 export type ApplicationMutationResult = {
   item: ApplicationItem;
+};
+
+export type AccountDeletionApplicationItem = {
+  id: string;
+  user_id: string;
+  tenant_id: string;
+  user_email: string;
+  user_name: string;
+  reason: string;
+  status: string;
+  disabled_api_keys: number;
+  created_at: string;
+  reviewed_at?: string;
+};
+
+export type AccountDeletionApplicationsPageData = {
+  items: AccountDeletionApplicationItem[];
+};
+
+export type CreateAccountDeletionApplicationPayload = {
+  reason: string;
+};
+
+export type ReviewAccountDeletionApplicationPayload = {
+  actor_id: string;
+  comment: string;
+};
+
+export type AccountDeletionApplicationMutationResult = {
+  item: AccountDeletionApplicationItem;
 };
 
 export type RouteMetric = {
@@ -561,6 +592,38 @@ export function rejectApplication(id: string, payload: RejectApplicationPayload)
   });
 }
 
+export function getAccountDeletionApplications() {
+  return requestJson<AccountDeletionApplicationsPageData>("/api/admin/account-deletion-applications");
+}
+
+export function approveAccountDeletionApplication(
+  id: string,
+  payload: ReviewAccountDeletionApplicationPayload,
+) {
+  return requestJson<AccountDeletionApplicationMutationResult>(
+    `/api/admin/account-deletion-applications/${id}/approve`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export function rejectAccountDeletionApplication(
+  id: string,
+  payload: ReviewAccountDeletionApplicationPayload,
+) {
+  return requestJson<AccountDeletionApplicationMutationResult>(
+    `/api/admin/account-deletion-applications/${id}/reject`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
 export type CreateAPIKeyPayload = {
   tenant_id: string;
   name: string;
@@ -655,6 +718,17 @@ export function copyMemberAPIKeySecret(id: string) {
   });
 }
 
+export function createAccountDeletionApplication(payload: CreateAccountDeletionApplicationPayload) {
+  return requestJson<AccountDeletionApplicationMutationResult>(
+    "/api/me/account-deletion-applications",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
 export function getRoutes() {
   return requestJson<JsonRecord>("/api/admin/routes").then((data) => ({
     stats: Array.isArray(data.stats) ? (data.stats as RouteMetric[]) : [],
@@ -707,12 +781,12 @@ export function getAudit() {
   }));
 }
 
-export function getUsageOverview() {
-  return requestJson<JsonRecord>("/api/admin/usage/overview").then(toUsageOverviewData);
+export function getUsageOverview(window: "6h" | "24h" | "7d" = "24h") {
+  return requestJson<JsonRecord>(`/api/admin/usage/overview?window=${window}`).then(toUsageOverviewData);
 }
 
-export function getUsageTrends() {
-  return requestJson<JsonRecord>("/api/admin/usage/trends").then(toUsageTrendData);
+export function getUsageTrends(window: "6h" | "24h" | "7d" = "24h") {
+  return requestJson<JsonRecord>(`/api/admin/usage/trends?window=${window}`).then(toUsageTrendData);
 }
 
 export function getUsageLatencyWall(window: "6h" | "24h" | "7d" = "24h") {
@@ -744,8 +818,8 @@ export function getUsageLatencyWall(window: "6h" | "24h" | "7d" = "24h") {
   }));
 }
 
-export function getUsageFailures() {
-  return requestJson<UsageFailureData>("/api/admin/usage/failures");
+export function getUsageFailures(window: "6h" | "24h" | "7d" = "24h") {
+  return requestJson<UsageFailureData>(`/api/admin/usage/failures?window=${window}`);
 }
 
 function createUsageRequestsSearch(query: UsageRequestsQuery) {

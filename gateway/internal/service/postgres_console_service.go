@@ -501,6 +501,7 @@ func (s postgresConsoleService) ApproveApplication(ctx context.Context, id strin
 	comment := strings.TrimSpace(req.Comment)
 	tenantID := strings.TrimSpace(req.TenantID)
 	tokenLimit := req.TokenLimit
+	allowedModels := sanitizeAllowedModels(req.AllowedModels)
 	if applicationID == "" {
 		return ApplicationMutationResult{}, StatusError{
 			Code:    http.StatusBadRequest,
@@ -523,6 +524,12 @@ func (s postgresConsoleService) ApproveApplication(ctx context.Context, id strin
 		return ApplicationMutationResult{}, StatusError{
 			Code:    http.StatusBadRequest,
 			Message: "token_limit is required",
+		}
+	}
+	if len(allowedModels) == 0 {
+		return ApplicationMutationResult{}, StatusError{
+			Code:    http.StatusBadRequest,
+			Message: "allowed_models is required",
 		}
 	}
 
@@ -580,6 +587,7 @@ func (s postgresConsoleService) ApproveApplication(ctx context.Context, id strin
 				period_type,
 				request_limit,
 				token_limit,
+				allowed_models,
 				effective_from,
 				created_by
 			)
@@ -597,6 +605,7 @@ func (s postgresConsoleService) ApproveApplication(ctx context.Context, id strin
 					500000
 				),
 				$7,
+				$9,
 				now(),
 				$2
 			from updated_application
@@ -604,6 +613,7 @@ func (s postgresConsoleService) ApproveApplication(ctx context.Context, id strin
 			set
 				request_limit = excluded.request_limit,
 				token_limit = excluded.token_limit,
+				allowed_models = excluded.allowed_models,
 				effective_from = excluded.effective_from,
 				created_by = excluded.created_by,
 				updated_at = now()
@@ -652,7 +662,7 @@ func (s postgresConsoleService) ApproveApplication(ctx context.Context, id strin
 		)
 		select id, email, name, company_name, use_case, status, created_at
 		from updated_application;
-	`, applicationID, actorID, comment, newUserID(), tenantID, newTenantMembershipID(), tokenLimit, newAuditEventID())
+	`, applicationID, actorID, comment, newUserID(), tenantID, newTenantMembershipID(), tokenLimit, newAuditEventID(), allowedModels)
 
 	item, err := scanApplicationItem(row)
 	if err != nil {
@@ -728,6 +738,184 @@ func (s postgresConsoleService) RejectApplication(ctx context.Context, id string
 	}
 
 	return ApplicationMutationResult{Item: item}, nil
+}
+
+func (s postgresConsoleService) AccountDeletionApplications(ctx context.Context) (AccountDeletionApplicationsPageData, error) {
+	rows, err := s.db.Query(ctx, `
+		select
+			a.id,
+			a.user_id,
+			a.tenant_id,
+			u.email,
+			u.name,
+			a.reason,
+			a.status,
+			a.disabled_api_keys,
+			a.created_at,
+			a.reviewed_at
+		from account_deletion_applications a
+		join users u on u.id = a.user_id
+		order by
+			case a.status when 'pending' then 0 when 'approved' then 1 else 2 end,
+			a.created_at desc,
+			a.id asc;
+	`)
+	if err != nil {
+		return AccountDeletionApplicationsPageData{}, err
+	}
+	defer rows.Close()
+
+	items := make([]AccountDeletionApplicationItem, 0)
+	for rows.Next() {
+		item, err := scanAccountDeletionApplicationItem(rows)
+		if err != nil {
+			return AccountDeletionApplicationsPageData{}, err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return AccountDeletionApplicationsPageData{}, err
+	}
+
+	return AccountDeletionApplicationsPageData{Items: items}, nil
+}
+
+func (s postgresConsoleService) ApproveAccountDeletionApplication(ctx context.Context, id string, req ReviewAccountDeletionApplicationRequest) (AccountDeletionApplicationMutationResult, error) {
+	return s.reviewAccountDeletionApplication(ctx, id, req, true)
+}
+
+func (s postgresConsoleService) RejectAccountDeletionApplication(ctx context.Context, id string, req ReviewAccountDeletionApplicationRequest) (AccountDeletionApplicationMutationResult, error) {
+	return s.reviewAccountDeletionApplication(ctx, id, req, false)
+}
+
+func (s postgresConsoleService) reviewAccountDeletionApplication(ctx context.Context, id string, req ReviewAccountDeletionApplicationRequest, approved bool) (AccountDeletionApplicationMutationResult, error) {
+	applicationID := strings.TrimSpace(id)
+	actorID := strings.TrimSpace(req.ActorID)
+	comment := strings.TrimSpace(req.Comment)
+	if applicationID == "" {
+		return AccountDeletionApplicationMutationResult{}, StatusError{
+			Code:    http.StatusBadRequest,
+			Message: "account deletion application id is required",
+		}
+	}
+	if actorID == "" {
+		return AccountDeletionApplicationMutationResult{}, StatusError{
+			Code:    http.StatusBadRequest,
+			Message: "actor_id is required",
+		}
+	}
+
+	nextStatus := "rejected"
+	eventType := "account_deletion_rejected"
+	if approved {
+		nextStatus = "approved"
+		eventType = "account_deletion_approved"
+	}
+
+	row := s.db.QueryRow(ctx, `
+		with selected_application as (
+			select id, user_id, tenant_id, reason, created_at
+			from account_deletion_applications
+			where id = $1
+			  and status = 'pending'
+			for update
+		),
+		disabled_user as (
+			update users
+			set status = case when $5 then 'disabled' else status end
+			where id in (select user_id from selected_application)
+			returning id
+		),
+		disabled_memberships as (
+			update tenant_memberships
+			set status = case when $5 then 'disabled' else status end
+			where (tenant_id, user_id) in (
+				select tenant_id, user_id from selected_application
+			)
+			returning id
+		),
+		disabled_keys as (
+			update platform_api_keys
+			set
+				status = case when $5 then 'disabled' else status end,
+				disabled_at = case when $5 and status = 'active' then now() else disabled_at end,
+				disabled_reason = case when $5 and status = 'active' then 'account deletion approved' else disabled_reason end
+			where $5
+			  and tenant_id in (select tenant_id from selected_application)
+			  and created_by_user_id in (select user_id from selected_application)
+			  and status = 'active'
+			returning id
+		),
+		updated_application as (
+			update account_deletion_applications
+			set
+				status = $4,
+				reviewer_id = $2,
+				review_comment = $3,
+				reviewed_at = now(),
+				disabled_api_keys = (select count(*) from disabled_keys)
+			from selected_application
+			where account_deletion_applications.id = selected_application.id
+			returning
+				account_deletion_applications.id,
+				selected_application.user_id,
+				selected_application.tenant_id,
+				selected_application.reason,
+				account_deletion_applications.status,
+				account_deletion_applications.disabled_api_keys,
+				selected_application.created_at,
+				account_deletion_applications.reviewed_at
+		),
+		inserted_audit as (
+			insert into audit_events (
+				id,
+				actor_type,
+				actor_user_id,
+				tenant_id,
+				event_type,
+				target_type,
+				target_id,
+				detail
+			)
+			select
+				$6,
+				'admin',
+				$2,
+				tenant_id,
+				$7,
+				'account_deletion_application',
+				id,
+				concat($3, '；disabled_api_keys=', disabled_api_keys)
+			from updated_application
+		)
+		select
+			updated_application.id,
+			updated_application.user_id,
+			updated_application.tenant_id,
+			u.email,
+			u.name,
+			updated_application.reason,
+			updated_application.status,
+			updated_application.disabled_api_keys,
+			updated_application.created_at,
+			updated_application.reviewed_at
+		from updated_application
+		join users u on u.id = updated_application.user_id;
+	`, applicationID, actorID, comment, nextStatus, approved, newAuditEventID(), eventType)
+
+	item, err := scanAccountDeletionApplicationItem(row)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return AccountDeletionApplicationMutationResult{}, StatusError{
+				Code:    http.StatusNotFound,
+				Message: "pending account deletion application not found",
+				Err:     err,
+			}
+		}
+		return AccountDeletionApplicationMutationResult{}, mapAccountDeletionApplicationWriteError(err)
+	}
+
+	return AccountDeletionApplicationMutationResult{Item: item}, nil
 }
 
 func (s postgresConsoleService) APIKeys(ctx context.Context) (APIKeysPageData, error) {
@@ -2707,6 +2895,50 @@ func scanApplicationItem(scanner applicationScanner) (ApplicationItem, error) {
 	return item, nil
 }
 
+func scanAccountDeletionApplicationItem(scanner applicationScanner) (AccountDeletionApplicationItem, error) {
+	var item AccountDeletionApplicationItem
+	var createdAt time.Time
+	var reviewedAt *time.Time
+	if err := scanner.Scan(
+		&item.ID,
+		&item.UserID,
+		&item.TenantID,
+		&item.UserEmail,
+		&item.UserName,
+		&item.Reason,
+		&item.Status,
+		&item.DisabledAPIKeys,
+		&createdAt,
+		&reviewedAt,
+	); err != nil {
+		return AccountDeletionApplicationItem{}, err
+	}
+
+	item.CreatedAt = createdAt.In(shanghaiLocation()).Format(time.RFC3339)
+	if reviewedAt != nil {
+		item.ReviewedAt = reviewedAt.In(shanghaiLocation()).Format(time.RFC3339)
+	}
+	return item, nil
+}
+
+func sanitizeAllowedModels(models []string) []string {
+	seen := make(map[string]struct{}, len(models))
+	sanitized := make([]string, 0, len(models))
+	for _, model := range models {
+		model = strings.TrimSpace(model)
+		if model == "" {
+			continue
+		}
+		key := strings.ToLower(model)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		sanitized = append(sanitized, model)
+	}
+	return sanitized
+}
+
 func (s postgresConsoleService) mapApproveApplicationPendingError(ctx context.Context, id string) error {
 	var status string
 	if err := s.db.QueryRow(ctx, `
@@ -2778,6 +3010,34 @@ func mapRejectApplicationWriteError(err error) error {
 	return err
 }
 
+func mapAccountDeletionApplicationWriteError(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		switch pgErr.Code {
+		case "23503":
+			return StatusError{
+				Code:    http.StatusBadRequest,
+				Message: "account deletion reference not found",
+				Err:     err,
+			}
+		case "23505":
+			return StatusError{
+				Code:    http.StatusConflict,
+				Message: "account deletion application already pending",
+				Err:     err,
+			}
+		case "23514":
+			return StatusError{
+				Code:    http.StatusBadRequest,
+				Message: "invalid account deletion application state",
+				Err:     err,
+			}
+		}
+	}
+
+	return err
+}
+
 func mapAPIKeyMutationError(err error, notFoundMessage string) error {
 	if errors.Is(err, pgx.ErrNoRows) {
 		return StatusError{
@@ -2814,6 +3074,10 @@ func newPlatformAPIKeyID() string {
 
 func newApplicationID() string {
 	return "app_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+}
+
+func newAccountDeletionApplicationID() string {
+	return "ada_" + strings.ReplaceAll(uuid.NewString(), "-", "")
 }
 
 func newUserID() string {

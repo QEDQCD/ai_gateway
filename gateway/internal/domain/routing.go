@@ -27,5 +27,6 @@ type ProviderRoute struct {
 	RouteID      string
 	ProviderID   string
 	ProviderName string
+	Model        string
 	Target       ProviderTarget
 }
