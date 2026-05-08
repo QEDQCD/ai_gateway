@@ -14,3 +14,8 @@ deploy/compose/.env.local
 deploy/compose/.env
 deploy/redis/users.acl
 .ai_gateway_secrets/
+.codex
+.codex/
+gateway/cmd/tmp_*/
+gateway/gateway/
+tests/output/

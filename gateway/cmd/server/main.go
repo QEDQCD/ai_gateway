@@ -104,11 +104,19 @@ func newDatabaseBackedServerApp(cfg config.Config) *fiber.App {
 	)
 	smartRouter := newConfiguredSmartRouter(cfg)
 	pricingResolver := mustNewUsagePricingResolver(cfg)
-	chatProxy := service.NewChatProxyService(provider.NewOpenAIClient(http.DefaultClient), usagePublisher, usageRecorder)
-	embeddingProxy := service.NewEmbeddingProxyService(provider.NewOpenAIClient(http.DefaultClient), usagePublisher, usageRecorder)
+	upstreamClient := provider.NewOpenAIClient(http.DefaultClient)
+	chatProxy := service.NewChatProxyService(upstreamClient, usagePublisher, usageRecorder)
+	embeddingProxy := service.NewEmbeddingProxyService(upstreamClient, usagePublisher, usageRecorder)
 	ragProxy := service.NewRAGProxyService(cfg.RAGServiceBaseURL, cfg.RAGServiceUsername, cfg.RAGServicePassword, http.DefaultClient)
 	consoleService := service.NewPostgresConsoleServiceWithPricing(pool, authService, chatProxy, ragProxy, cfg.SeedPlatformAPIKey, pricingResolver, platformAPIKeySecretCodec)
 	memberConsoleService := service.NewPostgresMemberConsoleService(pool, service.ConsolePrincipal{}, platformAPIKeySecretCodec)
+	if cfg.ModelHealthcheckEnabled {
+		go service.NewModelHealthcheckRunner(
+			service.NewPostgresModelHealthcheckCatalog(pool, repository),
+			upstreamClient,
+			cfg,
+		).Start(context.Background())
+	}
 
 	return apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
 		ServiceAuthUsername:   cfg.ServiceAuthUsername,

@@ -635,6 +635,20 @@ func TestApplyMigrationsAddsSmartRoutingColumns(t *testing.T) {
 	assertColumnDefinition(t, ctx, conn, "llm_request_logs", "resolved_model", "text", "NO", "''")
 }
 
+func TestApplyMigrationsAddTenantCostLimitColumn(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	conn := openMigratedTestPostgres(t, ctx)
+
+	assertTableHasColumns(t, ctx, conn, "tenant_quota_policies", []string{
+		"cost_limit_microyuan",
+	})
+	assertColumnDefinition(t, ctx, conn, "tenant_quota_policies", "cost_limit_microyuan", "bigint", "NO", "0")
+}
+
 func TestSeedDemoDataIncludesTokenPricingFields(t *testing.T) {
 	t.Parallel()
 
@@ -782,6 +796,27 @@ func TestSeedDemoDataIncludesTokenPricingFields(t *testing.T) {
 
 	if ledgerInputTokens != sumPromptTokens || ledgerOutputTokens != sumCompletionTokens || ledgerTotalTokens != sumTotalTokens || ledgerCachedTokens != sumCachedTokens || ledgerInputCost != sumInputCost || ledgerOutputCost != sumOutputCost || ledgerCachedCost != sumCachedCost || ledgerTotalCost != sumTotalCost {
 		t.Fatalf("unexpected tenant_usage_ledger pricing fields: input_tokens=%d output_tokens=%d total_tokens=%d cached_tokens=%d input_cost=%d output_cost=%d cached_cost=%d total_cost=%d", ledgerInputTokens, ledgerOutputTokens, ledgerTotalTokens, ledgerCachedTokens, ledgerInputCost, ledgerOutputCost, ledgerCachedCost, ledgerTotalCost)
+	}
+}
+
+func TestRuntimeSeedStatementsIncludeNonZeroTenantCostLimit(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	conn := openSeededRuntimeDB(t, ctx)
+
+	var costLimitMicroyuan int64
+	if err := conn.QueryRow(ctx, `
+		select cost_limit_microyuan
+		from tenant_quota_policies
+		where tenant_id = 'tenant_demo'
+	`).Scan(&costLimitMicroyuan); err != nil {
+		t.Fatalf("QueryRow tenant_quota_policies failed: %v", err)
+	}
+	if costLimitMicroyuan <= 0 {
+		t.Fatalf("expected seeded cost_limit_microyuan to be positive, got %d", costLimitMicroyuan)
 	}
 }
 
@@ -1214,6 +1249,212 @@ func TestSeedDemoDataPopulatesTenantGovernanceDemoData(t *testing.T) {
 
 	assertGovernanceSeedCounts(t, ctx, conn)
 	assertApprovedApplicationAuditEvent(t, ctx, conn, "tenant_alpha", "app_alpha_approved", "user_admin_alpha", "seed approve")
+}
+
+func TestPruneSeededDisplayDataRemovesDemoRowsWithoutDeletingLiveUsage(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	container, dsn := startPostgresContainer(ctx, t)
+	t.Cleanup(func() {
+		_ = container.Terminate(context.Background())
+	})
+
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("pgx.Connect failed: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = conn.Close(context.Background())
+	})
+
+	for _, migration := range readMigrations(t) {
+		if _, err := conn.Exec(ctx, migration); err != nil {
+			t.Fatalf("conn.Exec migration failed: %v", err)
+		}
+	}
+
+	codec, err := secret.NewCodec("0123456789abcdef0123456789abcdef")
+	if err != nil {
+		t.Fatalf("secret.NewCodec failed: %v", err)
+	}
+
+	cfg := seedConfigForTests(codec)
+	cfg.PlatformKeyCodec = codec
+	if err := SeedDemoData(ctx, conn, cfg); err != nil {
+		t.Fatalf("SeedDemoData failed: %v", err)
+	}
+
+	liveRouteID := service.RouteIDForCredential("provider_dashscope_primary", []string{"qwen-flash", "text-embedding-v4"}, "qwen-flash")
+	if _, err := conn.Exec(ctx, `
+		insert into llm_request_logs (
+			id,
+			tenant_id,
+			platform_api_key_id,
+			platform_api_key_name,
+			provider_credential_id,
+			route_id,
+			request_path,
+			request_model,
+			upstream_model,
+			usage_source,
+			usage_status,
+			status_code,
+			latency_ms,
+			first_token_latency_ms,
+			prompt_tokens,
+			completion_tokens,
+			total_tokens,
+			cached_tokens,
+			input_price_microyuan_per_million,
+			output_price_microyuan_per_million,
+			cached_price_microyuan_per_million,
+			input_cost_microyuan,
+			output_cost_microyuan,
+			cached_cost_microyuan,
+			total_cost_microyuan,
+			error_code,
+			error_message,
+			request_started_at,
+			request_completed_at
+		) values (
+			'runtime_live_001',
+			'tenant_alpha',
+			'pak_live_console',
+			'prod-gateway',
+			'provider_dashscope_primary',
+			$1,
+			'/v1/chat/completions',
+			'qwen-flash',
+			'qwen-flash',
+			'upstream',
+			'success',
+			200,
+			188,
+			41,
+			12,
+			8,
+			20,
+			0,
+			2000000,
+			20000000,
+			500000,
+			24,
+			160,
+			0,
+			184,
+			'',
+			'',
+			timestamptz '2026-05-08T06:12:48Z',
+			timestamptz '2026-05-08T06:12:48.188Z'
+		)
+	`, liveRouteID); err != nil {
+		t.Fatalf("insert live llm_request_logs failed: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `
+		insert into llm_request_events (
+			id,
+			request_log_id,
+			tenant_id,
+			event_type,
+			usage_source,
+			usage_status,
+			status_code,
+			detail,
+			created_at
+		) values (
+			'live_evt_001',
+			'runtime_live_001',
+			'tenant_alpha',
+			'response_received',
+			'upstream',
+			'success',
+			200,
+			'live runtime event',
+			timestamptz '2026-05-08T06:12:48.188Z'
+		)
+	`); err != nil {
+		t.Fatalf("insert live llm_request_events failed: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `
+		insert into llm_usage_agg_hourly (
+			bucket_start,
+			tenant_id,
+			platform_api_key_id,
+			provider_credential_id,
+			route_id,
+			request_path,
+			usage_source,
+			usage_status,
+			request_count,
+			prompt_tokens,
+			completion_tokens,
+			total_tokens,
+			cached_tokens,
+			input_cost_microyuan,
+			output_cost_microyuan,
+			cached_cost_microyuan,
+			total_cost_microyuan
+		) values (
+			timestamptz '2026-05-08T06:00:00Z',
+			'tenant_alpha',
+			'pak_live_console',
+			'provider_dashscope_primary',
+			$1,
+			'/v1/chat/completions',
+			'upstream',
+			'success',
+			1,
+			12,
+			8,
+			20,
+			0,
+			24,
+			160,
+			0,
+			184
+		)
+	`, liveRouteID); err != nil {
+		t.Fatalf("insert live llm_usage_agg_hourly failed: %v", err)
+	}
+
+	if err := PruneSeededDisplayData(ctx, conn); err != nil {
+		t.Fatalf("PruneSeededDisplayData failed: %v", err)
+	}
+
+	assertExists := func(query string, args ...any) {
+		t.Helper()
+		var exists bool
+		if err := conn.QueryRow(ctx, query, args...).Scan(&exists); err != nil {
+			t.Fatalf("QueryRow failed: %v", err)
+		}
+		if !exists {
+			t.Fatalf("expected row to remain for query %q args=%v", query, args)
+		}
+	}
+	assertMissing := func(query string, args ...any) {
+		t.Helper()
+		var exists bool
+		if err := conn.QueryRow(ctx, query, args...).Scan(&exists); err != nil {
+			t.Fatalf("QueryRow failed: %v", err)
+		}
+		if exists {
+			t.Fatalf("expected row to be deleted for query %q args=%v", query, args)
+		}
+	}
+
+	assertExists(`select exists(select 1 from llm_request_logs where id = 'runtime_live_001')`)
+	assertExists(`select exists(select 1 from llm_request_events where id = 'live_evt_001')`)
+	assertExists(`select exists(select 1 from llm_usage_agg_hourly where tenant_id = 'tenant_alpha' and platform_api_key_id = 'pak_live_console')`)
+
+	assertMissing(`select exists(select 1 from llm_request_logs where id = 'llmreq_demo_001')`)
+	assertMissing(`select exists(select 1 from llm_request_logs where id = 'llmreq_demo_002')`)
+	assertMissing(`select exists(select 1 from llm_request_events where id = 'llmevt_demo_001')`)
+	assertMissing(`select exists(select 1 from llm_request_events where id = 'llmevt_demo_002')`)
+	assertMissing(`select exists(select 1 from llm_usage_agg_hourly where tenant_id = 'tenant_demo' and platform_api_key_id = 'pak_demo')`)
+	assertMissing(`select exists(select 1 from tenant_usage_ledger where tenant_id = 'tenant_demo')`)
 }
 
 func TestRuntimeSeedStatementsPopulateApprovalAndMembershipData(t *testing.T) {

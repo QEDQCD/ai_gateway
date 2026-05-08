@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoadDefaultsMIMOSeedProvider(t *testing.T) {
@@ -282,4 +283,56 @@ func assertPanicContains(t *testing.T, want string, fn func()) {
 	}()
 
 	fn()
+}
+
+func TestLoadModelHealthcheckDefaultsAndOverrides(t *testing.T) {
+	t.Run("defaults", func(t *testing.T) {
+		t.Setenv("GATEWAY_MODEL_HEALTHCHECK_ENABLED", "")
+		t.Setenv("GATEWAY_MODEL_HEALTHCHECK_INTERVAL", "")
+		t.Setenv("GATEWAY_MODEL_HEALTHCHECK_TIMEOUT", "")
+		t.Setenv("GATEWAY_MODEL_HEALTHCHECK_PROMPT", "")
+		t.Setenv("GATEWAY_MODEL_HEALTHCHECK_MAX_TOKENS", "")
+
+		cfg := Load()
+		if cfg.ModelHealthcheckEnabled {
+			t.Fatal("expected ModelHealthcheckEnabled default false")
+		}
+		if cfg.ModelHealthcheckInterval != time.Hour {
+			t.Fatalf("expected ModelHealthcheckInterval %v, got %v", time.Hour, cfg.ModelHealthcheckInterval)
+		}
+		if cfg.ModelHealthcheckTimeout != 20*time.Second {
+			t.Fatalf("expected ModelHealthcheckTimeout %v, got %v", 20*time.Second, cfg.ModelHealthcheckTimeout)
+		}
+		if cfg.ModelHealthcheckPrompt != "你好" {
+			t.Fatalf("expected ModelHealthcheckPrompt %q, got %q", "你好", cfg.ModelHealthcheckPrompt)
+		}
+		if cfg.ModelHealthcheckMaxTokens != 1 {
+			t.Fatalf("expected ModelHealthcheckMaxTokens %d, got %d", 1, cfg.ModelHealthcheckMaxTokens)
+		}
+	})
+
+	t.Run("overrides", func(t *testing.T) {
+		t.Setenv("GATEWAY_MODEL_HEALTHCHECK_ENABLED", "true")
+		t.Setenv("GATEWAY_MODEL_HEALTHCHECK_INTERVAL", "90s")
+		t.Setenv("GATEWAY_MODEL_HEALTHCHECK_TIMEOUT", "7s")
+		t.Setenv("GATEWAY_MODEL_HEALTHCHECK_PROMPT", "ping")
+		t.Setenv("GATEWAY_MODEL_HEALTHCHECK_MAX_TOKENS", "3")
+
+		cfg := Load()
+		if !cfg.ModelHealthcheckEnabled {
+			t.Fatal("expected ModelHealthcheckEnabled true")
+		}
+		if cfg.ModelHealthcheckInterval != 90*time.Second {
+			t.Fatalf("expected ModelHealthcheckInterval %v, got %v", 90*time.Second, cfg.ModelHealthcheckInterval)
+		}
+		if cfg.ModelHealthcheckTimeout != 7*time.Second {
+			t.Fatalf("expected ModelHealthcheckTimeout %v, got %v", 7*time.Second, cfg.ModelHealthcheckTimeout)
+		}
+		if cfg.ModelHealthcheckPrompt != "ping" {
+			t.Fatalf("expected ModelHealthcheckPrompt %q, got %q", "ping", cfg.ModelHealthcheckPrompt)
+		}
+		if cfg.ModelHealthcheckMaxTokens != 3 {
+			t.Fatalf("expected ModelHealthcheckMaxTokens %d, got %d", 3, cfg.ModelHealthcheckMaxTokens)
+		}
+	})
 }

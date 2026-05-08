@@ -30,13 +30,19 @@ export function DataTable({
   columns,
   rows,
   emptyMessage = "暂无数据",
+  onRowClick,
+  rowClassName,
+  tableClassName = "",
 }: {
   columns: string[];
   rows: ReactNode[][];
   emptyMessage?: string;
+  onRowClick?: (rowIndex: number) => void;
+  rowClassName?: (rowIndex: number) => string;
+  tableClassName?: string;
 }) {
   return (
-    <table className="data-table">
+    <table className={`data-table ${tableClassName}`.trim()}>
       <thead>
         <tr>
           {columns.map((column) => (
@@ -47,7 +53,23 @@ export function DataTable({
       <tbody>
         {rows.length > 0 ? (
           rows.map((row, rowIndex) => (
-            <tr key={`row-${rowIndex}`}>
+            <tr
+              key={`row-${rowIndex}`}
+              className={rowClassName?.(rowIndex)}
+              onClick={onRowClick ? () => onRowClick(rowIndex) : undefined}
+              onKeyDown={
+                onRowClick
+                  ? (event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        onRowClick(rowIndex);
+                      }
+                    }
+                  : undefined
+              }
+              role={onRowClick ? "button" : undefined}
+              tabIndex={onRowClick ? 0 : undefined}
+            >
               {row.map((cell, cellIndex) => (
                 <td key={`cell-${rowIndex}-${cellIndex}`}>{cell}</td>
               ))}

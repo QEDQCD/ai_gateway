@@ -128,6 +128,917 @@ func TestPostgresConsoleServiceRoutesGroupsItemsByProvider(t *testing.T) {
 	}
 }
 
+func TestPostgresConsoleServiceProviderModelsReturnsChatProvidersAndModels(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	if _, err := conn.Exec(ctx, `
+		delete from llm_request_events;
+		delete from llm_usage_agg_hourly;
+		delete from llm_request_logs;
+		delete from route_catalog;
+		delete from provider_credentials;
+
+		insert into provider_credentials (
+			id,
+			provider,
+			display_name,
+			supported_models,
+			base_url,
+			encrypted_secret,
+			secret_ref,
+			credential_mode,
+			status
+		) values
+			('provider_dashscope_primary', 'dashscope', 'Qwen', '{"qwen-flash","text-embedding-v4"}', 'https://dashscope.aliyuncs.com/compatible-mode/v1', '', 'secret/qwen', 'secret_ref', 'active'),
+			('provider_mimo_primary', 'mimo', 'MIMO', '{"mimo-v2.5-pro"}', 'https://api.xiaomimimo.com/v1', '', '', 'encrypted', 'active'),
+			('provider_rag_service', 'rag', 'RAG', '{"rag-query"}', 'http://rag-service:8000', '', '', 'encrypted', 'disabled');
+
+		insert into route_catalog (
+			id,
+			requested_model,
+			resolved_provider,
+			provider_credential_id,
+			endpoint,
+			latency_ms,
+			health_status,
+			request_mode,
+			updated_at
+		) values
+			('route:provider_dashscope_primary:default', 'qwen-flash', 'Qwen', 'provider_dashscope_primary', '/v1/chat/completions', 218, 'healthy', '聊天', now()),
+			('route:provider_dashscope_primary:text-embedding-v4', 'text-embedding-v4', 'Qwen', 'provider_dashscope_primary', '/v1/embeddings', 64, 'healthy', '向量', now()),
+			('route:provider_mimo_primary:default', 'mimo-v2.5-pro', 'MIMO', 'provider_mimo_primary', '/v1/chat/completions', 286, 'warning', '推理', now()),
+			('route:provider_rag_service:default', 'rag-query', 'RAG', 'provider_rag_service', '/v1/internal-search', 312, 'warning', '知识库', now());
+	`); err != nil {
+		t.Fatalf("seed provider-models failed: %v", err)
+	}
+
+	payload, err := console.ProviderModels(ctx)
+	if err != nil {
+		t.Fatalf("ProviderModels failed: %v", err)
+	}
+
+	if len(payload.Providers) != 2 {
+		t.Fatalf("expected 2 providers, got %d", len(payload.Providers))
+	}
+	if len(payload.Models) != 2 {
+		t.Fatalf("expected 2 chat models, got %d", len(payload.Models))
+	}
+
+	gotProviders := map[string]service.ProviderItem{}
+	for _, item := range payload.Providers {
+		gotProviders[item.ID] = item
+	}
+	if gotProviders["provider_dashscope_primary"].SecretRef != "secret/qwen" || gotProviders["provider_dashscope_primary"].CredentialMode != "secret_ref" {
+		t.Fatalf("expected dashscope provider to expose secret_ref/credential_mode, got %+v", gotProviders["provider_dashscope_primary"])
+	}
+	if len(gotProviders["provider_dashscope_primary"].SupportedModels) != 2 {
+		t.Fatalf("expected dashscope provider supported_models to round-trip, got %+v", gotProviders["provider_dashscope_primary"])
+	}
+	if gotProviders["provider_dashscope_primary"].Provider != "qwen" {
+		t.Fatalf("expected dashscope provider to normalize to qwen, got %+v", gotProviders["provider_dashscope_primary"])
+	}
+	if gotProviders["provider_mimo_primary"].Provider != "mimo" {
+		t.Fatalf("expected mimo provider to normalize to mimo, got %+v", gotProviders["provider_mimo_primary"])
+	}
+
+	gotModels := map[string]service.ProviderModelItem{}
+	for _, item := range payload.Models {
+		gotModels[item.RequestedModel] = item
+	}
+	if _, ok := gotModels["text-embedding-v4"]; ok {
+		t.Fatalf("expected embedding model to be excluded, got %+v", gotModels["text-embedding-v4"])
+	}
+	if _, ok := gotModels["rag-query"]; ok {
+		t.Fatalf("expected internal-search model to be excluded, got %+v", gotModels["rag-query"])
+	}
+	if gotModels["qwen-flash"].Provider != "qwen" {
+		t.Fatalf("expected qwen-flash provider qwen, got %+v", gotModels["qwen-flash"])
+	}
+	if gotModels["mimo-v2.5-pro"].Provider != "mimo" {
+		t.Fatalf("expected mimo-v2.5-pro provider mimo, got %+v", gotModels["mimo-v2.5-pro"])
+	}
+	if gotModels["mimo-v2.5-pro"].RequestMode != "推理" {
+		t.Fatalf("expected request_mode 推理 preserved, got %+v", gotModels["mimo-v2.5-pro"])
+	}
+}
+
+func TestPostgresConsoleServiceProviderModelsIncludesProvidersWithoutChatRoutesAndDeduplicatesProviders(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	if _, err := conn.Exec(ctx, `
+		delete from llm_request_events;
+		delete from llm_usage_agg_hourly;
+		delete from llm_request_logs;
+		delete from route_catalog;
+		delete from provider_credentials;
+
+		insert into provider_credentials (
+			id, provider, display_name, supported_models, base_url, encrypted_secret, secret_ref, credential_mode, status
+		) values
+			('provider_dashscope_primary', 'dashscope', 'Qwen 主线路', '{"qwen-flash","qwen-plus"}', 'https://dashscope.aliyuncs.com/compatible-mode/v1', '', 'secret/qwen', 'secret_ref', 'active'),
+			('provider_embeddings_only', 'dashscope', 'Qwen 向量', '{"text-embedding-v4"}', 'https://dashscope.aliyuncs.com/compatible-mode/v1', '', 'secret/embed', 'secret_ref', 'active'),
+			('provider_no_route', 'mimo', 'MIMO 预留', '{"mimo-v2.5-pro"}', 'https://api.xiaomimimo.com/v1', '', '', 'encrypted', 'active');
+
+		insert into route_catalog (
+			id, requested_model, resolved_provider, provider_credential_id, endpoint, latency_ms, health_status, request_mode, updated_at
+		) values
+			('route:provider_dashscope_primary:qwen-flash', 'qwen-flash', 'Qwen 主线路', 'provider_dashscope_primary', '/v1/chat/completions', 218, 'healthy', '聊天', now()),
+			('route:provider_dashscope_primary:qwen-plus', 'qwen-plus', 'Qwen 主线路', 'provider_dashscope_primary', '/v1/chat/completions', 286, 'healthy', '推理', now()),
+			('route:provider_embeddings_only:text-embedding-v4', 'text-embedding-v4', 'Qwen 向量', 'provider_embeddings_only', '/v1/embeddings', 64, 'healthy', '向量', now());
+	`); err != nil {
+		t.Fatalf("seed provider-models dedup failed: %v", err)
+	}
+
+	payload, err := console.ProviderModels(ctx)
+	if err != nil {
+		t.Fatalf("ProviderModels failed: %v", err)
+	}
+
+	if len(payload.Providers) != 3 {
+		t.Fatalf("expected 3 providers including no-route provider, got %d", len(payload.Providers))
+	}
+	if len(payload.Models) != 2 {
+		t.Fatalf("expected 2 chat models, got %d", len(payload.Models))
+	}
+
+	providerCount := map[string]int{}
+	for _, item := range payload.Providers {
+		providerCount[item.ID]++
+	}
+	if providerCount["provider_dashscope_primary"] != 1 {
+		t.Fatalf("expected provider_dashscope_primary once, got %d", providerCount["provider_dashscope_primary"])
+	}
+	if providerCount["provider_no_route"] != 1 {
+		t.Fatalf("expected provider_no_route to be present once, got %d", providerCount["provider_no_route"])
+	}
+	if providerCount["provider_embeddings_only"] != 1 {
+		t.Fatalf("expected provider_embeddings_only to be present once, got %d", providerCount["provider_embeddings_only"])
+	}
+}
+
+func TestPostgresConsoleServiceTenantBillingAggregatesMonthData(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	if _, err := conn.Exec(ctx, `
+		delete from llm_request_events;
+		delete from llm_usage_agg_hourly;
+		delete from llm_request_logs;
+		delete from tenant_usage_ledger;
+		delete from platform_api_keys where id in ('pak_billing_a', 'pak_billing_b');
+		delete from provider_credentials where id in ('provider_qwen_primary', 'provider_mimo_primary');
+
+		insert into provider_credentials (id, provider, display_name, supported_models, base_url, encrypted_secret, status) values
+			('provider_qwen_primary', 'dashscope', 'Qwen 主线路', '{"qwen-flash"}', 'https://dashscope.aliyuncs.com/compatible-mode/v1', '', 'active'),
+			('provider_mimo_primary', 'mimo', 'MIMO 线路', '{"mimo-v2.5-pro"}', 'https://api.xiaomimimo.com/v1', '', 'active');
+
+		insert into platform_api_keys (id, tenant_id, name, key_hash, status) values
+			('pak_billing_a', 'tenant_demo', 'Tenant Demo A', 'sha256:billing-a', 'active'),
+			('pak_billing_b', 'tenant_demo', 'Tenant Demo B', 'sha256:billing-b', 'active');
+
+		insert into tenant_usage_ledger (
+			bucket_start, tenant_id,
+			input_tokens, output_tokens, total_tokens, cached_tokens,
+			input_cost_microyuan, output_cost_microyuan, cached_cost_microyuan, total_cost_microyuan,
+			request_count, success_count, failure_count, estimated_count, created_at, updated_at
+		) values
+			('2026-04-03T00:00:00Z', 'tenant_demo', 1000, 400, 1450, 50, 120000, 240000, 10000, 370000, 9, 8, 1, 0, now(), now()),
+			('2026-04-18T00:00:00Z', 'tenant_demo', 500, 200, 730, 30, 60000, 120000, 5000, 185000, 3, 2, 1, 0, now(), now()),
+			('2026-05-01T00:00:00Z', 'tenant_demo', 999, 999, 1998, 0, 1, 1, 0, 2, 1, 1, 0, 0, now(), now());
+
+		insert into llm_request_logs (
+			id, tenant_id, platform_api_key_id, platform_api_key_name, provider_credential_id, route_id,
+			request_path, request_model, upstream_model, resolved_model, usage_source, usage_status, status_code,
+			latency_ms, prompt_tokens, completion_tokens, total_tokens, cached_tokens,
+			input_price_microyuan_per_million, output_price_microyuan_per_million, cached_price_microyuan_per_million,
+			input_cost_microyuan, output_cost_microyuan, cached_cost_microyuan, total_cost_microyuan,
+			request_started_at, request_completed_at, created_at
+		) values
+			('bill_req_1', 'tenant_demo', 'pak_billing_a', 'Tenant Demo A', 'provider_qwen_primary', 'route_qwen',
+			 '/v1/chat/completions', 'qwen-flash', 'qwen-flash', 'qwen-flash', 'upstream', 'success', 200,
+			 180, 400, 100, 520, 20,
+			 100, 200, 50,
+			 40000, 20000, 1000, 61000,
+			 '2026-04-10T01:00:00Z', '2026-04-10T01:00:02Z', '2026-04-10T01:00:02Z'),
+			('bill_req_2', 'tenant_demo', 'pak_billing_a', 'Tenant Demo A', 'provider_qwen_primary', 'route_qwen',
+			 '/v1/chat/completions', 'qwen-flash', 'qwen-flash', 'qwen-flash', 'upstream', 'failed', 500,
+			 220, 200, 80, 300, 10,
+			 100, 200, 50,
+			 20000, 16000, 500, 36500,
+			 '2026-04-11T01:00:00Z', '2026-04-11T01:00:03Z', '2026-04-11T01:00:03Z'),
+			('bill_req_3', 'tenant_demo', 'pak_billing_b', 'Tenant Demo B', 'provider_mimo_primary', 'route_mimo',
+			 '/v1/chat/completions', 'mimo-v2.5-pro', 'mimo-v2.5-pro', 'mimo-v2.5-pro', 'upstream', 'success', 200,
+			 260, 300, 120, 450, 5,
+			 100, 200, 50,
+			 30000, 24000, 250, 54250,
+			 '2026-04-20T01:00:00Z', '2026-04-20T01:00:04Z', '2026-04-20T01:00:04Z'),
+			('bill_req_4', 'tenant_demo', 'pak_billing_b', 'Tenant Demo B', 'provider_mimo_primary', 'route_mimo',
+			 '/v1/chat/completions', 'mimo-v2.5-pro', 'mimo-v2.5-pro', 'mimo-v2.5-pro', 'upstream', 'success', 200,
+			 150, 999, 999, 1998, 0,
+			 1, 1, 0,
+			 1, 1, 0, 2,
+			 '2026-05-03T01:00:00Z', '2026-05-03T01:00:04Z', '2026-05-03T01:00:04Z');
+	`); err != nil {
+		t.Fatalf("seed tenant billing failed: %v", err)
+	}
+
+	payload, err := console.TenantBilling(ctx, service.TenantBillingQuery{TenantID: "tenant_demo", Month: "2026-04"})
+	if err != nil {
+		t.Fatalf("TenantBilling failed: %v", err)
+	}
+
+	if payload.Summary.Month != "2026-04" || payload.Summary.TenantID != "tenant_demo" {
+		t.Fatalf("unexpected summary identity: %+v", payload.Summary)
+	}
+	if payload.Summary.RequestCount != 12 || payload.Summary.SuccessCount != 10 || payload.Summary.FailureCount != 2 {
+		t.Fatalf("unexpected ledger counts: %+v", payload.Summary)
+	}
+	if payload.Summary.InputTokens != 1500 || payload.Summary.OutputTokens != 600 || payload.Summary.CachedTokens != 80 || payload.Summary.TotalTokens != 2180 {
+		t.Fatalf("unexpected ledger tokens: %+v", payload.Summary)
+	}
+	if payload.Summary.TotalCost != "0.56 ￥" {
+		t.Fatalf("expected total cost 0.56 ￥, got %+v", payload.Summary)
+	}
+	if len(payload.Providers) != 2 {
+		t.Fatalf("expected 2 providers, got %d", len(payload.Providers))
+	}
+	if payload.Providers[0].DisplayName != "default-route" || payload.Providers[0].RequestCount != 2 {
+		t.Fatalf("unexpected first provider row: %+v", payload.Providers[0])
+	}
+	if payload.Providers[1].DisplayName != "shared-route" || payload.Providers[1].RequestCount != 1 {
+		t.Fatalf("unexpected second provider row: %+v", payload.Providers[1])
+	}
+	if len(payload.Models) != 2 || payload.Models[0].Model != "qwen-flash" || payload.Models[1].Model != "mimo-v2.5-pro" {
+		t.Fatalf("unexpected model rows: %+v", payload.Models)
+	}
+	if len(payload.APIKeys) != 2 || payload.APIKeys[0].PlatformAPIKeyID != "pak_billing_a" || payload.APIKeys[1].PlatformAPIKeyID != "pak_billing_b" {
+		t.Fatalf("unexpected api key rows: %+v", payload.APIKeys)
+	}
+}
+
+func TestPostgresConsoleServiceTenantBillingRejectsInvalidMonth(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, _ := newUsageConsoleService(t, ctx)
+
+	_, err := console.TenantBilling(ctx, service.TenantBillingQuery{TenantID: "tenant_demo", Month: "2026-13"})
+	if err == nil {
+		t.Fatal("expected invalid month error")
+	}
+	var statusErr service.StatusError
+	if !errors.As(err, &statusErr) || statusErr.Code != http.StatusBadRequest {
+		t.Fatalf("expected bad request status error, got %v", err)
+	}
+}
+
+func TestPostgresConsoleServiceCreateProviderPersistsSecretRefCredential(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	result, err := console.CreateProvider(ctx, service.CreateProviderRequest{
+		Provider:       "dashscope",
+		DisplayName:    "Qwen Secret Ref",
+		BaseURL:        "https://dashscope.aliyuncs.com/compatible-mode/v1",
+		CredentialMode: "secret_ref",
+		SecretRef:      "TEST_QWEN_PROVIDER_SECRET",
+	})
+	if err != nil {
+		t.Fatalf("CreateProvider failed: %v", err)
+	}
+
+	if result.Item.ID == "" {
+		t.Fatal("expected created provider id")
+	}
+	if result.Item.CredentialMode != "secret_ref" {
+		t.Fatalf("expected credential_mode secret_ref, got %q", result.Item.CredentialMode)
+	}
+	if result.Item.SecretRef != "TEST_QWEN_PROVIDER_SECRET" {
+		t.Fatalf("expected secret_ref to round-trip, got %q", result.Item.SecretRef)
+	}
+
+	var encryptedSecret string
+	var secretRef string
+	var credentialMode string
+	var status string
+	if err := conn.QueryRow(ctx, `
+		select encrypted_secret, secret_ref, credential_mode, status
+		from provider_credentials
+		where id = $1;
+	`, result.Item.ID).Scan(&encryptedSecret, &secretRef, &credentialMode, &status); err != nil {
+		t.Fatalf("query provider_credentials failed: %v", err)
+	}
+	if encryptedSecret != "" {
+		t.Fatalf("expected encrypted_secret to stay empty for secret_ref mode, got %q", encryptedSecret)
+	}
+	if secretRef != "TEST_QWEN_PROVIDER_SECRET" {
+		t.Fatalf("expected persisted secret_ref %q, got %q", "TEST_QWEN_PROVIDER_SECRET", secretRef)
+	}
+	if credentialMode != "secret_ref" {
+		t.Fatalf("expected persisted credential_mode secret_ref, got %q", credentialMode)
+	}
+	if status != "active" {
+		t.Fatalf("expected persisted status active, got %q", status)
+	}
+}
+
+func TestPostgresConsoleServiceCreateProviderModelRunsImmediateHealthcheck(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	t.Setenv("TEST_QWEN_PROVIDER_SECRET", "provider-secret")
+
+	_, conn := newUsageConsoleService(t, ctx)
+
+	codec, err := secret.NewCodec("0123456789abcdef0123456789abcdef")
+	if err != nil {
+		t.Fatalf("secret.NewCodec failed: %v", err)
+	}
+
+	upstream := &stubConsoleUpstreamChatClient{
+		stream: service.ChatCompletionStream{
+			StatusCode:  http.StatusOK,
+			ContentType: "text/event-stream; charset=utf-8",
+			Run: func(emit func([]byte) error, onFirstToken func()) (service.ChatStreamResult, error) {
+				if onFirstToken != nil {
+					onFirstToken()
+				}
+				if err := emit([]byte("data: first-content\n\n")); err != nil {
+					return service.ChatStreamResult{}, err
+				}
+				return service.ChatStreamResult{
+					SawContentToken: true,
+					Response:        service.ChatResponse{Model: "qwen-plus-health"},
+				}, nil
+			},
+		},
+	}
+	console := service.NewPostgresConsoleService(
+		conn,
+		nil,
+		service.NewChatProxyService(upstream, nil),
+		nil,
+		"",
+		codec,
+	)
+
+	providerResult, err := console.CreateProvider(ctx, service.CreateProviderRequest{
+		Provider:       "dashscope",
+		DisplayName:    "Qwen Health",
+		BaseURL:        "https://dashscope.aliyuncs.com/compatible-mode/v1",
+		CredentialMode: "secret_ref",
+		SecretRef:      "TEST_QWEN_PROVIDER_SECRET",
+	})
+	if err != nil {
+		t.Fatalf("CreateProvider failed: %v", err)
+	}
+
+	modelResult, err := console.CreateProviderModel(ctx, service.CreateProviderModelRequest{
+		RequestedModel:       "qwen-plus-health",
+		ProviderCredentialID: providerResult.Item.ID,
+		RequestMode:          "聊天",
+		HealthcheckEnabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("CreateProviderModel failed: %v", err)
+	}
+
+	if modelResult.Item.HealthStatus != "healthy" {
+		t.Fatalf("expected health status healthy, got %+v", modelResult.Item)
+	}
+
+	var healthStatus string
+	var lastHealthError string
+	var lastHealthCheckedAt time.Time
+	if err := conn.QueryRow(ctx, `
+		select health_status, last_health_error, last_health_checked_at
+		from route_catalog
+		where id = $1;
+	`, modelResult.Item.ID).Scan(&healthStatus, &lastHealthError, &lastHealthCheckedAt); err != nil {
+		t.Fatalf("query route_catalog failed: %v", err)
+	}
+	if healthStatus != "healthy" {
+		t.Fatalf("expected persisted health_status healthy, got %q", healthStatus)
+	}
+	if lastHealthError != "" {
+		t.Fatalf("expected empty last_health_error, got %q", lastHealthError)
+	}
+	if lastHealthCheckedAt.IsZero() {
+		t.Fatal("expected last_health_checked_at to be populated")
+	}
+
+	healthPayload, err := console.ModelHealth(ctx, "24h")
+	if err != nil {
+		t.Fatalf("ModelHealth failed: %v", err)
+	}
+	if len(healthPayload.Items) == 0 {
+		t.Fatal("expected model health items")
+	}
+
+	found := false
+	for _, item := range healthPayload.Items {
+		if item.ID == modelResult.Item.ID {
+			found = true
+			if item.HealthStatus != "healthy" {
+				t.Fatalf("expected model health item to be healthy, got %+v", item)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected model health to include route %q", modelResult.Item.ID)
+	}
+	if len(healthPayload.Wall.Buckets) == 0 {
+		t.Fatal("expected model health wall buckets")
+	}
+	if len(healthPayload.Wall.Lanes) == 0 {
+		t.Fatal("expected model health wall lanes")
+	}
+}
+
+func TestPostgresConsoleServiceCreateProviderModelSyncsProviderSupportedModels(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	t.Setenv("TEST_QWEN_PROVIDER_SECRET", "provider-secret")
+
+	_, conn := newUsageConsoleService(t, ctx)
+
+	codec, err := secret.NewCodec("0123456789abcdef0123456789abcdef")
+	if err != nil {
+		t.Fatalf("secret.NewCodec failed: %v", err)
+	}
+
+	console := service.NewPostgresConsoleService(
+		conn,
+		nil,
+		service.NewChatProxyService(&stubConsoleUpstreamChatClient{}, nil),
+		nil,
+		"",
+		codec,
+	)
+
+	providerResult, err := console.CreateProvider(ctx, service.CreateProviderRequest{
+		Provider:       "dashscope",
+		DisplayName:    "Qwen Sync",
+		BaseURL:        "https://dashscope.aliyuncs.com/compatible-mode/v1",
+		CredentialMode: "secret_ref",
+		SecretRef:      "TEST_QWEN_PROVIDER_SECRET",
+	})
+	if err != nil {
+		t.Fatalf("CreateProvider failed: %v", err)
+	}
+
+	if _, err := console.CreateProviderModel(ctx, service.CreateProviderModelRequest{
+		RequestedModel:       "deepseek-r1-distill-qwen-7b",
+		ProviderCredentialID: providerResult.Item.ID,
+		RequestMode:          "聊天",
+		HealthcheckEnabled:   false,
+	}); err != nil {
+		t.Fatalf("CreateProviderModel failed: %v", err)
+	}
+
+	var supportedModels []string
+	if err := conn.QueryRow(ctx, `
+		select supported_models
+		from provider_credentials
+		where id = $1;
+	`, providerResult.Item.ID).Scan(&supportedModels); err != nil {
+		t.Fatalf("query provider_credentials failed: %v", err)
+	}
+
+	if !slices.Contains(supportedModels, "deepseek-r1-distill-qwen-7b") {
+		t.Fatalf("expected supported_models to include requested model, got %#v", supportedModels)
+	}
+}
+
+func TestPostgresConsoleServiceCreateProviderModelHealthcheckAcceptsCompletionTokensOnly(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	t.Setenv("TEST_MIMO_PROVIDER_SECRET", "provider-secret")
+
+	_, conn := newUsageConsoleService(t, ctx)
+
+	codec, err := secret.NewCodec("0123456789abcdef0123456789abcdef")
+	if err != nil {
+		t.Fatalf("secret.NewCodec failed: %v", err)
+	}
+
+	upstream := &stubConsoleUpstreamChatClient{
+		stream: service.ChatCompletionStream{
+			StatusCode:  http.StatusOK,
+			ContentType: "text/event-stream; charset=utf-8",
+			Run: func(emit func([]byte) error, onFirstToken func()) (service.ChatStreamResult, error) {
+				return service.ChatStreamResult{
+					Response: service.ChatResponse{
+						Model: "mimo-v2.5-pro",
+						Usage: &service.TokenUsage{
+							PromptTokens:     252,
+							CompletionTokens: 1,
+							TotalTokens:      253,
+						},
+					},
+				}, nil
+			},
+		},
+	}
+	console := service.NewPostgresConsoleService(
+		conn,
+		nil,
+		service.NewChatProxyService(upstream, nil),
+		nil,
+		"",
+		codec,
+	)
+
+	providerResult, err := console.CreateProvider(ctx, service.CreateProviderRequest{
+		Provider:       "mimo",
+		DisplayName:    "Xiaomi MIMO",
+		BaseURL:        "https://api.xiaomimimo.com/v1",
+		CredentialMode: "secret_ref",
+		SecretRef:      "TEST_MIMO_PROVIDER_SECRET",
+	})
+	if err != nil {
+		t.Fatalf("CreateProvider failed: %v", err)
+	}
+
+	modelResult, err := console.CreateProviderModel(ctx, service.CreateProviderModelRequest{
+		RequestedModel:       "mimo-v2.5-pro",
+		ProviderCredentialID: providerResult.Item.ID,
+		RequestMode:          "推理",
+		HealthcheckEnabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("CreateProviderModel failed: %v", err)
+	}
+
+	if modelResult.Item.HealthStatus != "healthy" {
+		t.Fatalf("expected health status healthy, got %+v", modelResult.Item)
+	}
+}
+
+func TestPostgresConsoleServiceCreateProviderModelDoesNotRollbackOnHealthcheckFailure(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	t.Setenv("TEST_QWEN_PROVIDER_SECRET", "provider-secret")
+
+	_, conn := newUsageConsoleService(t, ctx)
+
+	codec, err := secret.NewCodec("0123456789abcdef0123456789abcdef")
+	if err != nil {
+		t.Fatalf("secret.NewCodec failed: %v", err)
+	}
+
+	upstream := &stubConsoleUpstreamChatClient{
+		streamErr: errors.New("upstream failed"),
+	}
+	console := service.NewPostgresConsoleService(
+		conn,
+		nil,
+		service.NewChatProxyService(upstream, nil),
+		nil,
+		"",
+		codec,
+	)
+
+	providerResult, err := console.CreateProvider(ctx, service.CreateProviderRequest{
+		Provider:       "dashscope",
+		DisplayName:    "Qwen Failure",
+		BaseURL:        "https://dashscope.aliyuncs.com/compatible-mode/v1",
+		CredentialMode: "secret_ref",
+		SecretRef:      "TEST_QWEN_PROVIDER_SECRET",
+	})
+	if err != nil {
+		t.Fatalf("CreateProvider failed: %v", err)
+	}
+
+	modelResult, err := console.CreateProviderModel(ctx, service.CreateProviderModelRequest{
+		RequestedModel:       "qwen-plus-health-fail",
+		ProviderCredentialID: providerResult.Item.ID,
+		RequestMode:          "聊天",
+		HealthcheckEnabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("CreateProviderModel should not rollback on healthcheck failure: %v", err)
+	}
+
+	var routeCount int
+	var healthStatus string
+	var lastHealthError string
+	if err := conn.QueryRow(ctx, `
+		select count(*), max(health_status), max(last_health_error)
+		from route_catalog
+		where id = $1;
+	`, modelResult.Item.ID).Scan(&routeCount, &healthStatus, &lastHealthError); err != nil {
+		t.Fatalf("query route_catalog failed: %v", err)
+	}
+	if routeCount != 1 {
+		t.Fatalf("expected route to remain persisted, got count %d", routeCount)
+	}
+	if healthStatus != "degraded" {
+		t.Fatalf("expected degraded health status after failed healthcheck, got %q", healthStatus)
+	}
+	if !strings.Contains(lastHealthError, "upstream failed") {
+		t.Fatalf("expected last_health_error to contain upstream failure, got %q", lastHealthError)
+	}
+}
+
+func TestPostgresConsoleServiceCreateProviderModelGeneratesURLSafeOpaqueID(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	t.Setenv("TEST_QWEN_PROVIDER_SECRET", "provider-secret")
+
+	_, conn := newUsageConsoleService(t, ctx)
+
+	codec, err := secret.NewCodec("0123456789abcdef0123456789abcdef")
+	if err != nil {
+		t.Fatalf("secret.NewCodec failed: %v", err)
+	}
+
+	upstream := &stubConsoleUpstreamChatClient{
+		stream: service.ChatCompletionStream{
+			StatusCode:  http.StatusOK,
+			ContentType: "text/event-stream; charset=utf-8",
+			Run: func(emit func([]byte) error, onFirstToken func()) (service.ChatStreamResult, error) {
+				if onFirstToken != nil {
+					onFirstToken()
+				}
+				if err := emit([]byte("data: first-content\n\n")); err != nil {
+					return service.ChatStreamResult{}, err
+				}
+				return service.ChatStreamResult{
+					SawContentToken: true,
+					Response:        service.ChatResponse{Model: "folder/model v1"},
+				}, nil
+			},
+		},
+	}
+	console := service.NewPostgresConsoleService(
+		conn,
+		nil,
+		service.NewChatProxyService(upstream, nil),
+		nil,
+		"",
+		codec,
+	)
+
+	providerResult, err := console.CreateProvider(ctx, service.CreateProviderRequest{
+		Provider:       "dashscope",
+		DisplayName:    "Qwen Safe Route",
+		BaseURL:        "https://dashscope.aliyuncs.com/compatible-mode/v1",
+		CredentialMode: "secret_ref",
+		SecretRef:      "TEST_QWEN_PROVIDER_SECRET",
+	})
+	if err != nil {
+		t.Fatalf("CreateProvider failed: %v", err)
+	}
+
+	modelResult, err := console.CreateProviderModel(ctx, service.CreateProviderModelRequest{
+		RequestedModel:       "folder/model v1",
+		ProviderCredentialID: providerResult.Item.ID,
+		RequestMode:          "聊天",
+		HealthcheckEnabled:   false,
+	})
+	if err != nil {
+		t.Fatalf("CreateProviderModel failed: %v", err)
+	}
+
+	if !strings.HasPrefix(modelResult.Item.ID, "route:"+providerResult.Item.ID+":") {
+		t.Fatalf("expected route id prefix for provider, got %q", modelResult.Item.ID)
+	}
+	if strings.Contains(modelResult.Item.ID, "/") || strings.Contains(modelResult.Item.ID, " ") {
+		t.Fatalf("expected route id to be URL-safe, got %q", modelResult.Item.ID)
+	}
+	if strings.Contains(modelResult.Item.ID, "folder/model v1") {
+		t.Fatalf("expected opaque route id suffix, got %q", modelResult.Item.ID)
+	}
+
+	healthcheckResult, err := console.RunProviderModelHealthcheck(ctx, modelResult.Item.ID)
+	if err != nil {
+		t.Fatalf("RunProviderModelHealthcheck failed: %v", err)
+	}
+	if healthcheckResult.Item.ID != modelResult.Item.ID {
+		t.Fatalf("expected healthcheck to use created opaque id %q, got %q", modelResult.Item.ID, healthcheckResult.Item.ID)
+	}
+	if healthcheckResult.Item.HealthStatus != "healthy" {
+		t.Fatalf("expected healthcheck result healthy, got %+v", healthcheckResult.Item)
+	}
+}
+
+func TestPostgresConsoleServiceModelHealthWallAggregatesWindowData(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	if _, err := conn.Exec(ctx, `
+		delete from model_healthcheck_history;
+		delete from llm_request_events;
+		delete from llm_usage_agg_hourly;
+		delete from llm_request_logs;
+		delete from route_catalog;
+		delete from provider_credentials;
+
+		insert into provider_credentials (
+			id, provider, display_name, supported_models, base_url, encrypted_secret, credential_mode, secret_ref, status
+		) values (
+			'provider_dashscope_primary', 'dashscope', 'Qwen 主线路', '{"qwen-flash"}', 'https://dashscope.aliyuncs.com/compatible-mode/v1', '', 'secret_ref', 'TEST_QWEN_PROVIDER_SECRET', 'active'
+		);
+
+		insert into route_catalog (
+			id, requested_model, resolved_provider, provider_credential_id, endpoint, latency_ms, health_status, request_mode, status, healthcheck_enabled, updated_at
+		) values (
+			'route:provider_dashscope_primary:qwen-flash',
+			'qwen-flash',
+			'Qwen 主线路',
+			'provider_dashscope_primary',
+			'/v1/chat/completions',
+			200,
+			'healthy',
+			'聊天',
+			'active',
+			true,
+			now()
+		);
+
+		insert into model_healthcheck_history (
+			id,
+			route_id,
+			requested_model,
+			provider_credential_id,
+			route_label,
+			health_status,
+			last_health_error,
+			request_mode,
+			latency_ms,
+			first_token_latency_ms,
+			checked_at
+		) values
+			(
+				'mh_24h_success',
+				'route:provider_dashscope_primary:qwen-flash',
+				'qwen-flash',
+				'provider_dashscope_primary',
+				'Qwen 主线路',
+				'healthy',
+				'',
+				'聊天',
+				180,
+				60,
+				now() - interval '90 minutes'
+			),
+			(
+				'mh_6h_fail',
+				'route:provider_dashscope_primary:qwen-flash',
+				'qwen-flash',
+				'provider_dashscope_primary',
+				'Qwen 主线路',
+				'degraded',
+				'upstream timeout',
+				'聊天',
+				420,
+				0,
+				now() - interval '30 minutes'
+			),
+			(
+				'mh_7d_old',
+				'route:provider_dashscope_primary:qwen-flash',
+				'qwen-flash',
+				'provider_dashscope_primary',
+				'Qwen 主线路',
+				'warning',
+				'transient error',
+				'聊天',
+				260,
+				0,
+				now() - interval '3 days'
+			),
+			(
+				'mh_8d_outside',
+				'route:provider_dashscope_primary:qwen-flash',
+				'qwen-flash',
+				'provider_dashscope_primary',
+				'Qwen 主线路',
+				'healthy',
+				'',
+				'聊天',
+				160,
+				40,
+				now() - interval '8 days'
+			);
+	`); err != nil {
+		t.Fatalf("seed model_healthcheck_history failed: %v", err)
+	}
+
+	payload24h, err := console.ModelHealth(ctx, "24h")
+	if err != nil {
+		t.Fatalf("ModelHealth(24h) failed: %v", err)
+	}
+	if payload24h.Wall.Window != "24h" {
+		t.Fatalf("expected wall.window 24h, got %q", payload24h.Wall.Window)
+	}
+	if payload24h.Wall.WindowLabel != "最近 24 小时" {
+		t.Fatalf("expected wall.window_label 最近 24 小时, got %q", payload24h.Wall.WindowLabel)
+	}
+	if len(payload24h.Wall.Buckets) != 12 {
+		t.Fatalf("expected 24h wall 12 buckets, got %d", len(payload24h.Wall.Buckets))
+	}
+	if len(payload24h.Wall.Lanes) == 0 {
+		t.Fatalf("expected 24h wall lanes, got %+v", payload24h.Wall)
+	}
+	if !containsModelHealthWallStatus(payload24h.Wall, "降级") {
+		t.Fatalf("expected 24h wall to contain 降级 status, got %+v", payload24h.Wall)
+	}
+
+	payload6h, err := console.ModelHealth(ctx, "6h")
+	if err != nil {
+		t.Fatalf("ModelHealth(6h) failed: %v", err)
+	}
+	if payload6h.Wall.Window != "6h" {
+		t.Fatalf("expected wall.window 6h, got %q", payload6h.Wall.Window)
+	}
+	if payload6h.Wall.WindowLabel != "最近 6 小时" {
+		t.Fatalf("expected wall.window_label 最近 6 小时, got %q", payload6h.Wall.WindowLabel)
+	}
+	if len(payload6h.Wall.Buckets) != 12 {
+		t.Fatalf("expected 6h wall 12 buckets, got %d", len(payload6h.Wall.Buckets))
+	}
+	if len(payload6h.Wall.Lanes) == 0 {
+		t.Fatalf("expected 6h wall lanes, got %+v", payload6h.Wall)
+	}
+	if !containsModelHealthWallStatus(payload6h.Wall, "降级") {
+		t.Fatalf("expected 6h wall to contain 降级 status, got %+v", payload6h.Wall)
+	}
+
+	payload7d, err := console.ModelHealth(ctx, "7d")
+	if err != nil {
+		t.Fatalf("ModelHealth(7d) failed: %v", err)
+	}
+	if payload7d.Wall.Window != "7d" {
+		t.Fatalf("expected wall.window 7d, got %q", payload7d.Wall.Window)
+	}
+	if payload7d.Wall.WindowLabel != "最近 7 天" {
+		t.Fatalf("expected wall.window_label 最近 7 天, got %q", payload7d.Wall.WindowLabel)
+	}
+	if len(payload7d.Wall.Buckets) != 14 {
+		t.Fatalf("expected 7d wall 14 buckets, got %d", len(payload7d.Wall.Buckets))
+	}
+	if len(payload7d.Wall.Lanes) == 0 {
+		t.Fatalf("expected 7d wall lanes, got %+v", payload7d.Wall)
+	}
+	if !containsModelHealthWallStatus(payload7d.Wall, "告警") {
+		t.Fatalf("expected 7d wall to contain 告警 status, got %+v", payload7d.Wall)
+	}
+}
+
+func TestPostgresConsoleServiceModelHealthWallReturnsEmptyForUnknownWindow(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, _ := newUsageConsoleService(t, ctx)
+
+	payload, err := console.ModelHealth(ctx, "unsupported-window")
+	if err != nil {
+		t.Fatalf("ModelHealth unsupported window failed: %v", err)
+	}
+
+	if payload.Wall.Window != "24h" {
+		t.Fatalf("expected fallback wall.window 24h, got %q", payload.Wall.Window)
+	}
+	if payload.Wall.WindowLabel != "最近 24 小时" {
+		t.Fatalf("expected fallback wall.window_label 最近 24 小时, got %q", payload.Wall.WindowLabel)
+	}
+	if len(payload.Wall.Buckets) != 12 {
+		t.Fatalf("expected fallback wall buckets 12, got %d", len(payload.Wall.Buckets))
+	}
+}
+
 func TestPostgresConsoleServiceOverviewIncludesTenantPostureAndPlatformMetrics(t *testing.T) {
 	t.Parallel()
 
@@ -176,6 +1087,62 @@ func TestPostgresConsoleServiceOverviewIncludesTenantPostureAndPlatformMetrics(t
 	}
 	if !containsTableRowValue(payload.TenantPosture, "tenant_alpha") {
 		t.Fatalf("expected tenant posture to include tenant_alpha, got %#v", payload.TenantPosture)
+	}
+}
+
+func TestPostgresConsoleServiceOverviewMarksMissingTenantTokenLimitAsUnconfigured(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	if _, err := conn.Exec(ctx, `
+		insert into tenants (id, name, status)
+		values ('tenant_123', 'Tenant 123', 'active')
+		on conflict (id) do update set name = excluded.name, status = excluded.status;
+
+		insert into tenant_quota_usage_periods (
+			tenant_id,
+			period_start,
+			period_end,
+			requests_used,
+			tokens_used,
+			last_aggregated_at
+		) values (
+			'tenant_123',
+			(date_trunc('month', now() at time zone 'Asia/Shanghai') at time zone 'Asia/Shanghai'),
+			((date_trunc('month', now() at time zone 'Asia/Shanghai') + interval '1 month') at time zone 'Asia/Shanghai'),
+			10,
+			1754,
+			now()
+		)
+		on conflict (tenant_id, period_start) do update set
+			requests_used = excluded.requests_used,
+			tokens_used = excluded.tokens_used,
+			last_aggregated_at = now();
+	`); err != nil {
+		t.Fatalf("seed tenant_123 overview posture failed: %v", err)
+	}
+
+	payload, err := console.Overview(ctx)
+	if err != nil {
+		t.Fatalf("Overview failed: %v", err)
+	}
+
+	row := findTableRowByFirstColumn(payload.TenantPosture, "tenant_123")
+	if row == nil {
+		t.Fatalf("expected tenant posture to include tenant_123, got %#v", payload.TenantPosture)
+	}
+	if len(row.Columns) < 6 {
+		t.Fatalf("expected tenant_123 posture row to have 6 columns, got %#v", row.Columns)
+	}
+	if row.Columns[4] != "未配置" {
+		t.Fatalf("expected tenant_123 token limit to be 未配置, got %q", row.Columns[4])
+	}
+	if row.Columns[5] != "1754 / 未配置" {
+		t.Fatalf("expected tenant_123 token usage to be %q, got %q", "1754 / 未配置", row.Columns[5])
 	}
 }
 
@@ -1479,6 +2446,67 @@ func TestPostgresConsoleServiceApproveApplicationRequiresTokenLimit(t *testing.T
 	}
 }
 
+func TestPostgresConsoleServiceApproveApplicationRequiresCostLimit(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte("Example1234"), bcrypt.DefaultCost)
+	if err != nil {
+		t.Fatalf("GenerateFromPassword failed: %v", err)
+	}
+
+	if _, err := conn.Exec(ctx, `
+		insert into account_applications (
+			id,
+			email,
+			email_normalized,
+			name,
+			company_name,
+			use_case,
+			password_hash,
+			status,
+			created_at
+		) values (
+			'app_pending_missing_cost_limit',
+			'missing-cost-limit@example.com',
+			'missing-cost-limit@example.com',
+			'缺少金额额度用户',
+			'Cost Co',
+			'租户接入',
+			$1,
+			'pending',
+			timestamptz '2026-04-25T01:02:03Z'
+		)
+	`, string(passwordHash)); err != nil {
+		t.Fatalf("seed approve application failed: %v", err)
+	}
+
+	_, err = console.ApproveApplication(ctx, "app_pending_missing_cost_limit", service.ApproveApplicationRequest{
+		ActorID:    "user_admin_demo",
+		Comment:    "approved without cost limit",
+		TenantID:   "tenant_demo",
+		TokenLimit: 123456,
+	})
+	if err == nil {
+		t.Fatal("expected ApproveApplication to require cost_limit_microyuan")
+	}
+
+	var statusErr service.StatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("expected StatusError, got %T", err)
+	}
+	if statusErr.Code != 400 {
+		t.Fatalf("expected bad request status, got %d", statusErr.Code)
+	}
+	if statusErr.Message != "cost_limit_microyuan is required" {
+		t.Fatalf("expected message %q, got %q", "cost_limit_microyuan is required", statusErr.Message)
+	}
+}
+
 func TestPostgresConsoleServiceApproveApplicationCreatesUserMembershipAndAudit(t *testing.T) {
 	t.Parallel()
 
@@ -1543,11 +2571,12 @@ func TestPostgresConsoleServiceApproveApplicationCreatesUserMembershipAndAudit(t
 	}
 
 	result, err := console.ApproveApplication(ctx, "app_service_pending", service.ApproveApplicationRequest{
-		ActorID:       "user_admin_demo",
-		Comment:       "approved via service",
-		TenantID:      "tenant_demo",
-		TokenLimit:    23456789,
-		AllowedModels: []string{"qwen-flash", "mimo-v2.5-pro"},
+		ActorID:            "user_admin_demo",
+		Comment:            "approved via service",
+		TenantID:           "tenant_demo",
+		TokenLimit:         23456789,
+		CostLimitMicroyuan: 4567000000,
+		AllowedModels:      []string{"qwen-flash", "mimo-v2.5-pro"},
 	})
 	if err != nil {
 		t.Fatalf("ApproveApplication failed: %v", err)
@@ -1665,16 +2694,20 @@ func TestPostgresConsoleServiceApproveApplicationCreatesUserMembershipAndAudit(t
 	}
 
 	var tokenLimit int64
+	var costLimitMicroyuan int64
 	var allowedModels []string
 	if err := conn.QueryRow(ctx, `
-		select token_limit, allowed_models
+		select token_limit, cost_limit_microyuan, allowed_models
 		from tenant_quota_policies
 		where tenant_id = 'tenant_demo'
-	`).Scan(&tokenLimit, &allowedModels); err != nil {
+	`).Scan(&tokenLimit, &costLimitMicroyuan, &allowedModels); err != nil {
 		t.Fatalf("select tenant quota policy failed: %v", err)
 	}
 	if tokenLimit != 23456789 {
 		t.Fatalf("expected token_limit %d, got %d", 23456789, tokenLimit)
+	}
+	if costLimitMicroyuan != 4567000000 {
+		t.Fatalf("expected cost_limit_microyuan %d, got %d", int64(4567000000), costLimitMicroyuan)
 	}
 	if !slices.Equal(allowedModels, []string{"qwen-flash", "mimo-v2.5-pro"}) {
 		t.Fatalf("expected allowed_models to be persisted, got %#v", allowedModels)
@@ -1721,11 +2754,12 @@ func TestPostgresConsoleServiceApproveApplicationCreatesTenantWhenMissing(t *tes
 	}
 
 	result, err := console.ApproveApplication(ctx, "app_create_tenant_pending", service.ApproveApplicationRequest{
-		ActorID:       "user_admin_demo",
-		Comment:       "approved with new tenant",
-		TenantID:      "tenant_create_tenant_co",
-		TokenLimit:    8765432,
-		AllowedModels: []string{"qwen-flash"},
+		ActorID:            "user_admin_demo",
+		Comment:            "approved with new tenant",
+		TenantID:           "tenant_create_tenant_co",
+		TokenLimit:         8765432,
+		CostLimitMicroyuan: 1234500000,
+		AllowedModels:      []string{"qwen-flash"},
 	})
 	if err != nil {
 		t.Fatalf("ApproveApplication failed: %v", err)
@@ -1767,12 +2801,13 @@ func TestPostgresConsoleServiceApproveApplicationCreatesTenantWhenMissing(t *tes
 
 	var requestLimit int64
 	var tokenLimit int64
+	var costLimitMicroyuan int64
 	var allowedModels []string
 	if err := conn.QueryRow(ctx, `
-		select request_limit, token_limit, allowed_models
+		select request_limit, token_limit, cost_limit_microyuan, allowed_models
 		from tenant_quota_policies
 		where tenant_id = 'tenant_create_tenant_co'
-	`).Scan(&requestLimit, &tokenLimit, &allowedModels); err != nil {
+	`).Scan(&requestLimit, &tokenLimit, &costLimitMicroyuan, &allowedModels); err != nil {
 		t.Fatalf("select created tenant quota policy failed: %v", err)
 	}
 	if requestLimit <= 0 {
@@ -1780,6 +2815,9 @@ func TestPostgresConsoleServiceApproveApplicationCreatesTenantWhenMissing(t *tes
 	}
 	if tokenLimit != 8765432 {
 		t.Fatalf("expected token_limit %d, got %d", 8765432, tokenLimit)
+	}
+	if costLimitMicroyuan != 1234500000 {
+		t.Fatalf("expected cost_limit_microyuan %d, got %d", int64(1234500000), costLimitMicroyuan)
 	}
 	if !slices.Equal(allowedModels, []string{"qwen-flash"}) {
 		t.Fatalf("expected created tenant allowed_models qwen-flash, got %#v", allowedModels)
@@ -2611,6 +3649,193 @@ func TestPostgresConsoleServiceUsageLatencyWallIncludesConfiguredChatRoutesWitho
 	}
 }
 
+func TestPostgresConsoleServiceUsageLatencyWallIncludesHealthcheckLanes(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	if _, err := conn.Exec(ctx, `
+		delete from model_healthcheck_history;
+		delete from llm_request_events;
+		delete from llm_usage_agg_hourly;
+		delete from llm_request_logs;
+		delete from route_catalog;
+		delete from provider_credentials;
+
+		insert into provider_credentials (id, provider, display_name, supported_models, base_url, encrypted_secret, status) values
+			('provider_dashscope_primary', 'dashscope', 'QWEN', '{"qwen-flash","qwen2.5-1.5b-instruct"}', 'https://dashscope.aliyuncs.com/compatible-mode/v1', '', 'active'),
+			('provider_mimo_primary', 'mimo', 'MIMO', '{"mimo-v2.5-pro"}', 'https://api.xiaomimimo.com/v1', '', 'active');
+
+		insert into route_catalog (id, requested_model, resolved_provider, provider_credential_id, endpoint, latency_ms, health_status, request_mode, updated_at, healthcheck_enabled) values
+			('route:provider_dashscope_primary:default', 'qwen-flash', 'QWEN', 'provider_dashscope_primary', '/v1/chat/completions', 218, 'healthy', '聊天', now(), true),
+			('route:provider_mimo_primary:default', 'mimo-v2.5-pro', 'MIMO', 'provider_mimo_primary', '/v1/chat/completions', 286, 'degraded', '推理', now(), true),
+			('route:provider_dashscope_primary:qwen2_5_1_5b', 'qwen2.5-1.5b-instruct', 'QWEN', 'provider_dashscope_primary', '/v1/chat/completions', 305, 'degraded', '聊天', now(), true);
+
+		insert into model_healthcheck_history (
+			id,
+			route_id,
+			requested_model,
+			provider_credential_id,
+			route_label,
+			health_status,
+			last_health_error,
+			request_mode,
+			latency_ms,
+			first_token_latency_ms,
+			checked_at
+		) values
+			('mhh_qwen_ok', 'route:provider_dashscope_primary:default', 'qwen-flash', 'provider_dashscope_primary', 'QWEN', 'healthy', '', '聊天', 201, 88, now() - interval '30 minutes'),
+			('mhh_mimo_bad', 'route:provider_mimo_primary:default', 'mimo-v2.5-pro', 'provider_mimo_primary', 'MIMO', 'degraded', 'no non-empty content token received', '推理', 4647, 0, now() - interval '20 minutes'),
+			('mhh_qwen_small_bad', 'route:provider_dashscope_primary:qwen2_5_1_5b', 'qwen2.5-1.5b-instruct', 'provider_dashscope_primary', 'QWEN', 'degraded', 'access_denied', '聊天', 311, 0, now() - interval '10 minutes');
+	`); err != nil {
+		t.Fatalf("seed usage latency wall healthchecks failed: %v", err)
+	}
+
+	payload, err := console.UsageLatencyWall(ctx, service.UsageQuery{Window: "24h"})
+	if err != nil {
+		t.Fatalf("UsageLatencyWall failed: %v", err)
+	}
+
+	var mimoLane service.UsageLatencyLane
+	var qwenSmallLane service.UsageLatencyLane
+	for _, lane := range payload.Lanes {
+		if lane.Model == "mimo-v2.5-pro" && lane.Source == "健康检查" {
+			mimoLane = lane
+		}
+		if lane.Model == "qwen2.5-1.5b-instruct" && lane.Source == "健康检查" {
+			qwenSmallLane = lane
+		}
+	}
+
+	if mimoLane.Model == "" {
+		t.Fatalf("expected healthcheck lane for mimo-v2.5-pro, got %+v", payload.Lanes)
+	}
+	if mimoLane.Provider != "MIMO" {
+		t.Fatalf("expected mimo provider MIMO, got %+v", mimoLane)
+	}
+	if mimoLane.Cells[0].Status != "空窗" && !containsUsageLatencyCellStatus(mimoLane.Cells, "降级") {
+		t.Fatalf("expected mimo lane to include degraded bucket, got %+v", mimoLane.Cells)
+	}
+
+	if qwenSmallLane.Model == "" {
+		t.Fatalf("expected healthcheck lane for qwen2.5-1.5b-instruct, got %+v", payload.Lanes)
+	}
+	if qwenSmallLane.Provider != "QWEN" {
+		t.Fatalf("expected qwen2.5 provider QWEN, got %+v", qwenSmallLane)
+	}
+	if !containsUsageLatencyCellStatus(qwenSmallLane.Cells, "降级") {
+		t.Fatalf("expected qwen2.5 lane to include degraded bucket, got %+v", qwenSmallLane.Cells)
+	}
+}
+
+func TestPostgresConsoleServiceUsageLatencyWallDeduplicatesModelLanes(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	if _, err := conn.Exec(ctx, `
+		delete from model_healthcheck_history;
+		delete from llm_request_events;
+		delete from llm_usage_agg_hourly;
+		delete from llm_request_logs;
+		delete from route_catalog;
+		delete from provider_credentials;
+
+		insert into provider_credentials (id, provider, display_name, supported_models, base_url, encrypted_secret, status) values
+			('provider_dashscope_primary', 'dashscope', 'QWEN', '{"qwen-flash"}', 'https://dashscope.aliyuncs.com/compatible-mode/v1', '', 'active');
+
+		insert into route_catalog (id, requested_model, resolved_provider, provider_credential_id, endpoint, latency_ms, health_status, request_mode, updated_at, healthcheck_enabled) values
+			('route:provider_dashscope_primary:default', 'qwen-flash', 'QWEN', 'provider_dashscope_primary', '/v1/chat/completions', 218, 'healthy', '聊天', now(), true);
+
+		insert into llm_request_logs (
+			id, tenant_id, platform_api_key_id, platform_api_key_name, provider_credential_id, route_id,
+			request_path, request_model, upstream_model, usage_source, usage_status, status_code, latency_ms,
+			prompt_tokens, completion_tokens, total_tokens, cached_tokens,
+			input_price_microyuan_per_million, output_price_microyuan_per_million, cached_price_microyuan_per_million,
+			input_cost_microyuan, output_cost_microyuan, cached_cost_microyuan, total_cost_microyuan,
+			error_code, error_message, request_started_at, request_completed_at, created_at
+		) values (
+			'llmreq_usage_qwen_dedupe',
+			'tenant_demo',
+			'pak_demo',
+			'demo key',
+			'provider_dashscope_primary',
+			'route:provider_dashscope_primary:default',
+			'/v1/chat/completions',
+			'qwen-flash',
+			'qwen-flash',
+			'upstream',
+			'success',
+			200,
+			182,
+			12,
+			6,
+			18,
+			0,
+			2000000,
+			20000000,
+			500000,
+			24,
+			120,
+			0,
+			144,
+			'',
+			'',
+			now() - interval '20 minutes',
+			now() - interval '20 minutes' + interval '182 milliseconds',
+			now() - interval '20 minutes'
+		);
+
+		insert into model_healthcheck_history (
+			id, route_id, requested_model, provider_credential_id, route_label, health_status, last_health_error,
+			request_mode, latency_ms, first_token_latency_ms, checked_at
+		) values (
+			'mhh_qwen_dedupe',
+			'route:provider_dashscope_primary:default',
+			'qwen-flash',
+			'provider_dashscope_primary',
+			'QWEN',
+			'healthy',
+			'',
+			'聊天',
+			201,
+			88,
+			now() - interval '10 minutes'
+		);
+	`); err != nil {
+		t.Fatalf("seed dedupe usage latency wall failed: %v", err)
+	}
+
+	payload, err := console.UsageLatencyWall(ctx, service.UsageQuery{Window: "24h"})
+	if err != nil {
+		t.Fatalf("UsageLatencyWall failed: %v", err)
+	}
+
+	count := 0
+	var lane service.UsageLatencyLane
+	for _, item := range payload.Lanes {
+		if item.Model == "qwen-flash" {
+			count++
+			lane = item
+		}
+	}
+	if count != 1 {
+		t.Fatalf("expected qwen-flash to appear once, got %d lanes: %+v", count, payload.Lanes)
+	}
+	if lane.Source != "真实调用" {
+		t.Fatalf("expected deduped lane to prefer real usage source, got %+v", lane)
+	}
+	if !containsUsageLatencyCellLatency(lane.Cells, "182 ms") {
+		t.Fatalf("expected deduped lane to keep real usage latency bucket, got %+v", lane.Cells)
+	}
+}
+
 func TestPostgresConsoleServiceUsageOverviewFiltersByErrorCategory(t *testing.T) {
 	t.Parallel()
 
@@ -2643,6 +3868,24 @@ func TestPostgresConsoleServiceUsageOverviewFiltersByErrorCategory(t *testing.T)
 	if payload.EstimatedShare != "100.00%" {
 		t.Fatalf("expected estimated_share 100.00%%, got %q", payload.EstimatedShare)
 	}
+}
+
+func containsUsageLatencyCellStatus(cells []service.UsageLatencyCell, target string) bool {
+	for _, cell := range cells {
+		if cell.Status == target {
+			return true
+		}
+	}
+	return false
+}
+
+func containsUsageLatencyCellLatency(cells []service.UsageLatencyCell, target string) bool {
+	for _, cell := range cells {
+		if cell.Latency == target {
+			return true
+		}
+	}
+	return false
 }
 
 func TestPostgresConsoleServiceUsageOverviewHonorsPartialHourWindow(t *testing.T) {
@@ -3031,6 +4274,24 @@ func TestPostgresConsoleServiceUsageFailures(t *testing.T) {
 	}
 	if !strings.Contains(payload.RecentEvents[0], "上游服务异常") {
 		t.Fatalf("expected recent event summary to use failure-category label, got %q", payload.RecentEvents[0])
+	}
+	if len(payload.RecentEventItems) == 0 {
+		t.Fatal("expected recent_event_items to be returned")
+	}
+	if payload.RecentEventItems[0].TenantID != "tenant_demo" {
+		t.Fatalf("expected recent_event_items tenant_id tenant_demo, got %q", payload.RecentEventItems[0].TenantID)
+	}
+	if payload.RecentEventItems[0].TenantName == "" {
+		t.Fatal("expected recent_event_items tenant_name to be populated")
+	}
+	if payload.RecentEventItems[0].ResolvedModel != "gpt-4o-mini" {
+		t.Fatalf("expected recent_event_items resolved_model gpt-4o-mini, got %q", payload.RecentEventItems[0].ResolvedModel)
+	}
+	if payload.RecentEventItems[0].Category != "上游服务异常" {
+		t.Fatalf("expected recent_event_items category 上游服务异常, got %q", payload.RecentEventItems[0].Category)
+	}
+	if payload.RecentEventItems[0].Reason == "" {
+		t.Fatal("expected recent_event_items reason to be populated")
 	}
 }
 
@@ -3673,6 +4934,12 @@ func TestPostgresConsoleServiceUsageRequests(t *testing.T) {
 	if item.Tenant != "tenant_demo" {
 		t.Fatalf("expected tenant tenant_demo, got %q", item.Tenant)
 	}
+	if item.TenantID != "tenant_demo" {
+		t.Fatalf("expected tenant_id tenant_demo, got %q", item.TenantID)
+	}
+	if item.TenantName != "Demo Tenant" {
+		t.Fatalf("expected tenant_name Demo Tenant, got %q", item.TenantName)
+	}
 	if item.Endpoint != "/v1/embeddings" {
 		t.Fatalf("expected endpoint /v1/embeddings, got %q", item.Endpoint)
 	}
@@ -3735,6 +5002,161 @@ func TestPostgresConsoleServiceUsageRequests(t *testing.T) {
 	}
 	if item.FirstTokenLatencyMS != 40 {
 		t.Fatalf("expected first_token_latency_ms 40, got %#v", item.FirstTokenLatencyMS)
+	}
+
+	filteredPayload, err := console.UsageRequests(ctx, service.UsageQuery{
+		From:          mustParseUsageTime(t, "2026-04-24T09:00:00Z"),
+		To:            mustParseUsageTime(t, "2026-04-24T11:00:00Z"),
+		Status:        "rate_limited",
+		ResolvedModel: "qwen-plus",
+	})
+	if err != nil {
+		t.Fatalf("UsageRequests with resolved_model filter failed: %v", err)
+	}
+	if len(filteredPayload.Items) != 0 {
+		t.Fatalf("expected 0 request items after resolved_model filter mismatch, got %d", len(filteredPayload.Items))
+	}
+
+	if _, err := conn.Exec(ctx, `
+		insert into provider_credentials (id, provider, display_name, supported_models, base_url, encrypted_secret, status)
+		values ('provider_mimo_primary', 'mimo', 'MIMO', '{"mimo-v2.5-pro"}', 'https://api.xiaomimimo.com/v1', '', 'active')
+		on conflict (id) do nothing;
+
+		insert into route_catalog (
+			id, requested_model, resolved_provider, provider_credential_id, endpoint, latency_ms, health_status, request_mode, updated_at
+		) values (
+			'route:provider_mimo_primary:default',
+			'mimo-v2.5-pro',
+			'MIMO',
+			'provider_mimo_primary',
+			'/v1/chat/completions',
+			286,
+			'healthy',
+			'推理',
+			now()
+		) on conflict (id) do nothing;
+
+		insert into llm_request_logs (
+			id,
+			tenant_id,
+			platform_api_key_id,
+			platform_api_key_name,
+			provider_credential_id,
+			route_id,
+			request_path,
+			request_model,
+			upstream_model,
+			usage_source,
+			usage_status,
+			status_code,
+			latency_ms,
+			prompt_tokens,
+			completion_tokens,
+			total_tokens,
+			cached_tokens,
+			error_code,
+			error_message,
+			request_started_at,
+			request_completed_at,
+			created_at,
+			resolved_model
+		) values (
+			'llmreq_demo_mimo_filter_option',
+			'tenant_demo',
+			'pak_demo',
+			'demo key',
+			'provider_mimo_primary',
+			'route:provider_mimo_primary:default',
+			'/v1/chat/completions',
+			'mimo',
+			'mimo-v2.5-pro',
+			'upstream',
+			'success',
+			200,
+			320,
+			255,
+			8,
+			263,
+			0,
+			'',
+			'',
+			timestamptz '2026-04-24T10:08:00Z',
+			timestamptz '2026-04-24T10:08:00.320Z',
+			timestamptz '2026-04-24T10:08:01Z',
+			'mimo-v2.5-pro'
+		);
+	`); err != nil {
+		t.Fatalf("seed mimo filter option failed: %v", err)
+	}
+
+	optionsPayload, err := console.UsageRequests(ctx, service.UsageQuery{
+		From:   mustParseUsageTime(t, "2026-04-24T09:00:00Z"),
+		To:     mustParseUsageTime(t, "2026-04-24T11:00:00Z"),
+		Limit:  1,
+		Offset: 0,
+	})
+	if err != nil {
+		t.Fatalf("UsageRequests with filter options failed: %v", err)
+	}
+	if len(optionsPayload.Items) != 1 {
+		t.Fatalf("expected paged payload to contain 1 item, got %d", len(optionsPayload.Items))
+	}
+	if !slices.Contains(optionsPayload.ResolvedModelOptions, "mimo-v2.5-pro") {
+		t.Fatalf("expected resolved model options to contain mimo-v2.5-pro, got %#v", optionsPayload.ResolvedModelOptions)
+	}
+	if !slices.Contains(optionsPayload.ResolvedModelOptions, "text-embedding-3-small") {
+		t.Fatalf("expected resolved model options to contain text-embedding-3-small, got %#v", optionsPayload.ResolvedModelOptions)
+	}
+}
+
+func TestPostgresConsoleServiceUsageRequestDetail(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	if _, err := conn.Exec(ctx, `
+		update llm_request_logs
+		set
+			task_class = 'embedding_simple',
+			routing_reason = 'model:direct',
+			target_model_tier = 'text-embedding-3-small',
+			resolved_model = 'text-embedding-3-small',
+			prompt_excerpt = '手机号 138XXXX0000',
+			response_excerpt = '处理完成，邮箱 u***r@example.com',
+			first_token_latency_ms = 12
+		where id = 'llmreq_demo_002';
+	`); err != nil {
+		t.Fatalf("seed usage detail failed: %v", err)
+	}
+
+	payload, err := console.UsageRequestDetail(ctx, "llmreq_demo_002")
+	if err != nil {
+		t.Fatalf("UsageRequestDetail failed: %v", err)
+	}
+
+	if payload.RequestID != "llmreq_demo_002" {
+		t.Fatalf("expected request_id llmreq_demo_002, got %q", payload.RequestID)
+	}
+	if payload.TenantID != "tenant_demo" {
+		t.Fatalf("expected tenant_id tenant_demo, got %q", payload.TenantID)
+	}
+	if payload.TenantName != "Demo Tenant" {
+		t.Fatalf("expected tenant_name Demo Tenant, got %q", payload.TenantName)
+	}
+	if payload.ResolvedModel != "text-embedding-3-small" {
+		t.Fatalf("expected resolved_model text-embedding-3-small, got %q", payload.ResolvedModel)
+	}
+	if payload.PromptExcerpt != "手机号 138XXXX0000" {
+		t.Fatalf("expected prompt_excerpt, got %q", payload.PromptExcerpt)
+	}
+	if payload.ResponseExcerpt != "处理完成，邮箱 u***r@example.com" {
+		t.Fatalf("expected response_excerpt, got %q", payload.ResponseExcerpt)
+	}
+	if len(payload.FailureEvents) == 0 {
+		t.Fatal("expected failure_events to be populated")
 	}
 }
 
@@ -4019,6 +5441,17 @@ func containsFailureBucket(items []service.UsageFailureBucket, label string, val
 	return false
 }
 
+func containsModelHealthWallStatus(wall service.ModelHealthWall, status string) bool {
+	for _, lane := range wall.Lanes {
+		for _, cell := range lane.Cells {
+			if cell.Status == status {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func containsRecentEvent(items []string, fragment string) bool {
 	for _, item := range items {
 		if strings.Contains(item, fragment) {
@@ -4078,6 +5511,15 @@ func containsTableRowValue(items []service.TableRow, expected string) bool {
 	return false
 }
 
+func findTableRowByFirstColumn(items []service.TableRow, firstColumn string) *service.TableRow {
+	for index := range items {
+		if len(items[index].Columns) > 0 && items[index].Columns[0] == firstColumn {
+			return &items[index]
+		}
+	}
+	return nil
+}
+
 type stubConsoleResolveAuthService struct {
 	requestContext domain.RequestContext
 }
@@ -4104,3 +5546,24 @@ func (s *stubConsoleChatProxy) Stream(context.Context, service.ChatRequest, any)
 }
 
 func (s *stubConsoleChatProxy) RecordFailure(context.Context, any, int) {}
+
+type stubConsoleUpstreamChatClient struct {
+	completeResp service.ChatResponse
+	completeErr  error
+	stream       service.ChatCompletionStream
+	streamErr    error
+}
+
+func (s *stubConsoleUpstreamChatClient) Complete(context.Context, domain.ProviderTarget, service.ChatRequest) (service.ChatResponse, int, error) {
+	if s.completeErr != nil {
+		return service.ChatResponse{}, http.StatusBadGateway, s.completeErr
+	}
+	return s.completeResp, http.StatusOK, nil
+}
+
+func (s *stubConsoleUpstreamChatClient) StreamComplete(context.Context, domain.ProviderTarget, service.ChatRequest) (service.ChatCompletionStream, int, error) {
+	if s.streamErr != nil {
+		return service.ChatCompletionStream{}, http.StatusBadGateway, s.streamErr
+	}
+	return s.stream, http.StatusOK, nil
+}

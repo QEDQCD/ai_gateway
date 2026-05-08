@@ -111,6 +111,12 @@ func NewRouterWithDependencies(deps RouterDependencies) *fiber.App {
 	admin.Delete("/api-keys/:id", handlers.ConsoleDeleteAPIKey(deps.ConsoleService))
 	admin.Get("/api-keys/:id/secret", handlers.ConsoleRevealAPIKeySecret(deps.ConsoleService))
 	admin.Post("/api-keys/:id/secret/copy", handlers.ConsoleCopyAPIKeySecret(deps.ConsoleService))
+	admin.Get("/provider-models", handlers.ConsoleProviderModels(deps.ConsoleService))
+	admin.Post("/providers", handlers.ConsoleCreateProvider(deps.ConsoleService))
+	admin.Post("/provider-models", handlers.ConsoleCreateProviderModel(deps.ConsoleService))
+	admin.Get("/model-health", handlers.ConsoleModelHealth(deps.ConsoleService))
+	admin.Post("/provider-models/:id/health-check", handlers.ConsoleRunProviderModelHealthcheck(deps.ConsoleService))
+	admin.Get("/billing/tenant", handlers.ConsoleTenantBilling(deps.ConsoleService))
 	admin.Get("/routes", handlers.ConsoleRoutes(deps.ConsoleService))
 	admin.Get("/playground", handlers.ConsolePlayground(deps.ConsoleService))
 	admin.Post("/playground/chat", handlers.ConsoleRunPlayground(deps.ConsoleService))
@@ -121,6 +127,7 @@ func NewRouterWithDependencies(deps RouterDependencies) *fiber.App {
 	admin.Get("/usage/latency-wall", handlers.ConsoleUsageLatencyWall(deps.ConsoleService))
 	admin.Get("/usage/failures", handlers.ConsoleUsageFailures(deps.ConsoleService))
 	admin.Get("/usage/requests", handlers.ConsoleUsageRequests(deps.ConsoleService))
+	admin.Get("/usage/requests/:id", handlers.ConsoleUsageRequestDetail(deps.ConsoleService))
 
 	member := app.Group(
 		"/me",
@@ -147,12 +154,12 @@ func NewRouterWithDependencies(deps RouterDependencies) *fiber.App {
 	member.Get("/audit-events", handlers.MemberAuditEvents(deps.MemberConsoleService))
 
 	v1 := app.Group("/v1")
-	v1.Post("/chat/completions", handlers.ChatCompletion(deps.ChatProxy, deps.SmartRouter, deps.AuthService))
 
 	v1Protected := v1.Group("/", middleware.RequirePlatformAPIKey(deps.AuthService), middleware.RequireResolvedRequestContext())
 	v1Protected.Get("/auth-check", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{"status": "ok"})
 	})
+	v1Protected.Post("/chat/completions", handlers.ChatCompletion(deps.ChatProxy, deps.SmartRouter, deps.AuthService))
 	v1Protected.Post("/embeddings", handlers.Embeddings(deps.EmbeddingProxy))
 	v1Protected.Post("/internal-search", handlers.RAGQuery(deps.RAGProxy))
 	return app

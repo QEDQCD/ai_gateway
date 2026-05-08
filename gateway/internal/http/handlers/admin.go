@@ -3,6 +3,7 @@ package handlers
 import (
 	"bufio"
 	"errors"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -268,6 +269,71 @@ func ConsoleCopyAPIKeySecret(console service.ConsoleService) fiber.Handler {
 	}
 }
 
+func ConsoleProviderModels(console service.ConsoleService) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		payload, err := console.ProviderModels(c.UserContext())
+		if err != nil {
+			return consoleError(err)
+		}
+		return c.JSON(payload)
+	}
+}
+
+func ConsoleCreateProvider(console service.ConsoleService) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		var req service.CreateProviderRequest
+		if err := c.BodyParser(&req); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
+		}
+
+		payload, err := console.CreateProvider(c.UserContext(), req)
+		if err != nil {
+			return consoleError(err)
+		}
+		return c.JSON(payload)
+	}
+}
+
+func ConsoleCreateProviderModel(console service.ConsoleService) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		var req service.CreateProviderModelRequest
+		if err := c.BodyParser(&req); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
+		}
+
+		payload, err := console.CreateProviderModel(c.UserContext(), req)
+		if err != nil {
+			return consoleError(err)
+		}
+		return c.JSON(payload)
+	}
+}
+
+func ConsoleModelHealth(console service.ConsoleService) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		window := strings.TrimSpace(c.Query("window"))
+		payload, err := console.ModelHealth(c.UserContext(), window)
+		if err != nil {
+			return consoleError(err)
+		}
+		return c.JSON(payload)
+	}
+}
+
+func ConsoleRunProviderModelHealthcheck(console service.ConsoleService) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		id, err := url.PathUnescape(c.Params("id"))
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid provider model id")
+		}
+		payload, err := console.RunProviderModelHealthcheck(c.UserContext(), id)
+		if err != nil {
+			return consoleError(err)
+		}
+		return c.JSON(payload)
+	}
+}
+
 func ConsoleRoutes(console service.ConsoleService) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		payload, err := console.Routes(c.UserContext())
@@ -334,6 +400,20 @@ func ConsoleStreamPlayground(console service.ConsoleService) fiber.Handler {
 func ConsoleAudit(console service.ConsoleService) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		payload, err := console.Audit(c.UserContext())
+		if err != nil {
+			return consoleError(err)
+		}
+		return c.JSON(payload)
+	}
+}
+
+func ConsoleTenantBilling(console service.ConsoleService) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		query, err := parseTenantBillingQuery(c)
+		if err != nil {
+			return err
+		}
+		payload, err := console.TenantBilling(c.UserContext(), query)
 		if err != nil {
 			return consoleError(err)
 		}
@@ -411,6 +491,20 @@ func ConsoleUsageRequests(console service.ConsoleService) fiber.Handler {
 	}
 }
 
+func ConsoleUsageRequestDetail(console service.ConsoleService) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		requestID, err := url.PathUnescape(c.Params("id"))
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid request id")
+		}
+		payload, err := console.UsageRequestDetail(c.UserContext(), requestID)
+		if err != nil {
+			return consoleError(err)
+		}
+		return c.JSON(payload)
+	}
+}
+
 func containsString(values []string, target string) bool {
 	for _, value := range values {
 		if value == target {
@@ -438,6 +532,7 @@ func parseUsageQuery(c *fiber.Ctx) (service.UsageQuery, error) {
 		PlatformAPIKeyID: c.Query("platform_api_key_id"),
 		Provider:         c.Query("provider"),
 		Model:            c.Query("model"),
+		ResolvedModel:    c.Query("resolved_model"),
 		RouteID:          c.Query("route_id"),
 		RequestPath:      c.Query("request_path"),
 		Status:           c.Query("status"),
@@ -462,6 +557,25 @@ func parseUsageQuery(c *fiber.Ctx) (service.UsageQuery, error) {
 		return service.UsageQuery{}, fiber.NewError(fiber.StatusBadRequest, "invalid time range")
 	}
 	return query, nil
+}
+
+func parseTenantBillingQuery(c *fiber.Ctx) (service.TenantBillingQuery, error) {
+	tenantID := strings.TrimSpace(c.Query("tenant_id"))
+	month := strings.TrimSpace(c.Query("month"))
+	if tenantID == "" {
+		return service.TenantBillingQuery{}, fiber.NewError(fiber.StatusBadRequest, "tenant_id is required")
+	}
+	if month == "" {
+		return service.TenantBillingQuery{}, fiber.NewError(fiber.StatusBadRequest, "month is required")
+	}
+	parsed, err := time.Parse("2006-01", month)
+	if err != nil || parsed.Format("2006-01") != month {
+		return service.TenantBillingQuery{}, fiber.NewError(fiber.StatusBadRequest, "month must be YYYY-MM")
+	}
+	return service.TenantBillingQuery{
+		TenantID: tenantID,
+		Month:    month,
+	}, nil
 }
 
 func parseUsageTimeQuery(c *fiber.Ctx, key string) (time.Time, error) {

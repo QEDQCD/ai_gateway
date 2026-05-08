@@ -209,27 +209,76 @@ func (r *SQLAuthRepository) ListActiveProviderCredentials(ctx context.Context) (
 
 	credentials := make([]ProviderCredentialRecord, 0, len(rows))
 	for _, row := range rows {
-		apiKey := row.EncryptedSecret
-		if r.secretCodec != nil && strings.HasPrefix(row.EncryptedSecret, secret.EncryptedSecretPrefix) {
-			decryptedSecret, err := r.secretCodec.Decrypt(row.EncryptedSecret)
-			if err != nil {
-				return nil, err
-			}
-			apiKey = decryptedSecret
+		credential, err := r.providerCredentialRecordFromRow(row)
+		if err != nil {
+			return nil, err
 		}
-
-		credentials = append(credentials, ProviderCredentialRecord{
-			ID:              row.ID,
-			Provider:        row.Provider,
-			DisplayName:     row.DisplayName,
-			BaseURL:         row.BaseUrl,
-			APIKey:          apiKey,
-			Status:          domain.Status(row.Status),
-			SupportedModels: append([]string(nil), row.SupportedModels...),
-		})
+		credentials = append(credentials, credential)
 	}
 
 	return credentials, nil
+}
+
+func (r *SQLAuthRepository) ResolveProviderCredential(ctx context.Context, id string) (ProviderCredentialRecord, error) {
+	queries, ok := r.queries.(*Queries)
+	if !ok {
+		return ProviderCredentialRecord{}, ErrAuthRecordNotFound
+	}
+
+	const lookupProviderCredential = `
+select id, provider, display_name, supported_models, base_url, encrypted_secret, secret_ref, credential_mode, status
+from provider_credentials
+where id = $1
+  and status = 'active'
+limit 1
+`
+
+	var row ListActiveProviderCredentialsRow
+	if err := queries.db.QueryRow(ctx, lookupProviderCredential, strings.TrimSpace(id)).Scan(
+		&row.ID,
+		&row.Provider,
+		&row.DisplayName,
+		&row.SupportedModels,
+		&row.BaseUrl,
+		&row.EncryptedSecret,
+		&row.SecretRef,
+		&row.CredentialMode,
+		&row.Status,
+	); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ProviderCredentialRecord{}, ErrAuthRecordNotFound
+		}
+		return ProviderCredentialRecord{}, err
+	}
+
+	return r.providerCredentialRecordFromRow(row)
+}
+
+func (r *SQLAuthRepository) providerCredentialRecordFromRow(row ListActiveProviderCredentialsRow) (ProviderCredentialRecord, error) {
+	apiKey := row.EncryptedSecret
+	if strings.EqualFold(strings.TrimSpace(row.CredentialMode), "secret_ref") {
+		resolvedSecret, err := secret.ResolveEnvOrFile(strings.TrimSpace(row.SecretRef))
+		if err != nil {
+			return ProviderCredentialRecord{}, err
+		}
+		apiKey = resolvedSecret
+	} else if r.secretCodec != nil && strings.HasPrefix(row.EncryptedSecret, secret.EncryptedSecretPrefix) {
+		decryptedSecret, err := r.secretCodec.Decrypt(row.EncryptedSecret)
+		if err != nil {
+			return ProviderCredentialRecord{}, err
+		}
+		apiKey = decryptedSecret
+	}
+
+	return ProviderCredentialRecord{
+		ID:              row.ID,
+		Provider:        row.Provider,
+		DisplayName:     row.DisplayName,
+		BaseURL:         row.BaseUrl,
+		APIKey:          apiKey,
+		Status:          domain.Status(row.Status),
+		SupportedModels: append([]string(nil), row.SupportedModels...),
+	}, nil
 }
 
 func (r *BootstrapAuthRepository) FindPlatformAPIKeyByHash(_ context.Context, keyHash string) (PlatformAPIKeyRecord, error) {
@@ -248,6 +297,15 @@ func (r *BootstrapAuthRepository) FindTenantByID(_ context.Context, tenantID str
 
 func (r *BootstrapAuthRepository) ListActiveProviderCredentials(context.Context) ([]ProviderCredentialRecord, error) {
 	return append([]ProviderCredentialRecord(nil), r.providerCredentials...), nil
+}
+
+func (r *BootstrapAuthRepository) ResolveProviderCredential(_ context.Context, id string) (ProviderCredentialRecord, error) {
+	for _, credential := range r.providerCredentials {
+		if credential.ID == strings.TrimSpace(id) {
+			return credential, nil
+		}
+	}
+	return ProviderCredentialRecord{}, ErrAuthRecordNotFound
 }
 
 func (r *SQLAuthRepository) ResolveConsolePrincipal(ctx context.Context, subject string) (ConsolePrincipalRecord, error) {

@@ -31,6 +31,7 @@ function buildDefaultTenantID(item: ApplicationItem | null) {
 }
 
 const defaultApprovalTokenLimit = 10_000_000;
+const defaultApprovalCostLimitYuan = 10_000;
 const fallbackApprovalModels = ["qwen-flash", "mimo-v2.5-pro"];
 
 function formatApprovalModelName(model: string) {
@@ -80,6 +81,7 @@ export function AdminApplicationsPage() {
   const [deletionModalOpen, setDeletionModalOpen] = useState(false);
   const [tenantID, setTenantID] = useState("tenant_demo");
   const [tokenLimit, setTokenLimit] = useState(String(defaultApprovalTokenLimit));
+  const [costLimitYuan, setCostLimitYuan] = useState(String(defaultApprovalCostLimitYuan));
   const [allowedModels, setAllowedModels] = useState<string[]>(fallbackApprovalModels);
   const [comment, setComment] = useState("通过控制台审批");
   const [submitting, setSubmitting] = useState(false);
@@ -149,6 +151,7 @@ export function AdminApplicationsPage() {
   useEffect(() => {
     setTenantID(buildDefaultTenantID(selectedItem));
     setTokenLimit(String(defaultApprovalTokenLimit));
+    setCostLimitYuan(String(defaultApprovalCostLimitYuan));
     setAllowedModels(availableModels);
     setComment("通过控制台审批");
     setActionError(null);
@@ -171,10 +174,16 @@ export function AdminApplicationsPage() {
     const approvalItem = selectedItem;
     const approvalTenantID = tenantID.trim();
     const approvalTokenLimit = Number(tokenLimit.trim());
+    const approvalCostLimitYuan = Number(costLimitYuan.trim());
+    const approvalCostLimitMicroyuan = Math.round(approvalCostLimitYuan * 1_000_000);
     const approvalComment = comment.trim() || "通过控制台审批";
 
     if (!Number.isFinite(approvalTokenLimit) || approvalTokenLimit <= 0) {
       setActionError("请输入大于 0 的 Token 上限。");
+      return;
+    }
+    if (!Number.isFinite(approvalCostLimitYuan) || approvalCostLimitYuan <= 0) {
+      setActionError("请输入大于 0 的月度金额上限。");
       return;
     }
     if (allowedModels.length === 0) {
@@ -191,6 +200,7 @@ export function AdminApplicationsPage() {
         comment: approvalComment,
         tenant_id: approvalTenantID,
         token_limit: approvalTokenLimit,
+        cost_limit_microyuan: approvalCostLimitMicroyuan,
         allowed_models: allowedModels,
       });
       setItems((current) =>
@@ -482,6 +492,16 @@ export function AdminApplicationsPage() {
                   value={tokenLimit}
                   disabled={submitting}
                   onChange={(event) => setTokenLimit(event.target.value)}
+                />
+              </label>
+              <label className="field-shell">
+                月度金额上限（￥）
+                <input
+                  type="number"
+                  min={1}
+                  value={costLimitYuan}
+                  disabled={submitting}
+                  onChange={(event) => setCostLimitYuan(event.target.value)}
                 />
               </label>
               <div className="field-shell">

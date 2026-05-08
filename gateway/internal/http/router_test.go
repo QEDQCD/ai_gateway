@@ -2,6 +2,7 @@ package http_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -112,6 +113,358 @@ func TestServiceBasicAuthProtectsAdminRoutes(t *testing.T) {
 	}
 	if authorizedResp.StatusCode != http.StatusOK {
 		t.Fatalf("expected authorized status %d, got %d", http.StatusOK, authorizedResp.StatusCode)
+	}
+}
+
+func TestAdminProviderModelsRouteReturnsProvidersAndModels(t *testing.T) {
+	t.Parallel()
+
+	app := apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+		ServiceAuthUsername: "test-console-user",
+		ServiceAuthPassword: "test-console-password",
+		ConsoleService: stubConsoleService{
+			providerModels: service.ProviderModelsPageData{
+				Providers: []service.ProviderItem{
+					{ID: "provider_dashscope_primary", Provider: "qwen", DisplayName: "Qwen", SupportedModels: []string{"qwen-flash"}, CredentialMode: "encrypted", SecretRef: "", Status: "active"},
+				},
+				Models: []service.ProviderModelItem{
+					{RequestedModel: "qwen-flash", Provider: "qwen", ProviderCredentialID: "provider_dashscope_primary", RouteLabel: "Qwen", HealthStatus: "healthy", LatencyMS: 218, RequestMode: "聊天"},
+				},
+			},
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/provider-models", nil)
+	req.SetBasicAuth("test-console-user", "test-console-password")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("io.ReadAll failed: %v", err)
+	}
+
+	var got service.ProviderModelsPageData
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("json.Unmarshal failed: %v, body=%q", err, string(body))
+	}
+	want := service.ProviderModelsPageData{
+		Providers: []service.ProviderItem{
+			{ID: "provider_dashscope_primary", Provider: "qwen", DisplayName: "Qwen", SupportedModels: []string{"qwen-flash"}, CredentialMode: "encrypted", SecretRef: "", Status: "active"},
+		},
+		Models: []service.ProviderModelItem{
+			{RequestedModel: "qwen-flash", Provider: "qwen", ProviderCredentialID: "provider_dashscope_primary", RouteLabel: "Qwen", HealthStatus: "healthy", LatencyMS: 218, RequestMode: "聊天"},
+		},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("expected payload %#v, got %#v", want, got)
+	}
+}
+
+func TestAdminCreateProviderRoutePassesRequestBody(t *testing.T) {
+	t.Parallel()
+
+	var captured service.CreateProviderRequest
+	app := apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+		ServiceAuthUsername: "test-console-user",
+		ServiceAuthPassword: "test-console-password",
+		ConsoleService: stubConsoleService{
+			createProviderReqRef: &captured,
+			providerMutation: service.ProviderMutationResult{
+				Item: service.ProviderItem{
+					ID:             "provider_dashscope_primary",
+					Provider:       "qwen",
+					DisplayName:    "Qwen 主线路",
+					CredentialMode: "secret_ref",
+					SecretRef:      "TEST_QWEN_PROVIDER_SECRET",
+					Status:         "active",
+				},
+			},
+		},
+	})
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/admin/providers",
+		strings.NewReader(`{"provider":"dashscope","display_name":"Qwen 主线路","base_url":"https://dashscope.aliyuncs.com/compatible-mode/v1","credential_mode":"secret_ref","secret_ref":"TEST_QWEN_PROVIDER_SECRET"}`),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	req.SetBasicAuth("test-console-user", "test-console-password")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, resp.StatusCode)
+	}
+	if captured.Provider != "dashscope" || captured.SecretRef != "TEST_QWEN_PROVIDER_SECRET" || captured.CredentialMode != "secret_ref" {
+		t.Fatalf("unexpected captured request: %+v", captured)
+	}
+}
+
+func TestAdminCreateProviderModelRoutePassesRequestBody(t *testing.T) {
+	t.Parallel()
+
+	var captured service.CreateProviderModelRequest
+	app := apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+		ServiceAuthUsername: "test-console-user",
+		ServiceAuthPassword: "test-console-password",
+		ConsoleService: stubConsoleService{
+			createProviderModelReqRef: &captured,
+			providerModelMutation: service.ProviderModelMutationResult{
+				Item: service.ProviderModelItem{
+					ID:                   "route:provider_dashscope_primary:qwen-flash",
+					RequestedModel:       "qwen-flash",
+					Provider:             "qwen",
+					ProviderCredentialID: "provider_dashscope_primary",
+					RouteLabel:           "Qwen 主线路",
+					HealthStatus:         "healthy",
+					RequestMode:          "聊天",
+				},
+			},
+		},
+	})
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/admin/provider-models",
+		strings.NewReader(`{"requested_model":"qwen-flash","provider_credential_id":"provider_dashscope_primary","request_mode":"聊天","healthcheck_enabled":true}`),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	req.SetBasicAuth("test-console-user", "test-console-password")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, resp.StatusCode)
+	}
+	if captured.RequestedModel != "qwen-flash" || captured.ProviderCredentialID != "provider_dashscope_primary" || !captured.HealthcheckEnabled {
+		t.Fatalf("unexpected captured request: %+v", captured)
+	}
+}
+
+func TestAdminModelHealthRouteReturnsPayload(t *testing.T) {
+	t.Parallel()
+
+	var capturedWindow string
+	app := apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+		ServiceAuthUsername: "test-console-user",
+		ServiceAuthPassword: "test-console-password",
+		ConsoleService: stubConsoleService{
+			modelHealthWindowRef: &capturedWindow,
+			modelHealth: service.ModelHealthPageData{
+				Items: []service.ModelHealthItem{
+					{
+						ID:                  "route:provider_dashscope_primary:qwen-flash",
+						RequestedModel:      "qwen-flash",
+						RouteLabel:          "Qwen 主线路",
+						HealthStatus:        "healthy",
+						LastHealthError:     "",
+						RequestMode:         "聊天",
+						LatencyMS:           218,
+						FirstTokenLatencyMS: 82,
+						LastHealthCheckedAt: "2026-05-06T12:00:00+08:00",
+					},
+				},
+				Wall: service.ModelHealthWall{
+					Window:      "7d",
+					WindowLabel: "最近 7 天",
+					Buckets:     []string{"05-01", "05-02"},
+					Lanes: []service.ModelHealthWallLane{
+						{
+							Model:          "qwen-flash",
+							RouteLabel:     "Qwen 主线路",
+							SuccessRate:    "50%",
+							AverageLatency: "200 ms",
+							Cells: []service.ModelHealthWallCell{
+								{BucketLabel: "05-01", Status: "降级", Latency: "300 ms", Requests: "1 次"},
+								{BucketLabel: "05-02", Status: "健康", Latency: "100 ms", Requests: "1 次"},
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/model-health?window=7d", nil)
+	req.SetBasicAuth("test-console-user", "test-console-password")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, resp.StatusCode)
+	}
+	if capturedWindow != "7d" {
+		t.Fatalf("expected captured window %q, got %q", "7d", capturedWindow)
+	}
+}
+
+func TestAdminTenantBillingRouteReturnsPayload(t *testing.T) {
+	t.Parallel()
+
+	var captured service.TenantBillingQuery
+	app := apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+		ServiceAuthUsername: "test-console-user",
+		ServiceAuthPassword: "test-console-password",
+		ConsoleService: stubConsoleService{
+			tenantBillingQueryRef: &captured,
+			tenantBilling: service.TenantBillingPageData{
+				Summary: service.TenantBillingSummary{
+					TenantID:     "tenant_demo",
+					Month:        "2026-04",
+					RequestCount: 12,
+					SuccessCount: 10,
+					FailureCount: 2,
+					InputTokens:  1200,
+					OutputTokens: 600,
+					CachedTokens: 40,
+					TotalTokens:  1840,
+					InputCost:    "0.12 ￥",
+					OutputCost:   "0.24 ￥",
+					CachedCost:   "0.01 ￥",
+					TotalCost:    "0.37 ￥",
+				},
+				Providers: []service.TenantBillingProviderItem{{ProviderCredentialID: "provider_qwen", Provider: "qwen", DisplayName: "Qwen", RequestCount: 12, TotalCost: "0.37 ￥"}},
+				Models:    []service.TenantBillingModelItem{{Model: "qwen-flash", ProviderCredentialID: "provider_qwen", ProviderDisplayName: "Qwen", RequestCount: 12, TotalCost: "0.37 ￥"}},
+				APIKeys:   []service.TenantBillingAPIKeyItem{{PlatformAPIKeyID: "pak_demo", Name: "Demo Key", RequestCount: 12, TotalCost: "0.37 ￥"}},
+			},
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/billing/tenant?tenant_id=tenant_demo&month=2026-04", nil)
+	req.SetBasicAuth("test-console-user", "test-console-password")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, resp.StatusCode)
+	}
+	if captured.TenantID != "tenant_demo" || captured.Month != "2026-04" {
+		t.Fatalf("unexpected captured query: %+v", captured)
+	}
+
+	var got service.TenantBillingPageData
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("json decode failed: %v", err)
+	}
+	if got.Summary.Month != "2026-04" || got.Summary.TenantID != "tenant_demo" {
+		t.Fatalf("unexpected payload: %+v", got)
+	}
+}
+
+func TestAdminTenantBillingRouteRejectsMissingOrInvalidMonth(t *testing.T) {
+	t.Parallel()
+
+	app := apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+		ServiceAuthUsername: "test-console-user",
+		ServiceAuthPassword: "test-console-password",
+		ConsoleService:      stubConsoleService{},
+	})
+
+	for _, target := range []string{
+		"/admin/billing/tenant?tenant_id=tenant_demo",
+		"/admin/billing/tenant?tenant_id=tenant_demo&month=2026/04",
+		"/admin/billing/tenant?tenant_id=tenant_demo&month=2026-13",
+		"/admin/billing/tenant?month=2026-04",
+	} {
+		req := httptest.NewRequest(http.MethodGet, target, nil)
+		req.SetBasicAuth("test-console-user", "test-console-password")
+
+		resp, err := app.Test(req)
+		if err != nil {
+			t.Fatalf("app.Test failed for %s: %v", target, err)
+		}
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("expected 400 for %s, got %d", target, resp.StatusCode)
+		}
+	}
+}
+
+func TestAdminRunProviderModelHealthcheckRoutePassesID(t *testing.T) {
+	t.Parallel()
+
+	var capturedID string
+	app := apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+		ServiceAuthUsername: "test-console-user",
+		ServiceAuthPassword: "test-console-password",
+		ConsoleService: stubConsoleService{
+			runProviderModelHealthcheckIDRef: &capturedID,
+			providerModelMutation: service.ProviderModelMutationResult{
+				Item: service.ProviderModelItem{
+					ID:                   "route:provider_dashscope_primary:qwen-flash",
+					RequestedModel:       "qwen-flash",
+					Provider:             "qwen",
+					ProviderCredentialID: "provider_dashscope_primary",
+					RouteLabel:           "Qwen 主线路",
+					HealthStatus:         "healthy",
+				},
+			},
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/provider-models/route:provider_dashscope_primary:qwen-flash/health-check", nil)
+	req.SetBasicAuth("test-console-user", "test-console-password")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, resp.StatusCode)
+	}
+	if capturedID != "route:provider_dashscope_primary:qwen-flash" {
+		t.Fatalf("expected captured id %q, got %q", "route:provider_dashscope_primary:qwen-flash", capturedID)
+	}
+}
+
+func TestAdminRunProviderModelHealthcheckRouteDecodesEncodedID(t *testing.T) {
+	t.Parallel()
+
+	var capturedID string
+	app := apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+		ServiceAuthUsername: "test-console-user",
+		ServiceAuthPassword: "test-console-password",
+		ConsoleService: stubConsoleService{
+			runProviderModelHealthcheckIDRef: &capturedID,
+			providerModelMutation: service.ProviderModelMutationResult{
+				Item: service.ProviderModelItem{
+					ID:                   "route:provider_dashscope_primary:default",
+					RequestedModel:       "qwen-flash",
+					Provider:             "qwen",
+					ProviderCredentialID: "provider_dashscope_primary",
+					RouteLabel:           "Qwen 主线路",
+					HealthStatus:         "healthy",
+				},
+			},
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/provider-models/route%3Aprovider_dashscope_primary%3Adefault/health-check", nil)
+	req.SetBasicAuth("test-console-user", "test-console-password")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, resp.StatusCode)
+	}
+	if capturedID != "route:provider_dashscope_primary:default" {
+		t.Fatalf("expected captured id %q, got %q", "route:provider_dashscope_primary:default", capturedID)
 	}
 }
 
@@ -813,7 +1166,7 @@ func TestAdminApproveApplicationCreatesUserMembershipAndAudit(t *testing.T) {
 	req := httptest.NewRequest(
 		http.MethodPost,
 		"/admin/applications/app_router_pending/approve",
-		strings.NewReader(`{"actor_id":"user_admin_demo","comment":"approved via route","tenant_id":"tenant_demo","token_limit":3456789,"allowed_models":["qwen-flash","mimo-v2.5-pro"]}`),
+		strings.NewReader(`{"actor_id":"user_admin_demo","comment":"approved via route","tenant_id":"tenant_demo","token_limit":3456789,"cost_limit_microyuan":1234500000,"allowed_models":["qwen-flash","mimo-v2.5-pro"]}`),
 	)
 	req.Header.Set("Content-Type", "application/json")
 	req.SetBasicAuth("test-console-user", "test-console-password")
@@ -848,6 +1201,9 @@ func TestAdminApproveApplicationCreatesUserMembershipAndAudit(t *testing.T) {
 	}
 	if capturedReq.TokenLimit != 3456789 {
 		t.Fatalf("expected token_limit %d, got %d", 3456789, capturedReq.TokenLimit)
+	}
+	if capturedReq.CostLimitMicroyuan != 1234500000 {
+		t.Fatalf("expected cost_limit_microyuan %d, got %d", int64(1234500000), capturedReq.CostLimitMicroyuan)
 	}
 	if !reflect.DeepEqual(capturedReq.AllowedModels, []string{"qwen-flash", "mimo-v2.5-pro"}) {
 		t.Fatalf("expected allowed_models to be forwarded, got %#v", capturedReq.AllowedModels)
@@ -1384,7 +1740,7 @@ func TestAdminUsageLatencyWallRouteReturnsConsoleData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("io.ReadAll failed: %v", err)
 	}
-	expected := `{"window_label":"最近 24 小时","buckets":["04-24 18:00"],"lanes":[{"model":"qwen-flash","route_label":"default-route","success_rate":"98.00%","average_latency":"182 ms","cells":[{"bucket_label":"04-24 18:00","latency":"148 ms","status":"健康","requests":"12 次"}]}]}`
+	expected := `{"window_label":"最近 24 小时","buckets":["04-24 18:00"],"lanes":[{"model":"qwen-flash","provider":"","source":"","route_label":"default-route","success_rate":"98.00%","average_latency":"182 ms","cells":[{"bucket_label":"04-24 18:00","latency":"148 ms","status":"健康","requests":"12 次"}]}]}`
 	if string(body) != expected {
 		t.Fatalf("expected body %q, got %q", expected, string(body))
 	}
@@ -1400,6 +1756,17 @@ func TestAdminUsageFailuresRouteReturnsConsoleData(t *testing.T) {
 			usageFailures: service.UsageFailureData{
 				Breakdown:    []service.UsageFailureBucket{{Label: "限流", Value: "2 次"}},
 				RecentEvents: []string{"04-24 18:00 · 限流 · 请求失败（429）"},
+				RecentEventItems: []service.UsageFailureEventItem{{
+					Time:          "04-24 18:00",
+					TenantID:      "tenant_demo",
+					TenantName:    "Demo Tenant",
+					RequestModel:  "qwen-flash",
+					ResolvedModel: "qwen-flash",
+					Provider:      "阿里云百炼",
+					StatusCode:    429,
+					Category:      "限流",
+					Reason:        "上游返回 429，请求被限流",
+				}},
 			},
 		},
 	})
@@ -1419,7 +1786,7 @@ func TestAdminUsageFailuresRouteReturnsConsoleData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("io.ReadAll failed: %v", err)
 	}
-	expected := `{"breakdown":[{"label":"限流","value":"2 次"}],"recent_events":["04-24 18:00 · 限流 · 请求失败（429）"]}`
+	expected := `{"breakdown":[{"label":"限流","value":"2 次"}],"recent_events":["04-24 18:00 · 限流 · 请求失败（429）"],"recent_event_items":[{"time":"04-24 18:00","tenant_id":"tenant_demo","tenant_name":"Demo Tenant","request_model":"qwen-flash","resolved_model":"qwen-flash","provider":"阿里云百炼","status_code":429,"category":"限流","reason":"上游返回 429，请求被限流"}]}`
 	if string(body) != expected {
 		t.Fatalf("expected body %q, got %q", expected, string(body))
 	}
@@ -1437,8 +1804,14 @@ func TestAdminUsageRequestsRouteReturnsConsoleData(t *testing.T) {
 					{
 						RequestID:           "llmreq_demo_002",
 						Tenant:              "tenant_demo",
+						TenantID:            "tenant_demo",
+						TenantName:          "Demo Tenant",
 						Endpoint:            "/v1/embeddings",
 						Model:               "text-embedding-3-small",
+						ResolvedModel:       "text-embedding-3-small",
+						TaskClass:           "embedding_simple",
+						RoutingReason:       "model:direct",
+						TargetModelTier:     "text-embedding-3-small",
 						Status:              "限流",
 						TotalTokens:         "16",
 						InputTokens:         "16",
@@ -1478,9 +1851,72 @@ func TestAdminUsageRequestsRouteReturnsConsoleData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("io.ReadAll failed: %v", err)
 	}
-	expected := `{"items":[{"request_id":"llmreq_demo_002","tenant":"tenant_demo","endpoint":"/v1/embeddings","model":"text-embedding-3-small","resolved_model":"","task_class":"","routing_reason":"","target_model_tier":"","status":"限流","total_tokens":"16","input_tokens":"16","output_tokens":"0","cached_tokens":"5","latency":"95 ms","first_token_latency_ms":0,"usage_source":"估算","input_cost":"1.75 ￥","output_cost":"0.00 ￥","cached_cost":"0.25 ￥","total_cost":"2.00 ￥","input_price":"2.50 ￥/M","output_price":"0.00 ￥/M","cached_price":"0.75 ￥/M"}],"total":1,"limit":20,"offset":0}`
+	expected := `{"items":[{"request_id":"llmreq_demo_002","tenant":"tenant_demo","tenant_id":"tenant_demo","tenant_name":"Demo Tenant","endpoint":"/v1/embeddings","model":"text-embedding-3-small","resolved_model":"text-embedding-3-small","task_class":"embedding_simple","routing_reason":"model:direct","target_model_tier":"text-embedding-3-small","status":"限流","total_tokens":"16","input_tokens":"16","output_tokens":"0","cached_tokens":"5","latency":"95 ms","first_token_latency_ms":0,"usage_source":"估算","input_cost":"1.75 ￥","output_cost":"0.00 ￥","cached_cost":"0.25 ￥","total_cost":"2.00 ￥","input_price":"2.50 ￥/M","output_price":"0.00 ￥/M","cached_price":"0.75 ￥/M"}],"total":1,"limit":20,"offset":0}`
 	if string(body) != expected {
 		t.Fatalf("expected body %q, got %q", expected, string(body))
+	}
+}
+
+func TestAdminUsageRequestDetailRouteReturnsConsoleData(t *testing.T) {
+	t.Parallel()
+
+	app := apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+		ServiceAuthUsername: "test-console-user",
+		ServiceAuthPassword: "test-console-password",
+		ConsoleService: stubConsoleService{
+			usageRequestDetail: service.UsageRequestDetail{
+				RequestID:           "llmreq_demo_002",
+				TenantID:            "tenant_demo",
+				TenantName:          "Demo Tenant",
+				Endpoint:            "/v1/chat/completions",
+				Model:               "qwen-flash",
+				ResolvedModel:       "qwen-flash",
+				TaskClass:           "chat_simple",
+				RoutingReason:       "model:direct",
+				TargetModelTier:     "fast",
+				Status:              "成功",
+				TotalTokens:         "18",
+				InputTokens:         "12",
+				OutputTokens:        "6",
+				CachedTokens:        "0",
+				Latency:             "120 ms",
+				FirstTokenLatencyMS: 33,
+				UsageSource:         "上游返回",
+				InputCost:           "0.01 ￥",
+				OutputCost:          "0.03 ￥",
+				CachedCost:          "0.00 ￥",
+				TotalCost:           "0.04 ￥",
+				InputPrice:          "2.00 ￥/M",
+				OutputPrice:         "20.00 ￥/M",
+				CachedPrice:         "0.50 ￥/M",
+				PromptExcerpt:       "你好，手机号 138XXXX0000",
+				ResponseExcerpt:     "你好，请问有什么可以帮你？",
+				ErrorCode:           "",
+				ErrorMessage:        "",
+				FailureEvents: []service.UsageFailureEventItem{{
+					Time:          "04-24 18:00",
+					TenantID:      "tenant_demo",
+					TenantName:    "Demo Tenant",
+					RequestModel:  "qwen-flash",
+					ResolvedModel: "qwen-flash",
+					Provider:      "阿里云百炼",
+					StatusCode:    0,
+					Category:      "",
+					Reason:        "调用成功",
+				}},
+			},
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/usage/requests/llmreq_demo_002", nil)
+	req.SetBasicAuth("test-console-user", "test-console-password")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
 }
 
@@ -1661,7 +2097,7 @@ func TestAdminUsageRequestsRouteParsesAndForwardsUsageQuery(t *testing.T) {
 
 	req := httptest.NewRequest(
 		http.MethodGet,
-		"/admin/usage/requests?tenant_id=tenant_demo&platform_api_key_id=pak_demo&from=2026-04-24T10:00:00Z&to=2026-04-24T11:00:00Z&limit=30&offset=60",
+		"/admin/usage/requests?tenant_id=tenant_demo&platform_api_key_id=pak_demo&resolved_model=qwen-flash&status=success&from=2026-04-24T10:00:00Z&to=2026-04-24T11:00:00Z&limit=30&offset=60",
 		nil,
 	)
 	req.SetBasicAuth("test-console-user", "test-console-password")
@@ -1679,6 +2115,12 @@ func TestAdminUsageRequestsRouteParsesAndForwardsUsageQuery(t *testing.T) {
 	}
 	if captured.PlatformAPIKeyID != "pak_demo" {
 		t.Fatalf("expected platform_api_key_id pak_demo, got %q", captured.PlatformAPIKeyID)
+	}
+	if captured.ResolvedModel != "qwen-flash" {
+		t.Fatalf("expected resolved_model qwen-flash, got %q", captured.ResolvedModel)
+	}
+	if captured.Status != "success" {
+		t.Fatalf("expected status success, got %q", captured.Status)
 	}
 	if captured.Limit != 30 {
 		t.Fatalf("expected limit 30, got %d", captured.Limit)
@@ -1707,25 +2149,31 @@ func TestAuthCheckRouteMapsAuthFailuresToHTTPStatuses(t *testing.T) {
 			name:       "unauthorized returns generic unauthorized",
 			authErr:    fmt.Errorf("%w: platform API key not found", service.ErrUnauthorized),
 			wantStatus: http.StatusUnauthorized,
-			wantBody:   "unauthorized",
+			wantBody:   "认证失败：API Key 无效或已过期",
 		},
 		{
 			name:       "quota exceeded returns generic quota exceeded",
 			authErr:    fmt.Errorf("%w: tenant tenant_123", service.ErrQuotaExceeded),
 			wantStatus: http.StatusTooManyRequests,
-			wantBody:   "quota exceeded",
+			wantBody:   "租户额度不足：请求次数或 Token 配额已耗尽",
+		},
+		{
+			name:       "model not allowed returns chinese forbidden reason",
+			authErr:    fmt.Errorf("%w: deepseek-r1-distill-qwen-7b", service.ErrModelNotAllowed),
+			wantStatus: http.StatusForbidden,
+			wantBody:   "模型未授权：当前租户不可使用该模型",
 		},
 		{
 			name:       "route resolution failure returns bad gateway",
 			authErr:    fmt.Errorf("%w: no provider for requested model", service.ErrRouteNotFound),
 			wantStatus: http.StatusBadGateway,
-			wantBody:   "route resolution failed",
+			wantBody:   "路由解析失败：未找到可用的模型映射",
 		},
 		{
 			name:       "internal failures return generic internal error",
 			authErr:    errors.New("sql: connection refused"),
 			wantStatus: http.StatusInternalServerError,
-			wantBody:   "internal server error",
+			wantBody:   "服务暂时不可用，请稍后重试",
 		},
 	}
 
@@ -1979,6 +2427,62 @@ func TestChatCompletionRouteHonorsExplicitModelBeforeSmartRouting(t *testing.T) 
 	}
 }
 
+func TestChatCompletionRouteReusesMiddlewareResolutionForExplicitModel(t *testing.T) {
+	t.Parallel()
+
+	authService := &countingAuthService{
+		requestContext: domain.RequestContext{
+			TenantID:             "tenant_123",
+			PlatformAPIKeyID:     "pak_123",
+			PlatformAPIKeyName:   "demo key",
+			SelectedProviderID:   "pc_explicit",
+			SelectedProviderName: "Explicit Route",
+			RouteID:              "route:pc_explicit:deepseek-r1-distill-qwen-7b",
+			ProviderTarget: domain.ProviderTarget{
+				CredentialID: "pc_explicit",
+				Provider:     "openai",
+				BaseURL:      "https://example.com",
+				APIKey:       "upstream-key",
+			},
+		},
+		failAfterFirst: fmt.Errorf("%w: deepseek-r1-distill-qwen-7b", service.ErrModelNotAllowed),
+	}
+	chatProxy := &capturingChatProxyService{
+		response: service.ChatResponse{
+			Model: "deepseek-r1-distill-qwen-7b",
+			Choices: []service.ChatChoice{
+				{Message: service.ChatMessage{Role: "assistant", Content: "done"}},
+			},
+		},
+	}
+	app := apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+		AuthService: authService,
+		ChatProxy:   chatProxy,
+	})
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/chat/completions",
+		strings.NewReader("{\"model\":\"deepseek-r1-distill-qwen-7b\",\"messages\":[{\"role\":\"user\",\"content\":\"你好\"}]}"),
+	)
+	req.Header.Set("Authorization", "Bearer platform-live-key")
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if authService.calls != 1 {
+		t.Fatalf("expected auth resolve to be called once, got %d", authService.calls)
+	}
+	if chatProxy.requestContext.ResolvedModel != "deepseek-r1-distill-qwen-7b" {
+		t.Fatalf("expected resolved model to remain explicit model, got %q", chatProxy.requestContext.ResolvedModel)
+	}
+}
+
 func TestNonChatV1RoutesStillUsePlatformAuthMiddleware(t *testing.T) {
 	t.Parallel()
 
@@ -2089,6 +2593,79 @@ func TestNonChatV1RoutesStillUsePlatformAuthMiddleware(t *testing.T) {
 	})
 }
 
+func TestChatCompletionRouteRejectsInvalidPayloadBeforeUpstream(t *testing.T) {
+	t.Parallel()
+
+	authService := &capturingAuthService{}
+	chatProxy := &capturingChatProxyService{}
+	app := apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+		AuthService: authService,
+		ChatProxy:   chatProxy,
+	})
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/chat/completions",
+		strings.NewReader(`{"messages":[]}`),
+	)
+	req.Header.Set("Authorization", "Bearer platform-live-key")
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+	if authService.rawKey != "" {
+		t.Fatalf("expected auth not to run, got rawKey %q", authService.rawKey)
+	}
+	if len(chatProxy.request.Messages) != 0 {
+		t.Fatalf("expected proxy not to receive request, got %+v", chatProxy.request)
+	}
+}
+
+func TestEmbeddingsRouteRejectsInvalidPayloadBeforeUpstream(t *testing.T) {
+	t.Parallel()
+
+	authService := &capturingAuthService{requestContext: domain.RequestContext{
+		TenantID:           "tenant_123",
+		PlatformAPIKeyID:   "pak_123",
+		PlatformAPIKeyName: "demo key",
+		ProviderTarget: domain.ProviderTarget{
+			CredentialID: "pc_123",
+			Provider:     "openai",
+			BaseURL:      "https://example.com",
+			APIKey:       "upstream-key",
+		},
+	}}
+	embeddingProxy := &capturingEmbeddingProxyService{}
+	app := apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+		AuthService:    authService,
+		EmbeddingProxy: embeddingProxy,
+	})
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/embeddings",
+		strings.NewReader(`{"model":"text-embedding-3-small","input":""}`),
+	)
+	req.Header.Set("Authorization", "Bearer platform-live-key")
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+	if embeddingProxy.request.Model != "" || embeddingProxy.request.Input != nil {
+		t.Fatalf("expected proxy not to receive request, got %+v", embeddingProxy.request)
+	}
+}
+
 type stubAuthService struct {
 	err error
 }
@@ -2108,6 +2685,20 @@ func (s *capturingAuthService) Resolve(ctx context.Context, rawKey string, reque
 	s.ctx = ctx
 	s.rawKey = rawKey
 	s.requestedModel = requestedModel
+	return s.requestContext, nil
+}
+
+type countingAuthService struct {
+	calls          int
+	requestContext domain.RequestContext
+	failAfterFirst error
+}
+
+func (s *countingAuthService) Resolve(context.Context, string, string) (domain.RequestContext, error) {
+	s.calls++
+	if s.calls > 1 && s.failAfterFirst != nil {
+		return domain.RequestContext{}, s.failAfterFirst
+	}
 	return s.requestContext, nil
 }
 
@@ -2200,33 +2791,44 @@ func (s stubConsoleAuthService) ResolveConsoleSession(context.Context, string) (
 }
 
 type stubConsoleService struct {
-	systemStatus                 service.ConsoleSystemStatus
-	captchaChallenge             service.CaptchaChallenge
-	captchaPassResult            service.CaptchaPassResult
-	apiKeys                      service.APIKeysPageData
-	apiKeyMutationResult         service.APIKeyMutationResult
-	apiKeySecretView             service.APIKeySecretView
-	applications                 service.ApplicationsPageData
-	applicationMutation          service.ApplicationMutationResult
-	accountDeletions             service.AccountDeletionApplicationsPageData
-	accountDeletionMutation      service.AccountDeletionApplicationMutationResult
-	createApplicationReqRef      *service.CreateApplicationRequest
-	approveApplicationIDRef      *string
-	approveApplicationReqRef     *service.ApproveApplicationRequest
-	rejectApplicationIDRef       *string
-	rejectApplicationReqRef      *service.RejectApplicationRequest
-	approveAccountDeletionIDRef  *string
-	approveAccountDeletionReqRef *service.ReviewAccountDeletionApplicationRequest
-	rejectAccountDeletionIDRef   *string
-	rejectAccountDeletionReqRef  *service.ReviewAccountDeletionApplicationRequest
-	usageOverview                service.UsageOverviewData
-	usageTrends                  service.UsageTrendData
-	usageLatencyWall             service.UsageLatencyWallData
-	usageFailures                service.UsageFailureData
-	usageRequests                service.UsageRequestsPageData
-	usageQueryRef                *service.UsageQuery
-	streamPlaygroundReqRef       *service.PlaygroundRunRequest
-	streamPlaygroundSession      service.PlaygroundStreamSession
+	systemStatus                     service.ConsoleSystemStatus
+	captchaChallenge                 service.CaptchaChallenge
+	captchaPassResult                service.CaptchaPassResult
+	providerModels                   service.ProviderModelsPageData
+	modelHealth                      service.ModelHealthPageData
+	apiKeys                          service.APIKeysPageData
+	apiKeyMutationResult             service.APIKeyMutationResult
+	apiKeySecretView                 service.APIKeySecretView
+	applications                     service.ApplicationsPageData
+	applicationMutation              service.ApplicationMutationResult
+	accountDeletions                 service.AccountDeletionApplicationsPageData
+	accountDeletionMutation          service.AccountDeletionApplicationMutationResult
+	createApplicationReqRef          *service.CreateApplicationRequest
+	createProviderReqRef             *service.CreateProviderRequest
+	createProviderModelReqRef        *service.CreateProviderModelRequest
+	runProviderModelHealthcheckIDRef *string
+	approveApplicationIDRef          *string
+	approveApplicationReqRef         *service.ApproveApplicationRequest
+	rejectApplicationIDRef           *string
+	rejectApplicationReqRef          *service.RejectApplicationRequest
+	approveAccountDeletionIDRef      *string
+	approveAccountDeletionReqRef     *service.ReviewAccountDeletionApplicationRequest
+	rejectAccountDeletionIDRef       *string
+	rejectAccountDeletionReqRef      *service.ReviewAccountDeletionApplicationRequest
+	providerMutation                 service.ProviderMutationResult
+	providerModelMutation            service.ProviderModelMutationResult
+	usageOverview                    service.UsageOverviewData
+	usageTrends                      service.UsageTrendData
+	usageLatencyWall                 service.UsageLatencyWallData
+	usageFailures                    service.UsageFailureData
+	usageRequests                    service.UsageRequestsPageData
+	usageRequestDetail               service.UsageRequestDetail
+	tenantBilling                    service.TenantBillingPageData
+	usageQueryRef                    *service.UsageQuery
+	modelHealthWindowRef             *string
+	tenantBillingQueryRef            *service.TenantBillingQuery
+	streamPlaygroundReqRef           *service.PlaygroundRunRequest
+	streamPlaygroundSession          service.PlaygroundStreamSession
 }
 
 type stubMemberConsoleService struct {
@@ -2414,6 +3016,38 @@ func (s stubConsoleService) CopyAPIKeySecret(context.Context, string, string, st
 	return s.apiKeySecretView, nil
 }
 
+func (s stubConsoleService) ProviderModels(context.Context) (service.ProviderModelsPageData, error) {
+	return s.providerModels, nil
+}
+
+func (s stubConsoleService) CreateProvider(_ context.Context, req service.CreateProviderRequest) (service.ProviderMutationResult, error) {
+	if s.createProviderReqRef != nil {
+		*s.createProviderReqRef = req
+	}
+	return s.providerMutation, nil
+}
+
+func (s stubConsoleService) CreateProviderModel(_ context.Context, req service.CreateProviderModelRequest) (service.ProviderModelMutationResult, error) {
+	if s.createProviderModelReqRef != nil {
+		*s.createProviderModelReqRef = req
+	}
+	return s.providerModelMutation, nil
+}
+
+func (s stubConsoleService) RunProviderModelHealthcheck(_ context.Context, id string) (service.ProviderModelMutationResult, error) {
+	if s.runProviderModelHealthcheckIDRef != nil {
+		*s.runProviderModelHealthcheckIDRef = id
+	}
+	return s.providerModelMutation, nil
+}
+
+func (s stubConsoleService) ModelHealth(_ context.Context, window string) (service.ModelHealthPageData, error) {
+	if s.modelHealthWindowRef != nil {
+		*s.modelHealthWindowRef = window
+	}
+	return s.modelHealth, nil
+}
+
 func (s stubConsoleService) Routes(context.Context) (service.RoutesPageData, error) {
 	return service.RoutesPageData{}, nil
 }
@@ -2465,9 +3099,20 @@ func (s stubConsoleService) UsageFailures(_ context.Context, query service.Usage
 	return s.usageFailures, nil
 }
 
+func (s stubConsoleService) TenantBilling(_ context.Context, query service.TenantBillingQuery) (service.TenantBillingPageData, error) {
+	if s.tenantBillingQueryRef != nil {
+		*s.tenantBillingQueryRef = query
+	}
+	return s.tenantBilling, nil
+}
+
 func (s stubConsoleService) UsageRequests(_ context.Context, query service.UsageQuery) (service.UsageRequestsPageData, error) {
 	if s.usageQueryRef != nil {
 		*s.usageQueryRef = query
 	}
 	return s.usageRequests, nil
+}
+
+func (s stubConsoleService) UsageRequestDetail(_ context.Context, _ string) (service.UsageRequestDetail, error) {
+	return s.usageRequestDetail, nil
 }

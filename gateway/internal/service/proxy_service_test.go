@@ -266,6 +266,96 @@ func TestChatProxyStreamRecordsUsageAfterSuccessfulStream(t *testing.T) {
 	}
 }
 
+func TestValidateChatRequest(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name    string
+		req     service.ChatRequest
+		wantErr string
+	}{
+		{
+			name:    "messages required",
+			req:     service.ChatRequest{},
+			wantErr: "messages is required",
+		},
+		{
+			name: "message content required",
+			req: service.ChatRequest{
+				Messages: []service.ChatMessage{{Role: "user", Content: "   "}},
+			},
+			wantErr: "message content is required",
+		},
+		{
+			name: "max tokens non negative",
+			req: service.ChatRequest{
+				Messages:  []service.ChatMessage{{Role: "user", Content: "hello"}},
+				MaxTokens: -1,
+			},
+			wantErr: "max_tokens must be greater than or equal to 0",
+		},
+		{
+			name: "model optional",
+			req: service.ChatRequest{
+				Messages: []service.ChatMessage{{Role: "user", Content: "hello"}},
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := service.ValidateChatRequest(tc.req)
+			if tc.wantErr == "" && err != nil {
+				t.Fatalf("expected nil, got %v", err)
+			}
+			if tc.wantErr != "" && (err == nil || err.Error() != tc.wantErr) {
+				t.Fatalf("expected error %q, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestValidateEmbeddingsRequest(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name    string
+		req     service.EmbeddingsRequest
+		wantErr string
+	}{
+		{
+			name:    "model required",
+			req:     service.EmbeddingsRequest{Input: "hello"},
+			wantErr: "model is required",
+		},
+		{
+			name:    "input required",
+			req:     service.EmbeddingsRequest{Model: "text-embedding-3-small", Input: "   "},
+			wantErr: "input is required",
+		},
+		{
+			name: "valid",
+			req:  service.EmbeddingsRequest{Model: "text-embedding-3-small", Input: "hello"},
+		},
+	}
+
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := service.ValidateEmbeddingsRequest(tc.req)
+			if tc.wantErr == "" && err != nil {
+				t.Fatalf("expected nil, got %v", err)
+			}
+			if tc.wantErr != "" && (err == nil || err.Error() != tc.wantErr) {
+				t.Fatalf("expected error %q, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
 func TestChatProxyStreamRecordsFirstTokenLatencyAndClientAbortEvent(t *testing.T) {
 	t.Parallel()
 

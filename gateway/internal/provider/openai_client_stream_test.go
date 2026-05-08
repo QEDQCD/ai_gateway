@@ -3,6 +3,7 @@ package provider
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -247,4 +248,225 @@ func TestOpenAIClientStreamCompleteDoesNotTriggerFirstTokenForRoleOrUsageOnlyChu
 	if got := result.Response.Choices[0].Message.Content; got != "" {
 		t.Fatalf("expected empty content, got %q", got)
 	}
+}
+
+func TestOpenAIClientStreamCompleteTreatsReasoningOnlyChunkAsFirstToken(t *testing.T) {
+	t.Parallel()
+
+	providerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Fatal("expected response writer to implement http.Flusher")
+		}
+
+		_, _ = io.WriteString(w, "data: {\"model\":\"mimo-v2.5-pro\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"},\"reasoning_content\":\"思考中\"}]}\n\n")
+		flusher.Flush()
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	}))
+	t.Cleanup(providerServer.Close)
+
+	client := NewOpenAIClient(http.DefaultClient)
+	stream, _, err := client.StreamComplete(
+		context.Background(),
+		domain.ProviderTarget{
+			BaseURL: providerServer.URL,
+			APIKey:  "provider-secret-key",
+		},
+		service.ChatRequest{
+			Model:  "mimo-v2.5-pro",
+			Stream: true,
+			Messages: []service.ChatMessage{
+				{Role: "user", Content: "你好"},
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("StreamComplete returned unexpected error: %v", err)
+	}
+
+	firstTokenCallbacks := 0
+	result, err := stream.Run(func([]byte) error { return nil }, func() {
+		firstTokenCallbacks++
+	})
+	if err != nil {
+		t.Fatalf("stream.Run returned unexpected error: %v", err)
+	}
+	if firstTokenCallbacks != 1 {
+		t.Fatalf("expected first token callback once for reasoning chunk, got %d", firstTokenCallbacks)
+	}
+	if !result.SawContentToken {
+		t.Fatal("expected reasoning-only stream to satisfy first token detection")
+	}
+	if got := len(result.Response.Choices); got != 1 {
+		t.Fatalf("expected 1 accumulated choice, got %d", got)
+	}
+	if got := result.Response.Choices[0].Message.Content; got != "" {
+		t.Fatalf("expected reasoning text not to be mixed into assistant content, got %q", got)
+	}
+}
+
+func TestOpenAIClientCompleteFallsBackToReasoningContentWhenContentIsEmpty(t *testing.T) {
+	t.Parallel()
+
+	providerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"model":"deepseek-r1-distill-qwen-7b","usage":{"prompt_tokens":10,"completion_tokens":32,"total_tokens":42},"choices":[{"message":{"role":"assistant","content":"","reasoning_content":"你好。"}}]}`)
+	}))
+	t.Cleanup(providerServer.Close)
+
+	client := NewOpenAIClient(http.DefaultClient)
+	resp, statusCode, err := client.Complete(
+		context.Background(),
+		domain.ProviderTarget{
+			BaseURL: providerServer.URL,
+			APIKey:  "provider-secret-key",
+		},
+		service.ChatRequest{
+			Model: "deepseek-r1-distill-qwen-7b",
+			Messages: []service.ChatMessage{
+				{Role: "user", Content: "你好"},
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("Complete returned unexpected error: %v", err)
+	}
+	if statusCode != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", statusCode)
+	}
+	if got := resp.Choices[0].Message.Content; got != "你好。" {
+		t.Fatalf("expected fallback content %q, got %q", "你好。", got)
+	}
+}
+
+func TestOpenAIClientStreamCompleteFallsBackToReasoningContentWhenContentIsEmpty(t *testing.T) {
+	t.Parallel()
+
+	providerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Fatal("expected response writer to implement http.Flusher")
+		}
+
+		_, _ = io.WriteString(w, "data: {\"model\":\"deepseek-r1-distill-qwen-7b\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\",\"reasoning_content\":\"你\"}}]}\n\n")
+		flusher.Flush()
+		_, _ = io.WriteString(w, "data: {\"model\":\"deepseek-r1-distill-qwen-7b\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"\",\"reasoning_content\":\"好\"}}]}\n\n")
+		flusher.Flush()
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	}))
+	t.Cleanup(providerServer.Close)
+
+	client := NewOpenAIClient(http.DefaultClient)
+	stream, _, err := client.StreamComplete(
+		context.Background(),
+		domain.ProviderTarget{
+			BaseURL: providerServer.URL,
+			APIKey:  "provider-secret-key",
+		},
+		service.ChatRequest{
+			Model:  "deepseek-r1-distill-qwen-7b",
+			Stream: true,
+			Messages: []service.ChatMessage{
+				{Role: "user", Content: "你好"},
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("StreamComplete returned unexpected error: %v", err)
+	}
+
+	result, err := stream.Run(func([]byte) error { return nil }, nil)
+	if err != nil {
+		t.Fatalf("stream.Run returned unexpected error: %v", err)
+	}
+	if got := result.Response.Choices[0].Message.Content; got != "你好" {
+		t.Fatalf("expected fallback content %q, got %q", "你好", got)
+	}
+}
+
+func TestOpenAIClientStreamCompletePreservesReasoningContentInForwardedChunks(t *testing.T) {
+	t.Parallel()
+
+	providerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Fatal("expected response writer to implement http.Flusher")
+		}
+
+		_, _ = io.WriteString(w, "data: {\"model\":\"deepseek-r1-distill-qwen-7b\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\",\"reasoning_content\":\"你好\"}}]}\n\n")
+		flusher.Flush()
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	}))
+	t.Cleanup(providerServer.Close)
+
+	client := NewOpenAIClient(http.DefaultClient)
+	stream, _, err := client.StreamComplete(
+		context.Background(),
+		domain.ProviderTarget{
+			BaseURL: providerServer.URL,
+			APIKey:  "provider-secret-key",
+		},
+		service.ChatRequest{
+			Model:  "deepseek-r1-distill-qwen-7b",
+			Stream: true,
+			Messages: []service.ChatMessage{
+				{Role: "user", Content: "你好"},
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("StreamComplete returned unexpected error: %v", err)
+	}
+
+	var chunks bytes.Buffer
+	_, err = stream.Run(func(chunk []byte) error {
+		_, writeErr := chunks.Write(chunk)
+		return writeErr
+	}, nil)
+	if err != nil {
+		t.Fatalf("stream.Run returned unexpected error: %v", err)
+	}
+
+	lines := strings.Split(chunks.String(), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "data: {") {
+			continue
+		}
+		payload := strings.TrimPrefix(line, "data: ")
+		var decoded map[string]any
+		if err := json.Unmarshal([]byte(payload), &decoded); err != nil {
+			t.Fatalf("failed to decode forwarded payload: %v", err)
+		}
+		choices, ok := decoded["choices"].([]any)
+		if !ok || len(choices) == 0 {
+			continue
+		}
+		choice, ok := choices[0].(map[string]any)
+		if !ok {
+			continue
+		}
+		delta, ok := choice["delta"].(map[string]any)
+		if !ok {
+			continue
+		}
+		if got, _ := delta["reasoning_content"].(string); got != "你好" {
+			t.Fatalf("expected forwarded reasoning_content %q, got %q", "你好", got)
+		}
+		return
+	}
+	t.Fatal("expected forwarded chunk containing reasoning_content")
 }

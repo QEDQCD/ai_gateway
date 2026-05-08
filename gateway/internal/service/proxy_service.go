@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/example/ai_gateway/gateway/internal/domain"
@@ -28,9 +29,10 @@ type ChatMessage struct {
 }
 
 type ChatRequest struct {
-	Model    string        `json:"model"`
-	Messages []ChatMessage `json:"messages"`
-	Stream   bool          `json:"stream,omitempty"`
+	Model     string        `json:"model"`
+	Messages  []ChatMessage `json:"messages"`
+	Stream    bool          `json:"stream,omitempty"`
+	MaxTokens int           `json:"max_tokens,omitempty"`
 }
 
 type ChatChoice struct {
@@ -145,6 +147,42 @@ func NewUnavailableChatProxyService() ChatProxyService {
 
 func NewUnavailableEmbeddingProxyService() EmbeddingProxyService {
 	return unavailableEmbeddingProxyService{}
+}
+
+func ValidateChatRequest(req ChatRequest) error {
+	if len(req.Messages) == 0 {
+		return fmt.Errorf("messages is required")
+	}
+	for _, message := range req.Messages {
+		if strings.TrimSpace(message.Content) == "" {
+			return fmt.Errorf("message content is required")
+		}
+	}
+	if req.MaxTokens < 0 {
+		return fmt.Errorf("max_tokens must be greater than or equal to 0")
+	}
+	return nil
+}
+
+func ValidateEmbeddingsRequest(req EmbeddingsRequest) error {
+	if strings.TrimSpace(req.Model) == "" {
+		return fmt.Errorf("model is required")
+	}
+	switch value := req.Input.(type) {
+	case string:
+		if strings.TrimSpace(value) == "" {
+			return fmt.Errorf("input is required")
+		}
+	case []any:
+		if len(value) == 0 {
+			return fmt.Errorf("input is required")
+		}
+	default:
+		if req.Input == nil {
+			return fmt.Errorf("input is required")
+		}
+	}
+	return nil
 }
 
 func (s chatProxyService) Complete(ctx context.Context, req ChatRequest, resolved any) (ChatResponse, error) {

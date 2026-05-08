@@ -197,14 +197,15 @@ func SeedDemoData(ctx context.Context, db seedDB, cfg SeedConfig) error {
 			name = excluded.name,
 			status = excluded.status,
 			request_quota_per_day = excluded.request_quota_per_day;`,
-		`insert into tenant_quota_policies (tenant_id, period_type, request_limit, token_limit, effective_from) values
-			('tenant_alpha', 'monthly', 1800000, 24000000, now()),
-			('tenant_beta', 'monthly', 1200000, 16000000, now()),
-			('tenant_gamma', 'monthly', 900000, 12000000, now())
+		`insert into tenant_quota_policies (tenant_id, period_type, request_limit, token_limit, cost_limit_microyuan, effective_from) values
+			('tenant_alpha', 'monthly', 1800000, 24000000, 10000000000, now()),
+			('tenant_beta', 'monthly', 1200000, 16000000, 10000000000, now()),
+			('tenant_gamma', 'monthly', 900000, 12000000, 10000000000, now())
 		on conflict (tenant_id) do update set
 			period_type = excluded.period_type,
 			request_limit = excluded.request_limit,
 			token_limit = excluded.token_limit,
+			cost_limit_microyuan = excluded.cost_limit_microyuan,
 			effective_from = excluded.effective_from,
 			updated_at = now();`,
 		`insert into tenant_quota_usage_periods (tenant_id, period_start, period_end, requests_used, tokens_used, last_aggregated_at) values
@@ -388,37 +389,14 @@ func SeedDemoData(ctx context.Context, db seedDB, cfg SeedConfig) error {
 
 func PruneSeededDisplayData(ctx context.Context, db seedDB) error {
 	statements := []string{
-		`delete from llm_usage_agg_hourly where platform_api_key_id in ('pak_live_console', 'pak_batch_worker');`,
-		`delete from llm_request_events where tenant_id in ('tenant_alpha', 'tenant_beta', 'tenant_gamma');`,
-		`delete from llm_request_logs where platform_api_key_id in ('pak_live_console', 'pak_batch_worker');`,
-		`delete from playground_runs where platform_api_key_id in ('pak_live_console', 'pak_batch_worker');`,
-		`delete from audit_logs where platform_api_key_id in ('pak_live_console', 'pak_batch_worker');`,
-		`delete from operational_alerts where scope in ('tenant_beta', 'rag-service', 'qwen-flash', 'gpt-4o-mini');`,
-		`delete from audit_events where detail in ('seed approve', 'seed key create', 'seed quota warning');`,
-		`delete from account_applications where id in ('app_alpha_approved', 'app_alpha_rejected');`,
+		`delete from llm_usage_agg_hourly where tenant_id = 'tenant_demo' and platform_api_key_id = 'pak_demo';`,
+		`delete from llm_request_events where tenant_id = 'tenant_demo';`,
+		`delete from llm_request_logs where tenant_id = 'tenant_demo' and platform_api_key_id = 'pak_demo';`,
+		`delete from tenant_usage_ledger where tenant_id = 'tenant_demo';`,
+		`delete from account_applications where id in ('app_demo_approved', 'app_demo_rejected');`,
+		`delete from audit_events where id in ('audit_evt_tenant_demo_001', 'audit_evt_tenant_demo_002', 'audit_evt_tenant_demo_003');`,
 		`
-		with usage_rollup as (
-			select
-				q.tenant_id,
-				q.period_start,
-				count(l.id)::integer as requests_used,
-				coalesce(sum(l.total_tokens), 0)::integer as tokens_used
-			from tenant_quota_usage_periods q
-			left join llm_request_logs l
-				on l.tenant_id = q.tenant_id
-				and l.request_started_at >= q.period_start
-				and l.request_started_at < q.period_end
-			where q.tenant_id in ('tenant_alpha', 'tenant_beta', 'tenant_gamma')
-			group by q.tenant_id, q.period_start
-		)
-		update tenant_quota_usage_periods as q
-		set
-			requests_used = usage_rollup.requests_used,
-			tokens_used = usage_rollup.tokens_used,
-			last_aggregated_at = now()
-		from usage_rollup
-		where q.tenant_id = usage_rollup.tenant_id
-		  and q.period_start = usage_rollup.period_start;
+		delete from tenant_quota_usage_periods where tenant_id = 'tenant_demo';
 		`,
 	}
 
@@ -575,12 +553,13 @@ func RuntimeSeedStatements() []string {
 		on conflict (id) do nothing;
 		`,
 		`
-		insert into tenant_quota_policies (tenant_id, period_type, request_limit, token_limit, effective_from)
-		values ('tenant_demo', 'monthly', 500000, 10000000, now())
+		insert into tenant_quota_policies (tenant_id, period_type, request_limit, token_limit, cost_limit_microyuan, effective_from)
+		values ('tenant_demo', 'monthly', 500000, 10000000, 10000000000, now())
 		on conflict (tenant_id) do update set
 			period_type = excluded.period_type,
 			request_limit = excluded.request_limit,
 			token_limit = excluded.token_limit,
+			cost_limit_microyuan = excluded.cost_limit_microyuan,
 			effective_from = excluded.effective_from,
 			updated_at = now();
 		`,

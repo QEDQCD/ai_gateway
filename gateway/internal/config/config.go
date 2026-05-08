@@ -5,6 +5,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/example/ai_gateway/gateway/internal/secret"
 )
@@ -58,6 +59,11 @@ type Config struct {
 	ChatReasoningModel               string
 	SmartRoutingCodingKeywords       []string
 	SmartRoutingLongPromptThreshold  int
+	ModelHealthcheckEnabled          bool
+	ModelHealthcheckInterval         time.Duration
+	ModelHealthcheckTimeout          time.Duration
+	ModelHealthcheckPrompt           string
+	ModelHealthcheckMaxTokens        int
 	ModelTokenPricing                map[string]ModelTokenPrice
 }
 
@@ -76,6 +82,10 @@ func Load() Config {
 	bootstrapProviderBaseURL := defaultString(lookupEnv("GATEWAY_BOOTSTRAP_PROVIDER_BASE_URL"), defaultProviderBaseURL(bootstrapProvider))
 	seedProviderBaseURL := defaultString(lookupEnv("GATEWAY_SEED_PROVIDER_BASE_URL"), bootstrapProviderBaseURL)
 	modelTokenPricing := loadModelTokenPricing()
+	modelHealthcheckMaxTokens := int(lookupInt64Env("GATEWAY_MODEL_HEALTHCHECK_MAX_TOKENS", 1))
+	if modelHealthcheckMaxTokens <= 0 {
+		panic("config: GATEWAY_MODEL_HEALTHCHECK_MAX_TOKENS must be > 0")
+	}
 
 	return Config{
 		ListenAddr:                       listenAddr,
@@ -116,6 +126,11 @@ func Load() Config {
 		ChatReasoningModel:               defaultString(os.Getenv("GATEWAY_CHAT_REASONING_MODEL"), "mimo-v2.5-pro"),
 		SmartRoutingCodingKeywords:       splitCommaSeparatedEnv(defaultString(os.Getenv("GATEWAY_SMART_ROUTING_CODING_KEYWORDS"), "写代码,实现,重构,debug,报错,异常,单元测试,架构设计")),
 		SmartRoutingLongPromptThreshold:  int(lookupInt64Env("GATEWAY_SMART_ROUTING_LONG_PROMPT_THRESHOLD", 240)),
+		ModelHealthcheckEnabled:          lookupBoolEnv("GATEWAY_MODEL_HEALTHCHECK_ENABLED", false),
+		ModelHealthcheckInterval:         lookupDurationEnv("GATEWAY_MODEL_HEALTHCHECK_INTERVAL", time.Hour),
+		ModelHealthcheckTimeout:          lookupDurationEnv("GATEWAY_MODEL_HEALTHCHECK_TIMEOUT", 20*time.Second),
+		ModelHealthcheckPrompt:           defaultString(lookupEnv("GATEWAY_MODEL_HEALTHCHECK_PROMPT"), "你好"),
+		ModelHealthcheckMaxTokens:        modelHealthcheckMaxTokens,
 		ModelTokenPricing:                modelTokenPricing,
 	}
 }
@@ -164,6 +179,35 @@ func lookupInt64Env(name string, fallback int64) int64 {
 	}
 	if parsed < 0 {
 		panic(fmt.Sprintf("config: %s must be >= 0", name))
+	}
+	return parsed
+}
+
+func lookupBoolEnv(name string, fallback bool) bool {
+	value := strings.TrimSpace(lookupEnv(name))
+	if value == "" {
+		return fallback
+	}
+
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		panic(fmt.Sprintf("config: parse %s: %v", name, err))
+	}
+	return parsed
+}
+
+func lookupDurationEnv(name string, fallback time.Duration) time.Duration {
+	value := strings.TrimSpace(lookupEnv(name))
+	if value == "" {
+		return fallback
+	}
+
+	parsed, err := time.ParseDuration(value)
+	if err != nil {
+		panic(fmt.Sprintf("config: parse %s: %v", name, err))
+	}
+	if parsed <= 0 {
+		panic(fmt.Sprintf("config: %s must be > 0", name))
 	}
 	return parsed
 }

@@ -74,6 +74,8 @@ function createUsageOverviewMock(overrides: Record<string, unknown> = {}) {
 function createUsageRequestMock(overrides: Record<string, unknown> = {}) {
   return {
     request_id: "llmreq_demo_001",
+    tenant_id: "tenant_demo",
+    tenant_name: "Demo Tenant",
     tenant: "tenant_demo",
     endpoint: "/v1/chat/completions",
     model: "gpt-4o-mini",
@@ -95,6 +97,41 @@ function createUsageRequestMock(overrides: Record<string, unknown> = {}) {
     input_price: "2.00 ￥/M",
     output_price: "20.00 ￥/M",
     cached_price: "0.50 ￥/M",
+    ...overrides,
+  };
+}
+
+function createUsageRequestDetailMock(overrides: Record<string, unknown> = {}) {
+  return {
+    request_id: "llmreq_demo_001",
+    tenant_id: "tenant_demo",
+    tenant_name: "Demo Tenant",
+    endpoint: "/v1/chat/completions",
+    model: "gpt-4o-mini",
+    resolved_model: "gpt-4o-mini",
+    task_class: "simple_qa",
+    routing_reason: "model:direct",
+    target_model_tier: "gateway-chat-fast",
+    status: "成功",
+    total_tokens: "1,280",
+    input_tokens: "840",
+    output_tokens: "400",
+    cached_tokens: "40",
+    latency: "210 ms",
+    first_token_latency_ms: 68,
+    usage_source: "上游返回",
+    input_cost: "0.08 ￥",
+    output_cost: "0.40 ￥",
+    cached_cost: "0.01 ￥",
+    total_cost: "0.49 ￥",
+    input_price: "2.00 ￥/M",
+    output_price: "20.00 ￥/M",
+    cached_price: "0.50 ￥/M",
+    prompt_excerpt: "用户输入：你好，手机号 138XXXX0000",
+    response_excerpt: "助手输出：你好，请问有什么可以帮你？",
+    error_code: "",
+    error_message: "",
+    failure_events: [],
     ...overrides,
   };
 }
@@ -134,12 +171,35 @@ function mockFetch(responses: MockResponseMap, requestAssertions: MockRequestAss
     const url = typeof input === "string" ? input : input.toString();
     requestAssertions[url]?.(init);
     const responseKey =
-      url === "/api/admin/usage/overview?window=24h" && "/api/admin/usage/overview" in responses
+      (url === "/api/admin/usage/overview?window=24h" || url === "/api/admin/usage/overview?window=7d") &&
+      "/api/admin/usage/overview" in responses
         ? "/api/admin/usage/overview"
-        : url === "/api/admin/usage/trends?window=24h" && "/api/admin/usage/trends" in responses
+        : url === "/api/admin/usage/overview?window=7d" &&
+            "/api/admin/usage/overview?window=24h" in responses
+          ? "/api/admin/usage/overview?window=24h"
+        : (url === "/api/admin/usage/trends?window=24h" || url === "/api/admin/usage/trends?window=7d") &&
+            "/api/admin/usage/trends" in responses
           ? "/api/admin/usage/trends"
-          : url === "/api/admin/usage/failures?window=24h" && "/api/admin/usage/failures" in responses
+          : url === "/api/admin/usage/trends?window=7d" &&
+              "/api/admin/usage/trends?window=24h" in responses
+            ? "/api/admin/usage/trends?window=24h"
+          : (url === "/api/admin/usage/failures?window=24h" || url === "/api/admin/usage/failures?window=7d") &&
+              "/api/admin/usage/failures" in responses
             ? "/api/admin/usage/failures"
+            : url === "/api/admin/usage/failures?window=7d" &&
+                "/api/admin/usage/failures?window=24h" in responses
+              ? "/api/admin/usage/failures?window=24h"
+            : url === "/api/admin/usage/latency-wall?window=7d" &&
+                "/api/admin/usage/latency-wall?window=24h" in responses
+              ? "/api/admin/usage/latency-wall?window=24h"
+            : (url === "/api/admin/usage/requests?limit=20&offset=0&window=7d" ||
+                url === "/api/admin/usage/requests?limit=20&offset=20&window=7d") &&
+                url.replace("&window=7d", "") in responses
+              ? url.replace("&window=7d", "")
+            : url.includes("/api/admin/usage/requests?") &&
+                url.includes("&window=7d") &&
+                url.replace("&window=7d", "") in responses
+              ? url.replace("&window=7d", "")
             : url;
 
     if (!(responseKey in responses)) {
@@ -483,7 +543,7 @@ describe("控制台路由", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  test("admin session 渲染 admin navigation", async () => {
+  test("admin 左侧导航移除账单入口且保留隐藏新建模型入口", async () => {
     mockSession({ role: "admin" });
     mockFetch({
       "/api/admin/system/status": defaultSystemStatus(),
@@ -496,8 +556,17 @@ describe("控制台路由", () => {
       />,
     );
 
-    expect(await screen.findByRole("link", { name: "账号申请" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { level: 1, name: "账号申请" })).toBeInTheDocument();
+
+    const navigation = screen.getByRole("navigation");
+    const links = within(navigation).getAllByRole("link");
+    expect(links[0]).toHaveTextContent("总览");
+    expect(within(navigation).queryByRole("link", { name: "账单" })).not.toBeInTheDocument();
+    expect(within(navigation).queryByRole("link", { name: "新建模型" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "账号申请" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "租户管理" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "后台模型" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "健康检查" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "路由" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "调试场" })).not.toBeInTheDocument();
   });
@@ -1460,6 +1529,7 @@ describe("控制台路由", () => {
           comment: "通过控制台审批",
           tenant_id: "tenant_demo",
           token_limit: 10000000,
+          cost_limit_microyuan: 10000000000,
           allowed_models: ["qwen-flash", "mimo-v2.5-pro"],
         });
 
@@ -1493,6 +1563,7 @@ describe("控制台路由", () => {
     fireEvent.click(screen.getByRole("button", { name: "选择 待审批用户" }));
     fireEvent.change(screen.getByLabelText("租户 ID"), { target: { value: "tenant_demo" } });
     fireEvent.change(screen.getByLabelText("Token 上限"), { target: { value: "10000000" } });
+    expect(screen.getByLabelText("月度金额上限（￥）")).toHaveValue(10000);
     fireEvent.click(screen.getByRole("button", { name: "审批通过" }));
 
     expect(await screen.findByText("审批已完成")).toBeInTheDocument();
@@ -1776,6 +1847,7 @@ describe("控制台路由", () => {
           comment: "通过控制台审批",
           tenant_id: "tenant_alice",
           token_limit: 10000000,
+          cost_limit_microyuan: 10000000000,
           allowed_models: ["qwen-flash", "mimo-v2.5-pro"],
         });
 
@@ -1882,6 +1954,7 @@ describe("控制台路由", () => {
           comment: "通过控制台审批",
           tenant_id: "tenant_alice",
           token_limit: 10000000,
+          cost_limit_microyuan: 10000000000,
           allowed_models: ["qwen-flash", "mimo-v2.5-pro"],
         });
 
@@ -1933,7 +2006,7 @@ describe("控制台路由", () => {
     expect(screen.getByLabelText("审批备注")).toHaveValue("通过控制台审批");
   });
 
-  test("租户管理页聚合 overview、api-keys 和 usage overview 数据", async () => {
+  test("租户管理页聚合 overview、api-keys 和 usage overview 数据且默认空态不请求账单", async () => {
     const fetchMock = mockFetch({
       "/api/admin/overview": {
         stats: [
@@ -1994,9 +2067,13 @@ describe("控制台路由", () => {
     expect(screen.getByText("320 万")).toBeInTheDocument();
     expect(screen.getAllByText("6.20 万￥").length).toBeGreaterThan(0);
     expect(screen.getAllByText("gpt-4o-mini").length).toBeGreaterThan(0);
+    expect(screen.getByText("请在租户列表中点击“查看账单”以加载租户账单详情。")).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith("/api/admin/overview");
     expect(fetchMock).toHaveBeenCalledWith("/api/admin/api-keys");
     expect(fetchMock).toHaveBeenCalledWith("/api/admin/usage/overview?window=24h");
+    expect(fetchMock.mock.calls.map(([input]) => String(input))).not.toContain(
+      "/api/admin/billing/tenant?tenant_id=tenant_alpha&month=2026-04",
+    );
   });
 
   test("member 总览页使用 /me/overview 数据", async () => {
@@ -2631,6 +2708,829 @@ describe("控制台路由", () => {
     expect(fetchMock).toHaveBeenCalledWith("/api/admin/audit");
   });
 
+  test("后台模型页请求 /api/admin/provider-models 并展示新建模型按钮", async () => {
+    const fetchMock = mockFetch({
+      "/api/admin/provider-models": {
+        providers: [
+          {
+            id: "provider_dashscope_primary",
+            provider: "qwen",
+            display_name: "Qwen 主线路",
+            supported_models: ["qwen-flash"],
+            credential_mode: "static_key",
+            secret_ref: "vault://qwen/primary",
+            status: "active",
+          },
+        ],
+        models: [
+          {
+            requested_model: "qwen-flash",
+            provider: "qwen",
+            provider_credential_id: "provider_dashscope_primary",
+            route_label: "Qwen 主线路",
+            health_status: "healthy",
+            latency_ms: 218,
+            request_mode: "聊天",
+          },
+        ],
+      },
+    });
+
+    renderRoute("/provider-models");
+
+    expect(await screen.findByRole("heading", { level: 1, name: "后台模型" })).toBeInTheDocument();
+    expect(screen.getAllByText("Qwen 主线路").length).toBeGreaterThan(0);
+    expect(screen.getByText("qwen-flash")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Provider 标识")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "创建 Provider" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "新建模型" })).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith("/api/admin/provider-models");
+  });
+
+  test("后台模型页点击新建模型后打开弹窗并展示创建上游供应商区域", async () => {
+    let providerModelsGetCount = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url === "/api/admin/system/status") {
+        return new Response(JSON.stringify(defaultSystemStatus()), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url === "/api/admin/provider-models" && (!init?.method || init.method === "GET")) {
+        providerModelsGetCount += 1;
+        return new Response(
+          JSON.stringify({
+            providers: [],
+            models: [],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+      throw new Error(`Unexpected fetch url: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderRoute("/provider-models");
+
+    expect(await screen.findByRole("heading", { level: 1, name: "后台模型" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "新建模型" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "新建模型" });
+    expect(within(dialog).getByRole("heading", { level: 2, name: "创建上游供应商" })).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "创建上游供应商" })).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "关闭" })).toHaveFocus();
+    expect(providerModelsGetCount).toBe(1);
+  });
+
+  test("后台模型页新建模型弹窗支持 Escape 关闭", async () => {
+    mockFetch({
+      "/api/admin/provider-models": {
+        providers: [],
+        models: [],
+      },
+    });
+
+    renderRoute("/provider-models");
+
+    expect(await screen.findByRole("heading", { level: 1, name: "后台模型" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "新建模型" }));
+    expect(await screen.findByRole("dialog", { name: "新建模型" })).toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "新建模型" })).not.toBeInTheDocument();
+    });
+  });
+
+  test("后台模型页创建模型成功后关闭弹窗并刷新列表", async () => {
+    let providerPayload: Record<string, unknown> | null = null;
+    let modelPayload: Record<string, unknown> | null = null;
+    let providerModelsGetCount = 0;
+    const providerModelsResponse = {
+      providers: [] as Array<Record<string, unknown>>,
+      models: [] as Array<Record<string, unknown>>,
+    };
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url === "/api/admin/system/status") {
+        return new Response(JSON.stringify(defaultSystemStatus()), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url === "/api/admin/provider-models" && (!init?.method || init.method === "GET")) {
+        providerModelsGetCount += 1;
+        return new Response(JSON.stringify(providerModelsResponse), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url === "/api/admin/providers" && init?.method === "POST") {
+        providerPayload = JSON.parse(String(init.body));
+        providerModelsResponse.providers = [
+          {
+            id: "provider_dashscope_primary",
+            provider: "qwen",
+            display_name: "Qwen 主线路",
+            supported_models: ["qwen-flash"],
+            credential_mode: "secret_ref",
+            secret_ref: "TEST_QWEN_PROVIDER_SECRET",
+            status: "active",
+          },
+        ];
+        return new Response(JSON.stringify({ item: providerModelsResponse.providers[0] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url === "/api/admin/provider-models" && init?.method === "POST") {
+        modelPayload = JSON.parse(String(init.body));
+        providerModelsResponse.models = [
+          {
+            id: "route:provider_dashscope_primary:qwen-flash",
+            requested_model: "qwen-flash",
+            provider: "qwen",
+            provider_credential_id: "provider_dashscope_primary",
+            route_label: "Qwen 主线路",
+            health_status: "healthy",
+            latency_ms: 218,
+            request_mode: "聊天",
+          },
+        ];
+        return new Response(JSON.stringify({ item: providerModelsResponse.models[0] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      throw new Error(`Unexpected fetch url: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderRoute("/provider-models");
+
+    expect(await screen.findByRole("heading", { level: 1, name: "后台模型" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "新建模型" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "新建模型" });
+    fireEvent.change(within(dialog).getByLabelText("供应商标识"), {
+      target: { value: "dashscope" },
+    });
+    fireEvent.change(within(dialog).getByLabelText("上游名称"), {
+      target: { value: "Qwen 主线路" },
+    });
+    fireEvent.change(within(dialog).getByLabelText("Base URL"), {
+      target: { value: "https://dashscope.aliyuncs.com/compatible-mode/v1" },
+    });
+    fireEvent.change(within(dialog).getByLabelText(/^密钥引用/), {
+      target: { value: "TEST_QWEN_PROVIDER_SECRET" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "创建上游供应商" }));
+
+    await waitFor(() => {
+      expect(providerPayload).toEqual({
+        provider: "dashscope",
+        display_name: "Qwen 主线路",
+        base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        credential_mode: "secret_ref",
+        secret_ref: "TEST_QWEN_PROVIDER_SECRET",
+        api_key: "",
+      });
+    });
+
+    fireEvent.change(within(dialog).getByLabelText("请求模型"), {
+      target: { value: "qwen-flash" },
+    });
+    fireEvent.change(within(dialog).getByLabelText("上游供应商凭证"), {
+      target: { value: "provider_dashscope_primary" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "创建模型" }));
+
+    await waitFor(() => {
+      expect(modelPayload).toEqual({
+        requested_model: "qwen-flash",
+        provider_credential_id: "provider_dashscope_primary",
+        request_mode: "聊天",
+        healthcheck_enabled: false,
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "新建模型" })).not.toBeInTheDocument();
+    });
+    expect(screen.getByText("qwen-flash")).toBeInTheDocument();
+    expect(providerModelsGetCount).toBe(2);
+  });
+
+  test("租户管理页点击查看账单后请求租户账单详情", async () => {
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: scrollIntoView,
+    });
+
+    const fetchMock = mockFetch(
+      {
+        "/api/admin/overview": createAdminOverviewMock(),
+        "/api/admin/api-keys": {
+          items: [
+            {
+              id: "key_demo_1",
+              name: "tenant_demo_key",
+              tenant: "tenant_demo",
+              status: "启用",
+              scopes: ["chat"],
+              last_used_at: "1 分钟前",
+            },
+          ],
+          credential_mode: "平台密钥与上游凭证分离管理。",
+        },
+        "/api/admin/usage/overview": createUsageOverviewMock(),
+        "/api/admin/billing/tenant?tenant_id=tenant_demo&month=2026-04": {
+          summary: {
+            tenant_id: "tenant_demo",
+            month: "2026-04",
+            request_count: 12,
+            success_count: 10,
+            failure_count: 2,
+            input_tokens: 1500,
+            output_tokens: 600,
+            cached_tokens: 80,
+            total_tokens: 2180,
+            input_cost: "0.18 ￥",
+            output_cost: "0.36 ￥",
+            cached_cost: "0.02 ￥",
+            total_cost: "0.56 ￥",
+          },
+          providers: [
+            {
+              provider_credential_id: "provider_qwen_primary",
+              provider: "qwen",
+              display_name: "Qwen 主线路",
+              request_count: 2,
+              success_count: 1,
+              failure_count: 1,
+              total_tokens: 820,
+              total_cost: "0.10 ￥",
+            },
+          ],
+          models: [
+            {
+              model: "qwen-flash",
+              provider_credential_id: "provider_qwen_primary",
+              provider_display_name: "Qwen 主线路",
+              request_count: 2,
+              success_count: 1,
+              failure_count: 1,
+              total_tokens: 820,
+              total_cost: "0.10 ￥",
+            },
+          ],
+          api_keys: [
+            {
+              platform_api_key_id: "pak_demo",
+              name: "Demo Key",
+              request_count: 2,
+              success_count: 1,
+              failure_count: 1,
+              total_tokens: 820,
+              total_cost: "0.10 ￥",
+            },
+          ],
+        },
+      },
+      {
+        "/api/admin/billing/tenant?tenant_id=tenant_demo&month=2026-04": (init) => {
+          expect(init).toBeUndefined();
+        },
+      },
+    );
+
+    renderRoute("/tenants?month=2026-04");
+
+    expect(await screen.findByRole("heading", { level: 1, name: "租户管理" })).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "查看账单 tenant_demo" }));
+    expect(await screen.findByRole("heading", { level: 2, name: "租户账单详情" })).toBeInTheDocument();
+    expect(screen.getByDisplayValue("tenant_demo")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("2026-04")).toBeInTheDocument();
+    expect(screen.getByText("0.56 ￥")).toBeInTheDocument();
+    expect(screen.getAllByText("Qwen 主线路").length).toBeGreaterThan(0);
+    expect(screen.getByText("Demo Key")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith("/api/admin/billing/tenant?tenant_id=tenant_demo&month=2026-04");
+    await waitFor(() => {
+      expect(scrollIntoView).toHaveBeenCalled();
+    });
+  });
+
+  test("租户管理页支持 tenant/month 查询参数恢复账单详情", async () => {
+    const fetchMock = mockFetch({
+      "/api/admin/overview": createAdminOverviewMock(),
+      "/api/admin/api-keys": {
+        items: [
+          {
+            id: "key_demo_1",
+            name: "tenant_demo_key",
+            tenant: "tenant_demo",
+            status: "启用",
+            scopes: ["chat"],
+            last_used_at: "1 分钟前",
+          },
+        ],
+        credential_mode: "平台密钥与上游凭证分离管理。",
+      },
+      "/api/admin/usage/overview": createUsageOverviewMock(),
+      "/api/admin/billing/tenant?tenant_id=tenant_demo&month=2026-04": {
+        summary: {
+          tenant_id: "tenant_demo",
+          month: "2026-04",
+          request_count: 12,
+          success_count: 10,
+          failure_count: 2,
+          input_tokens: 1500,
+          output_tokens: 600,
+          cached_tokens: 80,
+          total_tokens: 2180,
+          input_cost: "0.18 ￥",
+          output_cost: "0.36 ￥",
+          cached_cost: "0.02 ￥",
+          total_cost: "0.56 ￥",
+        },
+        providers: [],
+        models: [],
+        api_keys: [],
+      },
+    });
+
+    renderRoute("/tenants?tenant=tenant_demo&month=2026-04");
+
+    expect(await screen.findByRole("heading", { level: 2, name: "租户账单详情" })).toBeInTheDocument();
+    expect(screen.getByDisplayValue("tenant_demo")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("2026-04")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith("/api/admin/billing/tenant?tenant_id=tenant_demo&month=2026-04");
+  });
+
+  test("租户管理页在已选中同一租户时再次点击查看账单也会滚动到账单区", async () => {
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: scrollIntoView,
+    });
+
+    mockFetch({
+      "/api/admin/overview": createAdminOverviewMock(),
+      "/api/admin/api-keys": {
+        items: [
+          {
+            id: "key_demo_1",
+            name: "tenant_demo_key",
+            tenant: "tenant_demo",
+            status: "启用",
+            scopes: ["chat"],
+            last_used_at: "1 分钟前",
+          },
+        ],
+        credential_mode: "平台密钥与上游凭证分离管理。",
+      },
+      "/api/admin/usage/overview": createUsageOverviewMock(),
+      "/api/admin/billing/tenant?tenant_id=tenant_demo&month=2026-04": {
+        summary: {
+          tenant_id: "tenant_demo",
+          month: "2026-04",
+          request_count: 12,
+          success_count: 10,
+          failure_count: 2,
+          input_tokens: 1500,
+          output_tokens: 600,
+          cached_tokens: 80,
+          total_tokens: 2180,
+          input_cost: "0.18 ￥",
+          output_cost: "0.36 ￥",
+          cached_cost: "0.02 ￥",
+          total_cost: "0.56 ￥",
+        },
+        providers: [],
+        models: [],
+        api_keys: [],
+      },
+    });
+
+    renderRoute("/tenants?tenant=tenant_demo&month=2026-04");
+
+    expect(await screen.findByRole("heading", { level: 2, name: "租户账单详情" })).toBeInTheDocument();
+    scrollIntoView.mockClear();
+
+    fireEvent.click(screen.getByRole("button", { name: "查看账单 tenant_demo" }));
+
+    await waitFor(() => {
+      expect(scrollIntoView).toHaveBeenCalled();
+    });
+  });
+
+  test("账单路径并入租户管理后 /billing 深链迁移到租户管理账单详情", async () => {
+    const fetchMock = mockFetch({
+      "/api/admin/overview": createAdminOverviewMock(),
+      "/api/admin/api-keys": {
+        items: [
+          {
+            id: "key_demo_1",
+            name: "tenant_demo_key",
+            tenant: "tenant_demo",
+            status: "启用",
+            scopes: ["chat"],
+            last_used_at: "1 分钟前",
+          },
+        ],
+        credential_mode: "平台密钥与上游凭证分离管理。",
+      },
+      "/api/admin/usage/overview": createUsageOverviewMock(),
+      "/api/admin/billing/tenant?tenant_id=tenant_demo&month=2026-04": {
+        summary: {
+          tenant_id: "tenant_demo",
+          month: "2026-04",
+          request_count: 12,
+          success_count: 10,
+          failure_count: 2,
+          input_tokens: 1500,
+          output_tokens: 600,
+          cached_tokens: 80,
+          total_tokens: 2180,
+          input_cost: "0.18 ￥",
+          output_cost: "0.36 ￥",
+          cached_cost: "0.02 ￥",
+          total_cost: "0.56 ￥",
+        },
+        providers: [],
+        models: [],
+        api_keys: [],
+      },
+    });
+
+    renderRoute("/billing?tenant=tenant_demo&month=2026-04");
+
+    expect(await screen.findByRole("heading", { level: 1, name: "租户管理" })).toBeInTheDocument();
+    expect(screen.getByDisplayValue("tenant_demo")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("2026-04")).toBeInTheDocument();
+    expect(screen.getByText("0.56 ￥")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith("/api/admin/billing/tenant?tenant_id=tenant_demo&month=2026-04");
+  });
+
+  test("健康检查页默认展示 24h 健康墙并请求对应窗口", async () => {
+    const fetchMock = mockFetch({
+      "/api/admin/model-health?window=24h": {
+        items: [
+          {
+            id: "route:provider_dashscope_primary:qwen-flash",
+            requested_model: "qwen-flash",
+            provider_credential_id: "provider_dashscope_primary",
+            route_label: "Qwen 主线路",
+            health_status: "healthy",
+            last_health_error: "",
+            request_mode: "聊天",
+            latency_ms: 218,
+            first_token_latency_ms: 82,
+            last_health_checked_at: "2026-05-06T12:00:00+08:00",
+          },
+        ],
+        wall: {
+          window: "24h",
+          window_label: "最近 24 小时",
+          buckets: ["00:00", "02:00"],
+          lanes: [
+            {
+              model: "qwen-flash",
+              route_label: "Qwen 主线路",
+              success_rate: "100%",
+              average_latency: "210 ms",
+              cells: [
+                { bucket_label: "00:00", status: "健康", latency: "218 ms", requests: "1 次" },
+                { bucket_label: "02:00", status: "空窗", latency: "--", requests: "0 次" },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    renderRoute("/model-health");
+
+    expect(await screen.findByRole("heading", { level: 1, name: "健康检查" })).toBeInTheDocument();
+    expect(screen.getByText("模型健康墙")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "最近 24 小时" })).toHaveClass("button-shell--primary");
+    expect(screen.getByText("00:00")).toBeInTheDocument();
+    expect(screen.getAllByText("qwen-flash").length).toBeGreaterThan(0);
+    expect(screen.getByText("82 ms")).toBeInTheDocument();
+    expect(screen.getByText("2026-05-06T12:00:00+08:00")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith("/api/admin/model-health?window=24h");
+  });
+
+  test("健康检查页支持切换 7d 时间窗口", async () => {
+    const fetchMock = mockFetch({
+      "/api/admin/model-health?window=24h": {
+        items: [],
+        wall: {
+          window: "24h",
+          window_label: "最近 24 小时",
+          buckets: ["00:00"],
+          lanes: [],
+        },
+      },
+      "/api/admin/model-health?window=7d": {
+        items: [],
+        wall: {
+          window: "7d",
+          window_label: "最近 7 天",
+          buckets: ["05-01", "05-02"],
+          lanes: [
+            {
+              model: "mimo",
+              route_label: "Mimo 主线路",
+              success_rate: "50%",
+              average_latency: "800 ms",
+              cells: [
+                { bucket_label: "05-01", status: "降级", latency: "1200 ms", requests: "2 次" },
+                { bucket_label: "05-02", status: "健康", latency: "400 ms", requests: "2 次" },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    renderRoute("/model-health");
+
+    expect(await screen.findByRole("heading", { level: 1, name: "健康检查" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "最近 7 天" }));
+
+    expect(await screen.findByText("05-01")).toBeInTheDocument();
+    expect(screen.getAllByText("降级").length).toBeGreaterThan(0);
+    expect(fetchMock).toHaveBeenCalledWith("/api/admin/model-health?window=7d");
+  });
+
+  test("健康检查页图例中的降级标签使用 warning 样式", async () => {
+    mockFetch({
+      "/api/admin/model-health?window=24h": {
+        items: [],
+        wall: {
+          window: "24h",
+          window_label: "最近 24 小时",
+          buckets: ["00:00"],
+          lanes: [
+            {
+              model: "qwen2.5-1.5b-instruct",
+              route_label: "Qwen 主线路",
+              success_rate: "0%",
+              average_latency: "--",
+              cells: [{ bucket_label: "00:00", status: "降级", latency: "--", requests: "1 次" }],
+            },
+          ],
+        },
+      },
+    });
+
+    renderRoute("/model-health");
+
+    expect(await screen.findByRole("heading", { level: 1, name: "健康检查" })).toBeInTheDocument();
+    const degradedLegend = screen
+      .getAllByText("降级")
+      .map((node) => node.closest(".status-pill"))
+      .find((node) => node !== null);
+    expect(degradedLegend).toHaveClass("status-pill--warning");
+  });
+
+  test("健康检查页手动探活请求会对 provider model id 做 URL 编码", async () => {
+    const encodedID = encodeURIComponent("route:provider_dashscope_primary:folder/model v1");
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+
+      if (url === "/api/admin/model-health?window=24h") {
+        return new Response(
+          JSON.stringify({
+            items: [
+              {
+                id: "route:provider_dashscope_primary:folder/model v1",
+                requested_model: "folder/model v1",
+                provider_credential_id: "provider_dashscope_primary",
+                route_label: "Qwen 主线路",
+                health_status: "degraded",
+                last_health_error: "timeout",
+                request_mode: "聊天",
+                latency_ms: 0,
+                first_token_latency_ms: 0,
+                last_health_checked_at: "2026-05-06T12:00:00+08:00",
+              },
+            ],
+            wall: {
+              window: "24h",
+              window_label: "最近 24 小时",
+              buckets: [],
+              lanes: [],
+            },
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+
+      if (url === `/api/admin/provider-models/${encodedID}/health-check` && init?.method === "POST") {
+        return new Response(
+          JSON.stringify({
+            item: {
+              id: "route:provider_dashscope_primary:folder/model v1",
+              requested_model: "folder/model v1",
+              provider: "qwen",
+              provider_credential_id: "provider_dashscope_primary",
+              route_label: "Qwen 主线路",
+              health_status: "healthy",
+              latency_ms: 120,
+              request_mode: "聊天",
+            },
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+
+      throw new Error(`Unexpected fetch url: ${url}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { runProviderModelHealthcheck } = await import("../lib/console-api");
+    await runProviderModelHealthcheck("route:provider_dashscope_primary:folder/model v1");
+
+    expect(fetchMock).toHaveBeenCalledWith(`/api/admin/provider-models/${encodedID}/health-check`, {
+      method: "POST",
+    });
+  });
+
+  test("新建模型页按凭证模式切换密钥输入项", async () => {
+    const fetchMock = mockFetch({
+      "/api/admin/provider-models": {
+        providers: [],
+        models: [],
+      },
+    });
+
+    renderRoute("/provider-model-create");
+
+    expect(await screen.findByRole("heading", { level: 1, name: "新建模型" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 2, name: "创建上游供应商" })).toBeInTheDocument();
+    expect(screen.getByLabelText(/^密钥引用/)).toBeInTheDocument();
+    expect(screen.getByText("填写环境变量名，供服务启动时读取真实密钥。")).toBeInTheDocument();
+    expect(screen.queryByLabelText("API Key")).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("凭证模式"), {
+      target: { value: "encrypted" },
+    });
+
+    expect(screen.getByLabelText("API Key")).toHaveAttribute("type", "password");
+    expect(screen.queryByLabelText(/^密钥引用/)).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith("/api/admin/provider-models");
+  });
+
+  test("新建模型页支持先创建上游供应商再创建模型", async () => {
+    let providerPayload: Record<string, unknown> | null = null;
+    let modelPayload: Record<string, unknown> | null = null;
+    const providerModelsResponse = {
+      providers: [] as Array<Record<string, unknown>>,
+      models: [] as Array<Record<string, unknown>>,
+    };
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url === "/api/admin/system/status") {
+        return new Response(JSON.stringify(defaultSystemStatus()), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url === "/api/admin/provider-models" && (!init?.method || init.method === "GET")) {
+        return new Response(JSON.stringify(providerModelsResponse), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url === "/api/admin/providers" && init?.method === "POST") {
+        providerPayload = JSON.parse(String(init.body));
+        providerModelsResponse.providers = [
+          {
+            id: "provider_dashscope_primary",
+            provider: "qwen",
+            display_name: "Qwen 主线路",
+            supported_models: ["qwen-flash"],
+            credential_mode: "secret_ref",
+            secret_ref: "TEST_QWEN_PROVIDER_SECRET",
+            status: "active",
+          },
+          {
+            id: "provider_internal_search",
+            provider: "internal-search",
+            display_name: "知识服务",
+            supported_models: ["rag-query"],
+            credential_mode: "secret_ref",
+            secret_ref: "TEST_RAG_PROVIDER_SECRET",
+            status: "active",
+          },
+        ];
+        return new Response(JSON.stringify({ item: providerModelsResponse.providers[0] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url === "/api/admin/provider-models" && init?.method === "POST") {
+        modelPayload = JSON.parse(String(init.body));
+        providerModelsResponse.models = [
+          {
+            id: "route:provider_dashscope_primary:qwen-flash",
+            requested_model: "qwen-flash",
+            provider: "qwen",
+            provider_credential_id: "provider_dashscope_primary",
+            route_label: "Qwen 主线路",
+            health_status: "healthy",
+            latency_ms: 218,
+            request_mode: "聊天",
+          },
+        ];
+        return new Response(JSON.stringify({ item: providerModelsResponse.models[0] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      throw new Error(`Unexpected fetch url: ${url}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderRoute("/provider-model-create");
+
+    expect(await screen.findByRole("heading", { level: 1, name: "新建模型" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("API Key")).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("供应商标识"), {
+      target: { value: "dashscope" },
+    });
+    fireEvent.change(screen.getByLabelText("上游名称"), {
+      target: { value: "Qwen 主线路" },
+    });
+    fireEvent.change(screen.getByLabelText("Base URL"), {
+      target: { value: "https://dashscope.aliyuncs.com/compatible-mode/v1" },
+    });
+    fireEvent.change(screen.getByLabelText("凭证模式"), {
+      target: { value: "secret_ref" },
+    });
+    fireEvent.change(screen.getByLabelText(/^密钥引用/), {
+      target: { value: "TEST_QWEN_PROVIDER_SECRET" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "创建上游供应商" }));
+
+    await waitFor(() => {
+      expect(providerPayload).toEqual({
+        provider: "dashscope",
+        display_name: "Qwen 主线路",
+        base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        credential_mode: "secret_ref",
+        secret_ref: "TEST_QWEN_PROVIDER_SECRET",
+        api_key: "",
+      });
+    });
+
+    fireEvent.change(screen.getByLabelText("请求模型"), {
+      target: { value: "qwen-flash" },
+    });
+    expect(await screen.findByRole("option", { name: /Qwen 主线路/ })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /知识服务/ })).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("上游供应商凭证"), {
+      target: { value: "provider_dashscope_primary" },
+    });
+    fireEvent.change(screen.getByLabelText("请求模式"), {
+      target: { value: "聊天" },
+    });
+    expect(screen.getByLabelText("创建后立即健康检查")).toHaveAttribute("type", "checkbox");
+    fireEvent.click(screen.getByLabelText("创建后立即健康检查"));
+    fireEvent.click(screen.getByRole("button", { name: "创建模型" }));
+
+    await waitFor(() => {
+      expect(modelPayload).toEqual({
+        requested_model: "qwen-flash",
+        provider_credential_id: "provider_dashscope_primary",
+        request_mode: "聊天",
+        healthcheck_enabled: true,
+      });
+    });
+
+    expect(screen.getByText("模型已创建：qwen-flash")).toBeInTheDocument();
+  });
+
   test("审计页优先展示 usage 日志聚合结果", async () => {
     const fetchMock = mockFetch({
       "/api/admin/audit": {
@@ -2851,11 +3751,91 @@ describe("控制台路由", () => {
     expect(screen.queryByText(/DashScope/)).not.toBeInTheDocument();
     expect(screen.queryByText(new RegExp(hiddenKnowledgeTerm))).not.toBeInTheDocument();
 
-    expect(fetchMock).toHaveBeenCalledWith("/api/admin/usage/overview?window=24h");
-    expect(fetchMock).toHaveBeenCalledWith("/api/admin/usage/trends?window=24h");
-    expect(fetchMock).toHaveBeenCalledWith("/api/admin/usage/latency-wall?window=24h");
-    expect(fetchMock).toHaveBeenCalledWith("/api/admin/usage/failures?window=24h");
-    expect(fetchMock).toHaveBeenCalledWith("/api/admin/usage/requests?limit=20&offset=0");
+    expect(fetchMock).toHaveBeenCalledWith("/api/admin/usage/overview?window=7d");
+    expect(fetchMock).toHaveBeenCalledWith("/api/admin/usage/trends?window=7d");
+    expect(fetchMock).toHaveBeenCalledWith("/api/admin/usage/latency-wall?window=7d");
+    expect(fetchMock).toHaveBeenCalledWith("/api/admin/usage/failures?window=7d");
+    expect(fetchMock).toHaveBeenCalledWith("/api/admin/usage/requests?limit=20&offset=0&window=7d");
+  });
+
+  test("调用观测页在健康墙中展示健康检查来源与供应商", async () => {
+    mockFetch({
+      "/api/admin/usage/overview?window=24h": createUsageOverviewMock(),
+      "/api/admin/usage/trends?window=24h": { requests: [], tokens: [], success: [], costs: [] },
+      "/api/admin/usage/latency-wall?window=24h": {
+        window_label: "最近 24 小时",
+        buckets: ["04-24 18:00", "04-24 19:00"],
+        lanes: [
+          {
+            model: "mimo-v2.5-pro",
+            provider: "MIMO",
+            source: "健康检查",
+            route_label: "MIMO",
+            success_rate: "0.00%",
+            average_latency: "4647 ms",
+            cells: [
+              { bucket_label: "04-24 18:00", latency: "--", status: "空窗", requests: "0 次" },
+              { bucket_label: "04-24 19:00", latency: "4647 ms", status: "降级", requests: "1 次" },
+            ],
+          },
+          {
+            model: "qwen-flash",
+            provider: "QWEN",
+            source: "真实调用",
+            route_label: "QWEN",
+            success_rate: "98.00%",
+            average_latency: "182 ms",
+            cells: [
+              { bucket_label: "04-24 18:00", latency: "148 ms", status: "健康", requests: "12 次" },
+              { bucket_label: "04-24 19:00", latency: "922 ms", status: "失败", requests: "2 次" },
+            ],
+          },
+        ],
+      },
+      "/api/admin/usage/failures?window=24h": { breakdown: [], recent_events: [] },
+      "/api/admin/usage/requests?limit=20&offset=0": { items: [], total: 0, limit: 20, offset: 0 },
+    });
+
+    renderRoute("/usage");
+
+    expect(await screen.findByText("模型延时健康墙")).toBeInTheDocument();
+    expect(screen.getByText("MIMO")).toBeInTheDocument();
+    expect(screen.getByText("健康检查")).toBeInTheDocument();
+    expect(screen.getAllByText("降级").length).toBeGreaterThan(0);
+    expect(screen.getByText("QWEN")).toBeInTheDocument();
+    expect(screen.getByText("真实调用")).toBeInTheDocument();
+  });
+
+  test("调用观测页健康墙中的降级格子使用 warning 样式", async () => {
+    mockFetch({
+      "/api/admin/usage/overview?window=24h": createUsageOverviewMock(),
+      "/api/admin/usage/trends?window=24h": { requests: [], tokens: [], success: [], costs: [] },
+      "/api/admin/usage/latency-wall?window=24h": {
+        window_label: "最近 24 小时",
+        buckets: ["04-24 19:00"],
+        lanes: [
+          {
+            model: "qwen2.5-1.5b-instruct",
+            provider: "QWEN",
+            source: "健康检查",
+            route_label: "QWEN",
+            success_rate: "0.00%",
+            average_latency: "98 ms",
+            cells: [{ bucket_label: "04-24 19:00", latency: "98 ms", status: "降级", requests: "1 次" }],
+          },
+        ],
+      },
+      "/api/admin/usage/failures?window=24h": { breakdown: [], recent_events: [] },
+      "/api/admin/usage/requests?limit=20&offset=0": { items: [], total: 0, limit: 20, offset: 0 },
+    });
+
+    renderRoute("/usage");
+
+    const degraded = await screen.findAllByText("降级");
+    const cell = degraded
+      .map((item) => item.closest("article"))
+      .find((item): item is HTMLElement => Boolean(item));
+    expect(cell).toHaveClass("usage-wall__cell--warning");
   });
 
   test("调用观测页展示智能路由分类与路由原因", async () => {
@@ -2884,7 +3864,7 @@ describe("控制台路由", () => {
     expect(await screen.findByText("复杂编码请求")).toBeInTheDocument();
     expect(screen.getByText("强模型档位")).toBeInTheDocument();
     expect(screen.getByText("命中关键词：debug；包含代码块")).toBeInTheDocument();
-    expect(screen.getByText("qwen-plus")).toBeInTheDocument();
+    expect(screen.getAllByText("qwen-plus").length).toBeGreaterThan(0);
   });
 
   test("调用观测页使用可视化组件展示状态、事件流与来源 pill", async () => {
@@ -2969,13 +3949,13 @@ describe("控制台路由", () => {
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input.toString();
 
-      if (url === "/api/admin/usage/overview?window=24h") {
+      if (url === "/api/admin/usage/overview?window=7d") {
         return Promise.resolve(new Response("boom", { status: 500 }));
       }
-      if (url === "/api/admin/usage/trends?window=24h") {
+      if (url === "/api/admin/usage/trends?window=7d") {
         return new Promise<Response>(() => {});
       }
-      if (url === "/api/admin/usage/latency-wall?window=24h") {
+      if (url === "/api/admin/usage/latency-wall?window=7d") {
         return Promise.resolve(
           new Response(JSON.stringify({ window_label: "最近 24 小时", buckets: [], lanes: [] }), {
             status: 200,
@@ -2983,7 +3963,7 @@ describe("控制台路由", () => {
           }),
         );
       }
-      if (url === "/api/admin/usage/failures?window=24h") {
+      if (url === "/api/admin/usage/failures?window=7d") {
         return Promise.resolve(
           new Response(JSON.stringify({ breakdown: [], recent_events: [] }), {
             status: 200,
@@ -2991,7 +3971,7 @@ describe("控制台路由", () => {
           }),
         );
       }
-      if (url === "/api/admin/usage/requests?limit=20&offset=0") {
+      if (url === "/api/admin/usage/requests?limit=20&offset=0&window=7d") {
         return Promise.resolve(
           new Response(JSON.stringify({ items: [], total: 0, limit: 20, offset: 0 }), {
             status: 200,
@@ -3068,7 +4048,7 @@ describe("控制台路由", () => {
       expect(screen.getByText("llmreq_page_2")).toBeInTheDocument();
     });
 
-    expect(fetchMock).toHaveBeenCalledWith("/api/admin/usage/requests?limit=20&offset=20");
+    expect(fetchMock).toHaveBeenCalledWith("/api/admin/usage/requests?limit=20&offset=20&window=7d");
   });
 
   test("调用观测页在分页边界正确禁用按钮并支持返回上一页", async () => {
@@ -3139,7 +4119,186 @@ describe("控制台路由", () => {
       expect(screen.getByText("llmreq_page_1")).toBeInTheDocument();
     });
 
-    expect(fetchMock).toHaveBeenCalledWith("/api/admin/usage/requests?limit=20&offset=20");
+    expect(fetchMock).toHaveBeenCalledWith("/api/admin/usage/requests?limit=20&offset=20&window=7d");
     expect(fetchMock).toHaveBeenCalledTimes(8);
+  });
+
+  test("调用观测页支持按租户、实际模型、状态筛选", async () => {
+    const fetchMock = mockFetch(
+      {
+        "/api/admin/usage/overview?window=24h": createUsageOverviewMock(),
+        "/api/admin/usage/trends?window=24h": { requests: [], tokens: [], success: [], costs: [] },
+        "/api/admin/usage/latency-wall?window=24h": {
+          window_label: "最近 24 小时",
+          buckets: [],
+          lanes: [],
+        },
+        "/api/admin/usage/failures?window=24h": {
+          breakdown: [{ label: "限流", value: "1 次" }],
+          recent_events: [],
+          recent_event_items: [
+            {
+              time: "05-08 10:00",
+              tenant_id: "tenant_demo",
+              tenant_name: "研发一部",
+              request_model: "qwen-flash",
+              resolved_model: "qwen-flash",
+              provider: "阿里云百炼",
+              status_code: 429,
+              category: "限流",
+              reason: "上游返回 429，请求被限流",
+            },
+          ],
+        },
+        "/api/admin/usage/requests?limit=20&offset=0": {
+          items: [
+            createUsageRequestMock({
+              tenant_id: "tenant_demo",
+              tenant_name: "研发一部",
+              tenant: "tenant_demo",
+              resolved_model: "qwen-flash",
+              status: "成功",
+            }),
+          ],
+          resolved_model_options: ["qwen-flash", "mimo-v2.5-pro"],
+          total: 1,
+          limit: 20,
+          offset: 0,
+        },
+        "/api/admin/usage/requests?limit=20&offset=0&resolved_model=mimo-v2.5-pro&window=7d": {
+          items: [
+            createUsageRequestMock({
+              tenant_id: "tenant_demo",
+              tenant_name: "研发一部",
+              tenant: "tenant_demo",
+              resolved_model: "mimo-v2.5-pro",
+              model: "mimo",
+              status: "成功",
+            }),
+          ],
+          resolved_model_options: ["qwen-flash", "mimo-v2.5-pro"],
+          total: 1,
+          limit: 20,
+          offset: 0,
+        },
+        "/api/admin/usage/requests?limit=20&offset=0&tenant_id=tenant_demo&resolved_model=qwen-flash&status=success&window=7d":
+          {
+            items: [
+              createUsageRequestMock({
+                tenant_id: "tenant_demo",
+                tenant_name: "研发一部",
+                tenant: "tenant_demo",
+                resolved_model: "qwen-flash",
+                status: "成功",
+              }),
+            ],
+            resolved_model_options: ["qwen-flash", "mimo-v2.5-pro"],
+            total: 1,
+            limit: 20,
+            offset: 0,
+          },
+      },
+    );
+
+    renderRoute("/usage");
+
+    expect(await screen.findByText("调用明细")).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "mimo-v2.5-pro" })).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("实际模型筛选"), { target: { value: "mimo-v2.5-pro" } });
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/admin/usage/requests?limit=20&offset=0&resolved_model=mimo-v2.5-pro&window=7d",
+      );
+    });
+
+    fireEvent.change(screen.getByLabelText("租户筛选"), { target: { value: "tenant_demo" } });
+    fireEvent.change(screen.getByLabelText("实际模型筛选"), { target: { value: "qwen-flash" } });
+    fireEvent.change(screen.getByLabelText("状态筛选"), { target: { value: "success" } });
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/admin/usage/requests?limit=20&offset=0&tenant_id=tenant_demo&resolved_model=qwen-flash&status=success&window=7d",
+      );
+    });
+  });
+
+  test("调用观测页支持查看请求详情与脱敏摘要", async () => {
+    mockFetch({
+      "/api/admin/usage/overview?window=24h": createUsageOverviewMock(),
+      "/api/admin/usage/trends?window=24h": { requests: [], tokens: [], success: [], costs: [] },
+      "/api/admin/usage/latency-wall?window=24h": {
+        window_label: "最近 24 小时",
+        buckets: [],
+        lanes: [],
+      },
+      "/api/admin/usage/failures?window=24h": {
+        breakdown: [{ label: "限流", value: "1 次" }],
+        recent_events: [],
+        recent_event_items: [
+          {
+            time: "05-08 10:00",
+            tenant_id: "tenant_demo",
+            tenant_name: "研发一部",
+            request_model: "qwen-flash",
+            resolved_model: "qwen-flash",
+            provider: "阿里云百炼",
+            status_code: 429,
+            category: "限流",
+            reason: "上游返回 429，请求被限流",
+          },
+        ],
+      },
+      "/api/admin/usage/requests?limit=20&offset=0": {
+        items: [
+          createUsageRequestMock({
+            request_id: "llmreq_detail_demo",
+            tenant_id: "tenant_demo",
+            tenant_name: "研发一部",
+            tenant: "tenant_demo",
+            resolved_model: "qwen-flash",
+            status: "限流",
+          }),
+        ],
+        total: 1,
+        limit: 20,
+        offset: 0,
+      },
+      "/api/admin/usage/requests/llmreq_detail_demo": createUsageRequestDetailMock({
+        request_id: "llmreq_detail_demo",
+        tenant_name: "研发一部",
+        resolved_model: "qwen-flash",
+        status: "限流",
+        error_code: "rate_limit",
+        error_message: "上游返回 429，请稍后重试",
+        failure_events: [
+          {
+            time: "05-08 10:00",
+            tenant_id: "tenant_demo",
+            tenant_name: "研发一部",
+            request_model: "qwen-flash",
+            resolved_model: "qwen-flash",
+            provider: "阿里云百炼",
+            status_code: 429,
+            category: "限流",
+            reason: "上游返回 429，请求被限流",
+          },
+        ],
+      }),
+    });
+
+    renderRoute("/usage");
+
+    expect(await screen.findByText("llmreq_detail_demo")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("llmreq_detail_demo"));
+
+    const dialog = await screen.findByRole("dialog", { name: "请求详情" });
+    expect(within(dialog).getByText("研发一部")).toBeInTheDocument();
+    expect(within(dialog).getByText("用户输入：你好，手机号 138XXXX0000")).toBeInTheDocument();
+    expect(within(dialog).getByText("助手输出：你好，请问有什么可以帮你？")).toBeInTheDocument();
+    expect(within(dialog).getByText("上游返回 429，请稍后重试")).toBeInTheDocument();
+    expect(within(dialog).getByText("上游返回 429，请求被限流")).toBeInTheDocument();
   });
 });

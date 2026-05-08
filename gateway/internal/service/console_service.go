@@ -113,11 +113,12 @@ type CreateApplicationRequest struct {
 }
 
 type ApproveApplicationRequest struct {
-	ActorID       string   `json:"actor_id"`
-	Comment       string   `json:"comment"`
-	TenantID      string   `json:"tenant_id"`
-	TokenLimit    int64    `json:"token_limit"`
-	AllowedModels []string `json:"allowed_models"`
+	ActorID            string   `json:"actor_id"`
+	Comment            string   `json:"comment"`
+	TenantID           string   `json:"tenant_id"`
+	TokenLimit         int64    `json:"token_limit"`
+	CostLimitMicroyuan int64    `json:"cost_limit_microyuan"`
+	AllowedModels      []string `json:"allowed_models"`
 }
 
 type CaptchaChallenge struct {
@@ -193,6 +194,98 @@ type RoutesPageData struct {
 	Stats         []RouteMetric `json:"stats"`
 	Items         []RouteItem   `json:"items"`
 	PolicySummary []string      `json:"policy_summary"`
+}
+
+type ProviderItem struct {
+	ID              string   `json:"id"`
+	Provider        string   `json:"provider"`
+	DisplayName     string   `json:"display_name"`
+	SupportedModels []string `json:"supported_models,omitempty"`
+	BaseURL         string   `json:"base_url,omitempty"`
+	CredentialMode  string   `json:"credential_mode"`
+	SecretRef       string   `json:"secret_ref"`
+	Status          string   `json:"status"`
+}
+
+type CreateProviderRequest struct {
+	Provider       string `json:"provider"`
+	DisplayName    string `json:"display_name"`
+	BaseURL        string `json:"base_url"`
+	CredentialMode string `json:"credential_mode"`
+	SecretRef      string `json:"secret_ref"`
+	APIKey         string `json:"api_key"`
+}
+
+type ProviderMutationResult struct {
+	Item ProviderItem `json:"item"`
+}
+
+type ProviderModelItem struct {
+	ID                   string `json:"id,omitempty"`
+	RequestedModel       string `json:"requested_model"`
+	Provider             string `json:"provider"`
+	ProviderCredentialID string `json:"provider_credential_id"`
+	RouteLabel           string `json:"route_label"`
+	HealthStatus         string `json:"health_status"`
+	LatencyMS            int64  `json:"latency_ms"`
+	RequestMode          string `json:"request_mode"`
+}
+
+type ProviderModelsPageData struct {
+	Providers []ProviderItem      `json:"providers"`
+	Models    []ProviderModelItem `json:"models"`
+}
+
+type CreateProviderModelRequest struct {
+	RequestedModel       string `json:"requested_model"`
+	ProviderCredentialID string `json:"provider_credential_id"`
+	RequestMode          string `json:"request_mode"`
+	HealthcheckEnabled   bool   `json:"healthcheck_enabled"`
+}
+
+type ProviderModelMutationResult struct {
+	Item ProviderModelItem `json:"item"`
+}
+
+type ModelHealthItem struct {
+	ID                   string `json:"id"`
+	RequestedModel       string `json:"requested_model"`
+	ProviderCredentialID string `json:"provider_credential_id"`
+	RouteLabel           string `json:"route_label"`
+	HealthStatus         string `json:"health_status"`
+	LastHealthError      string `json:"last_health_error"`
+	RequestMode          string `json:"request_mode"`
+	LatencyMS            int64  `json:"latency_ms"`
+	FirstTokenLatencyMS  int64  `json:"first_token_latency_ms"`
+	LastHealthCheckedAt  string `json:"last_health_checked_at"`
+}
+
+type ModelHealthWallCell struct {
+	BucketLabel string `json:"bucket_label"`
+	Status      string `json:"status"`
+	Latency     string `json:"latency"`
+	Requests    string `json:"requests"`
+}
+
+type ModelHealthWallLane struct {
+	Model          string                `json:"model"`
+	Provider       string                `json:"provider"`
+	RouteLabel     string                `json:"route_label"`
+	SuccessRate    string                `json:"success_rate"`
+	AverageLatency string                `json:"average_latency"`
+	Cells          []ModelHealthWallCell `json:"cells"`
+}
+
+type ModelHealthWall struct {
+	Window      string                `json:"window"`
+	WindowLabel string                `json:"window_label"`
+	Buckets     []string              `json:"buckets"`
+	Lanes       []ModelHealthWallLane `json:"lanes"`
+}
+
+type ModelHealthPageData struct {
+	Items []ModelHealthItem `json:"items"`
+	Wall  ModelHealthWall   `json:"wall"`
 }
 
 type PlaygroundPageData struct {
@@ -271,6 +364,7 @@ type UsageQuery struct {
 	PlatformAPIKeyID string    `json:"platform_api_key_id"`
 	Provider         string    `json:"provider"`
 	Model            string    `json:"model"`
+	ResolvedModel    string    `json:"resolved_model"`
 	RouteID          string    `json:"route_id"`
 	RequestPath      string    `json:"request_path"`
 	Status           string    `json:"status"`
@@ -278,6 +372,66 @@ type UsageQuery struct {
 	UsageSource      string    `json:"usage_source"`
 	Limit            int       `json:"limit"`
 	Offset           int       `json:"offset"`
+}
+
+type TenantBillingQuery struct {
+	TenantID string `json:"tenant_id"`
+	Month    string `json:"month"`
+}
+
+type TenantBillingSummary struct {
+	TenantID     string `json:"tenant_id"`
+	Month        string `json:"month"`
+	RequestCount int64  `json:"request_count"`
+	SuccessCount int64  `json:"success_count"`
+	FailureCount int64  `json:"failure_count"`
+	InputTokens  int64  `json:"input_tokens"`
+	OutputTokens int64  `json:"output_tokens"`
+	CachedTokens int64  `json:"cached_tokens"`
+	TotalTokens  int64  `json:"total_tokens"`
+	InputCost    string `json:"input_cost"`
+	OutputCost   string `json:"output_cost"`
+	CachedCost   string `json:"cached_cost"`
+	TotalCost    string `json:"total_cost"`
+}
+
+type TenantBillingProviderItem struct {
+	ProviderCredentialID string `json:"provider_credential_id"`
+	Provider             string `json:"provider"`
+	DisplayName          string `json:"display_name"`
+	RequestCount         int64  `json:"request_count"`
+	SuccessCount         int64  `json:"success_count"`
+	FailureCount         int64  `json:"failure_count"`
+	TotalTokens          int64  `json:"total_tokens"`
+	TotalCost            string `json:"total_cost"`
+}
+
+type TenantBillingModelItem struct {
+	Model                string `json:"model"`
+	ProviderCredentialID string `json:"provider_credential_id"`
+	ProviderDisplayName  string `json:"provider_display_name"`
+	RequestCount         int64  `json:"request_count"`
+	SuccessCount         int64  `json:"success_count"`
+	FailureCount         int64  `json:"failure_count"`
+	TotalTokens          int64  `json:"total_tokens"`
+	TotalCost            string `json:"total_cost"`
+}
+
+type TenantBillingAPIKeyItem struct {
+	PlatformAPIKeyID string `json:"platform_api_key_id"`
+	Name             string `json:"name"`
+	RequestCount     int64  `json:"request_count"`
+	SuccessCount     int64  `json:"success_count"`
+	FailureCount     int64  `json:"failure_count"`
+	TotalTokens      int64  `json:"total_tokens"`
+	TotalCost        string `json:"total_cost"`
+}
+
+type TenantBillingPageData struct {
+	Summary   TenantBillingSummary        `json:"summary"`
+	Providers []TenantBillingProviderItem `json:"providers"`
+	Models    []TenantBillingModelItem    `json:"models"`
+	APIKeys   []TenantBillingAPIKeyItem   `json:"api_keys"`
 }
 
 type UsageOverviewData struct {
@@ -324,6 +478,8 @@ type UsageLatencyCell struct {
 
 type UsageLatencyLane struct {
 	Model          string             `json:"model"`
+	Provider       string             `json:"provider"`
+	Source         string             `json:"source"`
 	RouteLabel     string             `json:"route_label"`
 	SuccessRate    string             `json:"success_rate"`
 	AverageLatency string             `json:"average_latency"`
@@ -342,13 +498,28 @@ type UsageFailureBucket struct {
 }
 
 type UsageFailureData struct {
-	Breakdown    []UsageFailureBucket `json:"breakdown"`
-	RecentEvents []string             `json:"recent_events"`
+	Breakdown        []UsageFailureBucket    `json:"breakdown"`
+	RecentEvents     []string                `json:"recent_events"`
+	RecentEventItems []UsageFailureEventItem `json:"recent_event_items"`
+}
+
+type UsageFailureEventItem struct {
+	Time          string `json:"time"`
+	TenantID      string `json:"tenant_id"`
+	TenantName    string `json:"tenant_name"`
+	RequestModel  string `json:"request_model"`
+	ResolvedModel string `json:"resolved_model"`
+	Provider      string `json:"provider"`
+	StatusCode    int    `json:"status_code"`
+	Category      string `json:"category"`
+	Reason        string `json:"reason"`
 }
 
 type UsageRequestItem struct {
 	RequestID           string `json:"request_id"`
 	Tenant              string `json:"tenant"`
+	TenantID            string `json:"tenant_id"`
+	TenantName          string `json:"tenant_name"`
 	Endpoint            string `json:"endpoint"`
 	Model               string `json:"model"`
 	ResolvedModel       string `json:"resolved_model"`
@@ -372,11 +543,44 @@ type UsageRequestItem struct {
 	CachedPrice         string `json:"cached_price"`
 }
 
+type UsageRequestDetail struct {
+	RequestID           string                  `json:"request_id"`
+	TenantID            string                  `json:"tenant_id"`
+	TenantName          string                  `json:"tenant_name"`
+	Endpoint            string                  `json:"endpoint"`
+	Model               string                  `json:"model"`
+	ResolvedModel       string                  `json:"resolved_model"`
+	TaskClass           string                  `json:"task_class"`
+	RoutingReason       string                  `json:"routing_reason"`
+	TargetModelTier     string                  `json:"target_model_tier"`
+	Status              string                  `json:"status"`
+	TotalTokens         string                  `json:"total_tokens"`
+	InputTokens         string                  `json:"input_tokens"`
+	OutputTokens        string                  `json:"output_tokens"`
+	CachedTokens        string                  `json:"cached_tokens"`
+	Latency             string                  `json:"latency"`
+	FirstTokenLatencyMS int64                   `json:"first_token_latency_ms"`
+	UsageSource         string                  `json:"usage_source"`
+	InputCost           string                  `json:"input_cost"`
+	OutputCost          string                  `json:"output_cost"`
+	CachedCost          string                  `json:"cached_cost"`
+	TotalCost           string                  `json:"total_cost"`
+	InputPrice          string                  `json:"input_price"`
+	OutputPrice         string                  `json:"output_price"`
+	CachedPrice         string                  `json:"cached_price"`
+	PromptExcerpt       string                  `json:"prompt_excerpt"`
+	ResponseExcerpt     string                  `json:"response_excerpt"`
+	ErrorCode           string                  `json:"error_code"`
+	ErrorMessage        string                  `json:"error_message"`
+	FailureEvents       []UsageFailureEventItem `json:"failure_events"`
+}
+
 type UsageRequestsPageData struct {
-	Items  []UsageRequestItem `json:"items"`
-	Total  int64              `json:"total"`
-	Limit  int                `json:"limit"`
-	Offset int                `json:"offset"`
+	Items                []UsageRequestItem `json:"items"`
+	ResolvedModelOptions []string           `json:"resolved_model_options"`
+	Total                int64              `json:"total"`
+	Limit                int                `json:"limit"`
+	Offset               int                `json:"offset"`
 }
 
 type ConsoleService interface {
@@ -398,16 +602,23 @@ type ConsoleService interface {
 	DeleteAPIKey(ctx context.Context, id string) (APIKeyMutationResult, error)
 	RevealAPIKeySecret(ctx context.Context, id string) (APIKeySecretView, error)
 	CopyAPIKeySecret(ctx context.Context, id string, ip string, userAgent string) (APIKeySecretView, error)
+	ProviderModels(ctx context.Context) (ProviderModelsPageData, error)
+	CreateProvider(ctx context.Context, req CreateProviderRequest) (ProviderMutationResult, error)
+	CreateProviderModel(ctx context.Context, req CreateProviderModelRequest) (ProviderModelMutationResult, error)
+	RunProviderModelHealthcheck(ctx context.Context, id string) (ProviderModelMutationResult, error)
+	ModelHealth(ctx context.Context, window string) (ModelHealthPageData, error)
 	Routes(ctx context.Context) (RoutesPageData, error)
 	Playground(ctx context.Context) (PlaygroundPageData, error)
 	RunPlayground(ctx context.Context, req PlaygroundRunRequest) (PlaygroundRunResponse, error)
 	StreamPlayground(ctx context.Context, req PlaygroundRunRequest) (PlaygroundStreamSession, error)
 	Audit(ctx context.Context) (AuditPageData, error)
+	TenantBilling(ctx context.Context, query TenantBillingQuery) (TenantBillingPageData, error)
 	UsageOverview(ctx context.Context, query UsageQuery) (UsageOverviewData, error)
 	UsageTrends(ctx context.Context, query UsageQuery) (UsageTrendData, error)
 	UsageLatencyWall(ctx context.Context, query UsageQuery) (UsageLatencyWallData, error)
 	UsageFailures(ctx context.Context, query UsageQuery) (UsageFailureData, error)
 	UsageRequests(ctx context.Context, query UsageQuery) (UsageRequestsPageData, error)
+	UsageRequestDetail(ctx context.Context, requestID string) (UsageRequestDetail, error)
 }
 
 type unavailableConsoleService struct{}
@@ -509,6 +720,26 @@ func (unavailableConsoleService) CopyAPIKeySecret(context.Context, string, strin
 	return APIKeySecretView{}, ErrConsoleServiceUnavailable
 }
 
+func (unavailableConsoleService) ProviderModels(context.Context) (ProviderModelsPageData, error) {
+	return ProviderModelsPageData{}, ErrConsoleServiceUnavailable
+}
+
+func (unavailableConsoleService) CreateProvider(context.Context, CreateProviderRequest) (ProviderMutationResult, error) {
+	return ProviderMutationResult{}, ErrConsoleServiceUnavailable
+}
+
+func (unavailableConsoleService) CreateProviderModel(context.Context, CreateProviderModelRequest) (ProviderModelMutationResult, error) {
+	return ProviderModelMutationResult{}, ErrConsoleServiceUnavailable
+}
+
+func (unavailableConsoleService) RunProviderModelHealthcheck(context.Context, string) (ProviderModelMutationResult, error) {
+	return ProviderModelMutationResult{}, ErrConsoleServiceUnavailable
+}
+
+func (unavailableConsoleService) ModelHealth(context.Context, string) (ModelHealthPageData, error) {
+	return ModelHealthPageData{}, ErrConsoleServiceUnavailable
+}
+
 func (unavailableConsoleService) Routes(context.Context) (RoutesPageData, error) {
 	return RoutesPageData{}, ErrConsoleServiceUnavailable
 }
@@ -529,6 +760,10 @@ func (unavailableConsoleService) Audit(context.Context) (AuditPageData, error) {
 	return AuditPageData{}, ErrConsoleServiceUnavailable
 }
 
+func (unavailableConsoleService) TenantBilling(context.Context, TenantBillingQuery) (TenantBillingPageData, error) {
+	return TenantBillingPageData{}, ErrConsoleServiceUnavailable
+}
+
 func (unavailableConsoleService) UsageOverview(context.Context, UsageQuery) (UsageOverviewData, error) {
 	return UsageOverviewData{}, ErrConsoleServiceUnavailable
 }
@@ -547,4 +782,8 @@ func (unavailableConsoleService) UsageFailures(context.Context, UsageQuery) (Usa
 
 func (unavailableConsoleService) UsageRequests(context.Context, UsageQuery) (UsageRequestsPageData, error) {
 	return UsageRequestsPageData{}, ErrConsoleServiceUnavailable
+}
+
+func (unavailableConsoleService) UsageRequestDetail(context.Context, string) (UsageRequestDetail, error) {
+	return UsageRequestDetail{}, ErrConsoleServiceUnavailable
 }

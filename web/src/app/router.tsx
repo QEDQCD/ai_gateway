@@ -1,8 +1,11 @@
 import type { ReactElement } from "react";
-import { Navigate, createBrowserRouter, createMemoryRouter } from "react-router-dom";
+import { Navigate, createBrowserRouter, createMemoryRouter, useLocation } from "react-router-dom";
 
 import { APIKeysPage } from "../pages/api-keys";
 import { AdminApplicationsPage } from "../pages/admin-applications";
+import { AdminModelHealthPage } from "../pages/admin-model-health";
+import { AdminProviderModelCreatePage } from "../pages/admin-provider-model-create";
+import { AdminProviderModelsPage } from "../pages/admin-provider-models";
 import { AdminTenantsPage } from "../pages/admin-tenants";
 import { ApplicationFormPage } from "../pages/application-form";
 import { AuditPage } from "../pages/audit";
@@ -23,6 +26,20 @@ type ConsoleRouteDefinition = ConsoleNavigationItem & {
 
 const adminHiddenNavigation = [
   {
+    path: "/model-health",
+    label: "健康检查",
+    title: "健康检查",
+    description: "查看模型健康状态、延迟摘要与异常项列表。",
+    element: <AdminModelHealthPage />,
+  },
+  {
+    path: "/provider-model-create",
+    label: "新建模型",
+    title: "新建模型",
+    description: "创建 provider 凭证与聊天模型挂载。",
+    element: <AdminProviderModelCreatePage />,
+  },
+  {
     path: "/routes",
     label: "路由",
     title: "路由",
@@ -40,6 +57,13 @@ const adminHiddenNavigation = [
 
 export const adminNavigation = [
   {
+    path: "/",
+    label: "总览",
+    title: "总览",
+    description: "查看网关健康、租户态势与核心平台指标。",
+    element: <DashboardPage />,
+  },
+  {
     path: "/applications",
     label: "账号申请",
     title: "账号申请",
@@ -52,13 +76,6 @@ export const adminNavigation = [
     title: "租户管理",
     description: "查看租户状态、成员归属与平台侧治理信息。",
     element: <AdminTenantsPage />,
-  },
-  {
-    path: "/",
-    label: "总览",
-    title: "总览",
-    description: "查看网关健康、租户态势与核心平台指标。",
-    element: <DashboardPage />,
   },
   {
     path: "/api-keys",
@@ -80,6 +97,13 @@ export const adminNavigation = [
     title: "审计",
     description: "追踪请求历史、处理链路与运维事件。",
     element: <AuditPage />,
+  },
+  {
+    path: "/provider-models",
+    label: "后台模型",
+    title: "后台模型",
+    description: "查看当前 provider 凭证与聊天模型挂载关系。",
+    element: <AdminProviderModelsPage />,
   },
 ] satisfies readonly ConsoleRouteDefinition[];
 
@@ -148,12 +172,25 @@ function createChildRoute(route: ConsoleRouteDefinition) {
   };
 }
 
+function LegacyBillingRedirect() {
+  const location = useLocation();
+  const search = location.search || "";
+  return <Navigate to={`/tenants${search}`} replace />;
+}
+
 function createAuthenticatedRouteTree(session: ConsoleSession) {
   const navigation = getNavigationForRole(session.role);
   const children =
     session.role === "member"
       ? [{ index: true, element: <Navigate to="/me" replace /> }, ...navigation.map(createChildRoute)]
-      : [...navigation, ...adminHiddenNavigation].map(createChildRoute);
+      : [
+          ...navigation.map(createChildRoute),
+          {
+            path: "billing",
+            element: <LegacyBillingRedirect />,
+          },
+          ...adminHiddenNavigation.map(createChildRoute),
+        ];
 
   return [
     {

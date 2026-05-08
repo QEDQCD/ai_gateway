@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,9 +15,11 @@ import (
 
 	"github.com/example/ai_gateway/gateway/internal/domain"
 	"github.com/example/ai_gateway/gateway/internal/secret"
+	"github.com/example/ai_gateway/gateway/internal/security"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -34,6 +38,7 @@ type usageLatencyBucketStat struct {
 type usageLatencyLaneAccumulator struct {
 	model             string
 	provider          string
+	source            string
 	totalRequests     int64
 	totalSuccess      int64
 	totalLatencyTimes int64
@@ -209,8 +214,14 @@ func (s postgresConsoleService) Overview(ctx context.Context) (OverviewPageData,
 			end,
 			coalesce(m.active_member_count, 0)::text,
 			coalesce(k.active_key_count, 0)::text,
-			coalesce(p.token_limit, 0)::text,
-			coalesce(u.tokens_used, 0)::text || ' / ' || coalesce(p.token_limit, 0)::text
+			case
+				when p.tenant_id is null or coalesce(p.token_limit, 0) <= 0 then '未配置'
+				else p.token_limit::text
+			end,
+			coalesce(u.tokens_used, 0)::text || ' / ' || case
+				when p.tenant_id is null or coalesce(p.token_limit, 0) <= 0 then '未配置'
+				else p.token_limit::text
+			end
 		from tenants t
 		left join latest_policies p on p.tenant_id = t.id
 		left join current_usage u on u.tenant_id = t.id
@@ -501,6 +512,7 @@ func (s postgresConsoleService) ApproveApplication(ctx context.Context, id strin
 	comment := strings.TrimSpace(req.Comment)
 	tenantID := strings.TrimSpace(req.TenantID)
 	tokenLimit := req.TokenLimit
+	costLimitMicroyuan := req.CostLimitMicroyuan
 	allowedModels := sanitizeAllowedModels(req.AllowedModels)
 	if applicationID == "" {
 		return ApplicationMutationResult{}, StatusError{
@@ -524,6 +536,12 @@ func (s postgresConsoleService) ApproveApplication(ctx context.Context, id strin
 		return ApplicationMutationResult{}, StatusError{
 			Code:    http.StatusBadRequest,
 			Message: "token_limit is required",
+		}
+	}
+	if costLimitMicroyuan <= 0 {
+		return ApplicationMutationResult{}, StatusError{
+			Code:    http.StatusBadRequest,
+			Message: "cost_limit_microyuan is required",
 		}
 	}
 	if len(allowedModels) == 0 {
@@ -587,6 +605,7 @@ func (s postgresConsoleService) ApproveApplication(ctx context.Context, id strin
 				period_type,
 				request_limit,
 				token_limit,
+				cost_limit_microyuan,
 				allowed_models,
 				effective_from,
 				created_by
@@ -605,6 +624,7 @@ func (s postgresConsoleService) ApproveApplication(ctx context.Context, id strin
 					500000
 				),
 				$7,
+				$10,
 				$9,
 				now(),
 				$2
@@ -613,6 +633,7 @@ func (s postgresConsoleService) ApproveApplication(ctx context.Context, id strin
 			set
 				request_limit = excluded.request_limit,
 				token_limit = excluded.token_limit,
+				cost_limit_microyuan = excluded.cost_limit_microyuan,
 				allowed_models = excluded.allowed_models,
 				effective_from = excluded.effective_from,
 				created_by = excluded.created_by,
@@ -662,7 +683,7 @@ func (s postgresConsoleService) ApproveApplication(ctx context.Context, id strin
 		)
 		select id, email, name, company_name, use_case, status, created_at
 		from updated_application;
-	`, applicationID, actorID, comment, newUserID(), tenantID, newTenantMembershipID(), tokenLimit, newAuditEventID(), allowedModels)
+	`, applicationID, actorID, comment, newUserID(), tenantID, newTenantMembershipID(), tokenLimit, newAuditEventID(), allowedModels, costLimitMicroyuan)
 
 	item, err := scanApplicationItem(row)
 	if err != nil {
@@ -1271,6 +1292,896 @@ func nullableText(value string) any {
 	return strings.TrimSpace(value)
 }
 
+type providerModelHealthcheckRouteRecord struct {
+	RouteID              string
+	RequestedModel       string
+	ProviderCredentialID string
+	Provider             string
+	DisplayName          string
+	BaseURL              string
+	RequestMode          string
+	SecretRef            string
+	CredentialMode       string
+	EncryptedSecret      string
+}
+
+func normalizeConsoleProvider(provider string, displayName string, resolvedProvider string, requestedModel string) string {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	displayName = strings.ToLower(strings.TrimSpace(displayName))
+	resolvedProvider = strings.ToLower(strings.TrimSpace(resolvedProvider))
+	requestedModel = strings.ToLower(strings.TrimSpace(requestedModel))
+
+	if provider == "mimo" || strings.Contains(displayName, "mimo") || strings.Contains(resolvedProvider, "mimo") || strings.Contains(requestedModel, "mimo") {
+		return "mimo"
+	}
+	if provider == "dashscope" || provider == "qwen" || strings.Contains(displayName, "qwen") || strings.Contains(resolvedProvider, "qwen") || strings.HasPrefix(requestedModel, "qwen") || strings.HasPrefix(requestedModel, "text-embedding-v4") {
+		return "qwen"
+	}
+	return "other"
+}
+
+func normalizeProviderCredentialMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "", "encrypted":
+		return "encrypted"
+	case "secret_ref":
+		return "secret_ref"
+	default:
+		return ""
+	}
+}
+
+func normalizeProviderModelRequestMode(mode string) string {
+	mode = strings.TrimSpace(mode)
+	if mode == "" {
+		return "聊天"
+	}
+	return mode
+}
+
+func mapProviderMutationError(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		switch pgErr.Code {
+		case "23505":
+			return StatusError{Code: http.StatusConflict, Message: "provider already exists", Err: err}
+		case "23514":
+			return StatusError{Code: http.StatusBadRequest, Message: "invalid provider payload", Err: err}
+		}
+	}
+	return err
+}
+
+func mapProviderModelMutationError(err error) error {
+	if errors.Is(err, pgx.ErrNoRows) {
+		return StatusError{Code: http.StatusNotFound, Message: "provider credential not found", Err: err}
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		switch pgErr.Code {
+		case "23503":
+			return StatusError{Code: http.StatusBadRequest, Message: "provider credential not found", Err: err}
+		case "23505":
+			return StatusError{Code: http.StatusConflict, Message: "provider model already exists", Err: err}
+		case "23514":
+			return StatusError{Code: http.StatusBadRequest, Message: "invalid provider model payload", Err: err}
+		}
+	}
+	return err
+}
+
+func (s postgresConsoleService) lookupProviderModelItemByRouteID(ctx context.Context, routeID string) (ProviderModelItem, error) {
+	var item ProviderModelItem
+	var rawProvider string
+	var rawDisplayName string
+	var rawResolvedProvider string
+	err := s.db.QueryRow(ctx, `
+		select
+			rc.id,
+			rc.requested_model,
+			coalesce(pc.provider, ''),
+			rc.provider_credential_id,
+			coalesce(nullif(pc.display_name, ''), nullif(rc.resolved_provider, ''), rc.provider_credential_id),
+			coalesce(rc.health_status, ''),
+			coalesce(rc.latency_ms, 0),
+			coalesce(rc.request_mode, ''),
+			coalesce(pc.display_name, ''),
+			coalesce(rc.resolved_provider, '')
+		from route_catalog rc
+		left join provider_credentials pc on pc.id = rc.provider_credential_id
+		where rc.id = $1;
+	`, routeID).Scan(
+		&item.ID,
+		&item.RequestedModel,
+		&rawProvider,
+		&item.ProviderCredentialID,
+		&item.RouteLabel,
+		&item.HealthStatus,
+		&item.LatencyMS,
+		&item.RequestMode,
+		&rawDisplayName,
+		&rawResolvedProvider,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ProviderModelItem{}, StatusError{Code: http.StatusNotFound, Message: "provider model not found", Err: err}
+		}
+		return ProviderModelItem{}, err
+	}
+	item.Provider = normalizeConsoleProvider(rawProvider, rawDisplayName, rawResolvedProvider, item.RequestedModel)
+	item.RouteLabel = neutralizeConsoleRouteLabel(item.RouteLabel)
+	return item, nil
+}
+
+func (s postgresConsoleService) loadProviderModelHealthcheckRoute(ctx context.Context, routeID string) (providerModelHealthcheckRouteRecord, error) {
+	var route providerModelHealthcheckRouteRecord
+	err := s.db.QueryRow(ctx, `
+		select
+			rc.id,
+			rc.requested_model,
+			rc.provider_credential_id,
+			coalesce(pc.provider, ''),
+			coalesce(pc.display_name, ''),
+			coalesce(pc.base_url, ''),
+			coalesce(rc.request_mode, ''),
+			coalesce(pc.secret_ref, ''),
+			coalesce(pc.credential_mode, 'encrypted'),
+			coalesce(pc.encrypted_secret, '')
+		from route_catalog rc
+		left join provider_credentials pc on pc.id = rc.provider_credential_id
+		where rc.id = $1
+		  and rc.endpoint = $2;
+	`, routeID, modelHealthcheckChatEndpoint).Scan(
+		&route.RouteID,
+		&route.RequestedModel,
+		&route.ProviderCredentialID,
+		&route.Provider,
+		&route.DisplayName,
+		&route.BaseURL,
+		&route.RequestMode,
+		&route.SecretRef,
+		&route.CredentialMode,
+		&route.EncryptedSecret,
+	)
+	return route, err
+}
+
+func (s postgresConsoleService) resolveProviderCredentialSecret(credentialMode string, secretRef string, encryptedSecret string) (string, error) {
+	if strings.EqualFold(strings.TrimSpace(credentialMode), "secret_ref") {
+		return secret.ResolveEnvOrFile(strings.TrimSpace(secretRef))
+	}
+	if strings.HasPrefix(strings.TrimSpace(encryptedSecret), secret.EncryptedSecretPrefix) {
+		return s.secretService.Reveal(strings.TrimSpace(encryptedSecret), true)
+	}
+	return strings.TrimSpace(encryptedSecret), nil
+}
+
+func (s postgresConsoleService) runProviderModelHealthcheck(ctx context.Context, route providerModelHealthcheckRouteRecord, apiKey string) ModelHealthcheckUpdate {
+	startedAt := time.Now().UTC()
+	update := ModelHealthcheckUpdate{
+		LastHealthCheckedAt: startedAt,
+		HealthStatus:        "degraded",
+	}
+
+	if s.chatProxy == nil {
+		update.LastHealthError = ErrProxyUnavailable.Error()
+		return update
+	}
+
+	routeCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+
+	stream, err := s.chatProxy.Stream(routeCtx, ChatRequest{
+		Model:     strings.TrimSpace(route.RequestedModel),
+		Messages:  []ChatMessage{{Role: "user", Content: "你好"}},
+		Stream:    true,
+		MaxTokens: 1,
+	}, domain.RequestContext{
+		SelectedProviderID:   route.ProviderCredentialID,
+		SelectedProviderName: route.DisplayName,
+		RouteID:              route.RouteID,
+		RequestedModel:       route.RequestedModel,
+		ResolvedModel:        route.RequestedModel,
+		ProviderTarget: domain.ProviderTarget{
+			CredentialID: route.ProviderCredentialID,
+			Provider:     strings.TrimSpace(route.Provider),
+			BaseURL:      strings.TrimSpace(route.BaseURL),
+			APIKey:       apiKey,
+		},
+	})
+	if err != nil {
+		completedAt := time.Now().UTC()
+		update.LastHealthCheckedAt = completedAt
+		update.LatencyMS = durationMilliseconds(completedAt.Sub(startedAt))
+		update.LastHealthError = strings.TrimSpace(err.Error())
+		return update
+	}
+
+	var firstTokenAt time.Time
+	stopStream := false
+	result, runErr := stream.Run(func([]byte) error {
+		if stopStream {
+			return errModelHealthcheckSatisfied
+		}
+		return nil
+	}, func() {
+		if firstTokenAt.IsZero() {
+			firstTokenAt = time.Now().UTC()
+		}
+		stopStream = true
+	})
+	if errors.Is(runErr, errModelHealthcheckSatisfied) {
+		runErr = nil
+	}
+
+	completedAt := time.Now().UTC()
+	update.LastHealthCheckedAt = completedAt
+	update.LatencyMS = durationMilliseconds(completedAt.Sub(startedAt))
+	if result.Response.Usage != nil && result.Response.Usage.CompletionTokens > 0 && firstTokenAt.IsZero() {
+		firstTokenAt = completedAt
+	}
+	if result.SawContentToken || !firstTokenAt.IsZero() {
+		update.HealthStatus = "healthy"
+		update.LastHealthError = ""
+		if !firstTokenAt.IsZero() {
+			update.FirstTokenLatencyMS = durationMilliseconds(firstTokenAt.Sub(startedAt))
+		}
+		return update
+	}
+
+	update.LastHealthError = modelHealthcheckError(runErr, routeCtx.Err())
+	return update
+}
+
+func (s postgresConsoleService) updateProviderModelHealth(ctx context.Context, routeID string, update ModelHealthcheckUpdate) error {
+	if _, err := s.db.Exec(ctx, `
+		update route_catalog
+		set
+			health_status = $2,
+			last_health_error = $3,
+			last_health_checked_at = $4,
+			first_token_latency_ms = $5,
+			latency_ms = $6,
+			updated_at = now()
+		where id = $1;
+	`, routeID, update.HealthStatus, update.LastHealthError, nullableTime(update.LastHealthCheckedAt), update.FirstTokenLatencyMS, update.LatencyMS); err != nil {
+		return err
+	}
+
+	return s.insertModelHealthHistory(ctx, routeID, update)
+}
+
+func nullableTime(value time.Time) any {
+	if value.IsZero() {
+		return nil
+	}
+	return value
+}
+
+func (s postgresConsoleService) insertModelHealthHistory(ctx context.Context, routeID string, update ModelHealthcheckUpdate) error {
+	var requestedModel string
+	var providerCredentialID string
+	var routeLabel string
+	var requestMode string
+	if err := s.db.QueryRow(ctx, `
+		select
+			rc.requested_model,
+			rc.provider_credential_id,
+			coalesce(nullif(pc.display_name, ''), nullif(rc.resolved_provider, ''), rc.provider_credential_id),
+			coalesce(rc.request_mode, '')
+		from route_catalog rc
+		left join provider_credentials pc on pc.id = rc.provider_credential_id
+		where rc.id = $1;
+	`, routeID).Scan(&requestedModel, &providerCredentialID, &routeLabel, &requestMode); err != nil {
+		return err
+	}
+
+	checkedAt := update.LastHealthCheckedAt.UTC()
+	if checkedAt.IsZero() {
+		checkedAt = time.Now().UTC()
+	}
+
+	_, err := s.db.Exec(ctx, `
+		insert into model_healthcheck_history (
+			id,
+			route_id,
+			requested_model,
+			provider_credential_id,
+			route_label,
+			health_status,
+			last_health_error,
+			request_mode,
+			latency_ms,
+			first_token_latency_ms,
+			checked_at
+		) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11);
+	`, uuid.NewString(), routeID, requestedModel, providerCredentialID, routeLabel, normalizeModelHealthStatus(update.HealthStatus, update.LastHealthError), strings.TrimSpace(update.LastHealthError), requestMode, nonNegativeInt64(update.LatencyMS), nonNegativeInt64(update.FirstTokenLatencyMS), checkedAt)
+	return err
+}
+
+func normalizeModelHealthStatus(status string, lastError string) string {
+	switch strings.TrimSpace(status) {
+	case "healthy":
+		return "healthy"
+	case "warning":
+		return "warning"
+	case "degraded":
+		return "degraded"
+	}
+	if strings.TrimSpace(lastError) != "" {
+		return "degraded"
+	}
+	return "warning"
+}
+
+func nonNegativeInt64(value int64) int64 {
+	if value < 0 {
+		return 0
+	}
+	return value
+}
+
+func (s postgresConsoleService) ProviderModels(ctx context.Context) (ProviderModelsPageData, error) {
+	providerRows, err := s.db.Query(ctx, `
+		select
+			pc.id,
+			pc.provider,
+			pc.display_name,
+			coalesce(pc.supported_models, '{}'),
+			coalesce(pc.base_url, ''),
+			pc.credential_mode,
+			coalesce(pc.secret_ref, ''),
+			pc.status
+		from provider_credentials pc
+		where pc.status = 'active'
+		order by pc.id asc;
+	`)
+	if err != nil {
+		return ProviderModelsPageData{}, err
+	}
+	defer providerRows.Close()
+
+	providers := make([]ProviderItem, 0)
+	for providerRows.Next() {
+		var item ProviderItem
+		if err := providerRows.Scan(
+			&item.ID,
+			&item.Provider,
+			&item.DisplayName,
+			&item.SupportedModels,
+			&item.BaseURL,
+			&item.CredentialMode,
+			&item.SecretRef,
+			&item.Status,
+		); err != nil {
+			return ProviderModelsPageData{}, err
+		}
+		item.Provider = normalizeConsoleProvider(item.Provider, item.DisplayName, "", "")
+		providers = append(providers, item)
+	}
+	if err := providerRows.Err(); err != nil {
+		return ProviderModelsPageData{}, err
+	}
+	sort.Slice(providers, func(i, j int) bool {
+		if providers[i].Provider == providers[j].Provider {
+			return providers[i].ID < providers[j].ID
+		}
+		return providers[i].Provider < providers[j].Provider
+	})
+
+	modelRows, err := s.db.Query(ctx, `
+		select
+			rc.requested_model,
+			pc.provider,
+			rc.provider_credential_id,
+			coalesce(nullif(pc.display_name, ''), nullif(rc.resolved_provider, ''), rc.provider_credential_id),
+			coalesce(rc.health_status, ''),
+			coalesce(rc.latency_ms, 0),
+			coalesce(rc.request_mode, ''),
+			coalesce(pc.display_name, ''),
+			coalesce(rc.resolved_provider, '')
+		from route_catalog rc
+		left join provider_credentials pc on pc.id = rc.provider_credential_id
+		where rc.endpoint = '/v1/chat/completions'
+		order by rc.requested_model asc;
+	`)
+	if err != nil {
+		return ProviderModelsPageData{}, err
+	}
+	defer modelRows.Close()
+
+	models := make([]ProviderModelItem, 0)
+	for modelRows.Next() {
+		var item ProviderModelItem
+		var rawProvider string
+		var rawDisplayName string
+		var rawResolvedProvider string
+		if err := modelRows.Scan(
+			&item.RequestedModel,
+			&rawProvider,
+			&item.ProviderCredentialID,
+			&item.RouteLabel,
+			&item.HealthStatus,
+			&item.LatencyMS,
+			&item.RequestMode,
+			&rawDisplayName,
+			&rawResolvedProvider,
+		); err != nil {
+			return ProviderModelsPageData{}, err
+		}
+		item.Provider = normalizeConsoleProvider(rawProvider, rawDisplayName, rawResolvedProvider, item.RequestedModel)
+		item.RouteLabel = neutralizeConsoleRouteLabel(item.RouteLabel)
+		models = append(models, item)
+	}
+	if err := modelRows.Err(); err != nil {
+		return ProviderModelsPageData{}, err
+	}
+	sort.Slice(models, func(i, j int) bool {
+		if models[i].Provider == models[j].Provider {
+			if models[i].RequestedModel == models[j].RequestedModel {
+				return models[i].ProviderCredentialID < models[j].ProviderCredentialID
+			}
+			return models[i].RequestedModel < models[j].RequestedModel
+		}
+		return models[i].Provider < models[j].Provider
+	})
+
+	return ProviderModelsPageData{
+		Providers: providers,
+		Models:    models,
+	}, nil
+}
+
+func (s postgresConsoleService) CreateProvider(ctx context.Context, req CreateProviderRequest) (ProviderMutationResult, error) {
+	provider := strings.TrimSpace(req.Provider)
+	displayName := strings.TrimSpace(req.DisplayName)
+	baseURL := strings.TrimSpace(req.BaseURL)
+	credentialMode := normalizeProviderCredentialMode(req.CredentialMode)
+	secretRef := strings.TrimSpace(req.SecretRef)
+	apiKey := strings.TrimSpace(req.APIKey)
+
+	switch {
+	case provider == "":
+		return ProviderMutationResult{}, StatusError{Code: http.StatusBadRequest, Message: "provider is required"}
+	case displayName == "":
+		return ProviderMutationResult{}, StatusError{Code: http.StatusBadRequest, Message: "display_name is required"}
+	case baseURL == "":
+		return ProviderMutationResult{}, StatusError{Code: http.StatusBadRequest, Message: "base_url is required"}
+	case credentialMode == "":
+		return ProviderMutationResult{}, StatusError{Code: http.StatusBadRequest, Message: "credential_mode must be encrypted or secret_ref"}
+	case credentialMode == "secret_ref" && secretRef == "":
+		return ProviderMutationResult{}, StatusError{Code: http.StatusBadRequest, Message: "secret_ref is required for secret_ref mode"}
+	case credentialMode == "encrypted" && apiKey == "":
+		return ProviderMutationResult{}, StatusError{Code: http.StatusBadRequest, Message: "api_key is required for encrypted mode"}
+	}
+
+	encryptedSecret := ""
+	if credentialMode == "encrypted" {
+		ciphertext, _, err := s.secretService.Encrypt(apiKey)
+		if err != nil {
+			return ProviderMutationResult{}, err
+		}
+		if strings.TrimSpace(ciphertext) != "" {
+			encryptedSecret = ciphertext
+		} else {
+			encryptedSecret = apiKey
+		}
+	}
+
+	item := ProviderItem{
+		ID:             newProviderCredentialID(),
+		Provider:       normalizeConsoleProvider(provider, displayName, provider, ""),
+		DisplayName:    displayName,
+		BaseURL:        baseURL,
+		CredentialMode: credentialMode,
+		SecretRef:      secretRef,
+		Status:         "active",
+	}
+
+	if _, err := s.db.Exec(ctx, `
+		insert into provider_credentials (
+			id,
+			provider,
+			display_name,
+			supported_models,
+			base_url,
+			encrypted_secret,
+			secret_ref,
+			credential_mode,
+			status
+		) values ($1, $2, $3, '{}', $4, $5, $6, $7, 'active');
+	`, item.ID, provider, displayName, baseURL, encryptedSecret, secretRef, credentialMode); err != nil {
+		return ProviderMutationResult{}, mapProviderMutationError(err)
+	}
+
+	return ProviderMutationResult{Item: item}, nil
+}
+
+func (s postgresConsoleService) CreateProviderModel(ctx context.Context, req CreateProviderModelRequest) (ProviderModelMutationResult, error) {
+	requestedModel := strings.TrimSpace(req.RequestedModel)
+	providerCredentialID := strings.TrimSpace(req.ProviderCredentialID)
+	requestMode := normalizeProviderModelRequestMode(req.RequestMode)
+
+	switch {
+	case requestedModel == "":
+		return ProviderModelMutationResult{}, StatusError{Code: http.StatusBadRequest, Message: "requested_model is required"}
+	case providerCredentialID == "":
+		return ProviderModelMutationResult{}, StatusError{Code: http.StatusBadRequest, Message: "provider_credential_id is required"}
+	}
+
+	var rawProvider string
+	var displayName string
+	if err := s.db.QueryRow(ctx, `
+		select provider, display_name
+		from provider_credentials
+		where id = $1;
+	`, providerCredentialID).Scan(&rawProvider, &displayName); err != nil {
+		return ProviderModelMutationResult{}, mapProviderModelMutationError(err)
+	}
+
+	routeID := newRouteCatalogID(providerCredentialID, requestedModel)
+	resolvedProvider := strings.TrimSpace(displayName)
+	if resolvedProvider == "" {
+		resolvedProvider = strings.TrimSpace(rawProvider)
+	}
+
+	if _, err := s.db.Exec(ctx, `
+		insert into route_catalog (
+			id,
+			requested_model,
+			resolved_provider,
+			provider_credential_id,
+			endpoint,
+			latency_ms,
+			health_status,
+			request_mode,
+			updated_at,
+			status,
+			healthcheck_enabled,
+			healthcheck_assertion_type,
+			last_health_error,
+			first_token_latency_ms
+		) values (
+			$1, $2, $3, $4, $5, 0, 'degraded', $6, now(), 'active', $7, 'non_empty', '', 0
+		);
+	`, routeID, requestedModel, resolvedProvider, providerCredentialID, modelHealthcheckChatEndpoint, requestMode, req.HealthcheckEnabled); err != nil {
+		return ProviderModelMutationResult{}, mapProviderModelMutationError(err)
+	}
+
+	if _, err := s.db.Exec(ctx, `
+		update provider_credentials
+		set supported_models = case
+			when $2 = any(coalesce(supported_models, '{}')) then coalesce(supported_models, '{}')
+			else array_append(coalesce(supported_models, '{}'), $2)
+		end
+		where id = $1;
+	`, providerCredentialID, requestedModel); err != nil {
+		return ProviderModelMutationResult{}, err
+	}
+
+	if req.HealthcheckEnabled {
+		_, _ = s.RunProviderModelHealthcheck(ctx, routeID)
+	}
+
+	item, err := s.lookupProviderModelItemByRouteID(ctx, routeID)
+	if err != nil {
+		return ProviderModelMutationResult{}, err
+	}
+	return ProviderModelMutationResult{Item: item}, nil
+}
+
+func (s postgresConsoleService) RunProviderModelHealthcheck(ctx context.Context, id string) (ProviderModelMutationResult, error) {
+	route, err := s.loadProviderModelHealthcheckRoute(ctx, id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ProviderModelMutationResult{}, StatusError{Code: http.StatusNotFound, Message: "provider model not found", Err: err}
+		}
+		return ProviderModelMutationResult{}, err
+	}
+
+	apiKey, err := s.resolveProviderCredentialSecret(route.CredentialMode, route.SecretRef, route.EncryptedSecret)
+	if err != nil {
+		update := ModelHealthcheckUpdate{
+			LastHealthCheckedAt: time.Now().UTC(),
+			HealthStatus:        "degraded",
+			LastHealthError:     strings.TrimSpace(err.Error()),
+		}
+		if updateErr := s.updateProviderModelHealth(ctx, route.RouteID, update); updateErr != nil {
+			return ProviderModelMutationResult{}, updateErr
+		}
+		item, lookupErr := s.lookupProviderModelItemByRouteID(ctx, route.RouteID)
+		if lookupErr != nil {
+			return ProviderModelMutationResult{}, lookupErr
+		}
+		return ProviderModelMutationResult{Item: item}, nil
+	}
+
+	update := s.runProviderModelHealthcheck(ctx, route, apiKey)
+	if err := s.updateProviderModelHealth(ctx, route.RouteID, update); err != nil {
+		return ProviderModelMutationResult{}, err
+	}
+
+	item, err := s.lookupProviderModelItemByRouteID(ctx, route.RouteID)
+	if err != nil {
+		return ProviderModelMutationResult{}, err
+	}
+	return ProviderModelMutationResult{Item: item}, nil
+}
+
+func (s postgresConsoleService) ModelHealth(ctx context.Context, window string) (ModelHealthPageData, error) {
+	rows, err := s.db.Query(ctx, `
+		select
+			rc.id,
+			rc.requested_model,
+			rc.provider_credential_id,
+			coalesce(nullif(pc.display_name, ''), nullif(rc.resolved_provider, ''), rc.provider_credential_id),
+			coalesce(rc.health_status, ''),
+			coalesce(rc.last_health_error, ''),
+			coalesce(rc.request_mode, ''),
+			coalesce(rc.latency_ms, 0),
+			coalesce(rc.first_token_latency_ms, 0),
+			rc.last_health_checked_at
+		from route_catalog rc
+		left join provider_credentials pc on pc.id = rc.provider_credential_id
+		where rc.endpoint = $1
+		order by rc.requested_model asc;
+	`, modelHealthcheckChatEndpoint)
+	if err != nil {
+		return ModelHealthPageData{}, err
+	}
+	defer rows.Close()
+
+	items := make([]ModelHealthItem, 0)
+	for rows.Next() {
+		var item ModelHealthItem
+		var lastCheckedAt pgtype.Timestamptz
+		if err := rows.Scan(
+			&item.ID,
+			&item.RequestedModel,
+			&item.ProviderCredentialID,
+			&item.RouteLabel,
+			&item.HealthStatus,
+			&item.LastHealthError,
+			&item.RequestMode,
+			&item.LatencyMS,
+			&item.FirstTokenLatencyMS,
+			&lastCheckedAt,
+		); err != nil {
+			return ModelHealthPageData{}, err
+		}
+		item.RouteLabel = neutralizeConsoleRouteLabel(item.RouteLabel)
+		if lastCheckedAt.Valid {
+			checkedAt := lastCheckedAt.Time
+			item.LastHealthCheckedAt = checkedAt.In(shanghaiLocation()).Format(time.RFC3339)
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return ModelHealthPageData{}, err
+	}
+
+	normalizedWindow, windowLabel, bucketWidth, bucketCount, since := normalizeModelHealthWindow(window, time.Now())
+	wall, err := s.loadModelHealthWall(ctx, normalizedWindow, windowLabel, bucketWidth, bucketCount, since)
+	if err != nil {
+		return ModelHealthPageData{}, err
+	}
+
+	return ModelHealthPageData{
+		Items: items,
+		Wall:  wall,
+	}, nil
+}
+
+func normalizeModelHealthWindow(window string, now time.Time) (string, string, time.Duration, int, time.Time) {
+	now = now.UTC()
+	switch strings.TrimSpace(window) {
+	case "6h":
+		bucketWidth := 30 * time.Minute
+		return "6h", "最近 6 小时", bucketWidth, 12, now.Add(-6 * time.Hour)
+	case "7d":
+		bucketWidth := 12 * time.Hour
+		return "7d", "最近 7 天", bucketWidth, 14, now.Add(-7 * 24 * time.Hour)
+	default:
+		bucketWidth := 2 * time.Hour
+		return "24h", "最近 24 小时", bucketWidth, 12, now.Add(-24 * time.Hour)
+	}
+}
+
+type modelHealthWallAccumulator struct {
+	model          string
+	provider       string
+	routeLabel     string
+	totalRequests  int
+	successCount   int
+	totalLatencyMS int64
+	cells          map[time.Time]*modelHealthWallCellAccumulator
+}
+
+type modelHealthWallCellAccumulator struct {
+	status      string
+	requests    int
+	latencyMS   int64
+	errorSeenAt time.Time
+}
+
+func (s postgresConsoleService) loadModelHealthWall(ctx context.Context, window string, windowLabel string, bucketWidth time.Duration, bucketCount int, since time.Time) (ModelHealthWall, error) {
+	rows, err := s.db.Query(ctx, `
+		select
+			requested_model,
+			coalesce(nullif(pc.display_name, ''), nullif(mhh.route_label, ''), mhh.provider_credential_id),
+			route_label,
+			health_status,
+			latency_ms,
+			checked_at
+		from model_healthcheck_history mhh
+		left join provider_credentials pc on pc.id = mhh.provider_credential_id
+		where checked_at >= $1
+		order by requested_model asc, checked_at asc;
+	`, since)
+	if err != nil {
+		return ModelHealthWall{}, err
+	}
+	defer rows.Close()
+
+	accumulators := map[string]*modelHealthWallAccumulator{}
+	for rows.Next() {
+		var model string
+		var provider string
+		var routeLabel string
+		var status string
+		var latencyMS int64
+		var checkedAt time.Time
+		if err := rows.Scan(&model, &provider, &routeLabel, &status, &latencyMS, &checkedAt); err != nil {
+			return ModelHealthWall{}, err
+		}
+
+		bucketTime := checkedAt.UTC().Truncate(bucketWidth)
+		key := model + "\x00" + routeLabel
+		acc := accumulators[key]
+		if acc == nil {
+			acc = &modelHealthWallAccumulator{
+				model:      model,
+				provider:   strings.TrimSpace(provider),
+				routeLabel: neutralizeConsoleRouteLabel(routeLabel),
+				cells:      map[time.Time]*modelHealthWallCellAccumulator{},
+			}
+			accumulators[key] = acc
+		}
+		acc.totalRequests++
+		if status == "healthy" {
+			acc.successCount++
+		}
+		if latencyMS > 0 {
+			acc.totalLatencyMS += latencyMS
+		}
+
+		cell := acc.cells[bucketTime]
+		if cell == nil {
+			cell = &modelHealthWallCellAccumulator{status: status}
+			acc.cells[bucketTime] = cell
+		}
+		cell.requests++
+		cell.latencyMS += maxInt64(latencyMS, 0)
+		if healthSeverity(status) > healthSeverity(cell.status) {
+			cell.status = status
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return ModelHealthWall{}, err
+	}
+
+	buckets := buildModelHealthBuckets(since, bucketWidth, bucketCount, window)
+	lanes := make([]ModelHealthWallLane, 0, len(accumulators))
+	for _, acc := range accumulators {
+		cells := make([]ModelHealthWallCell, 0, len(buckets))
+		for _, bucket := range buckets {
+			if cell, ok := acc.cells[bucket.time]; ok {
+				avgLatency := "--"
+				if cell.requests > 0 && cell.latencyMS > 0 {
+					avgLatency = fmt.Sprintf("%d ms", int(math.Round(float64(cell.latencyMS)/float64(cell.requests))))
+				}
+				cells = append(cells, ModelHealthWallCell{
+					BucketLabel: bucket.label,
+					Status:      modelHealthStatusLabel(cell.status),
+					Latency:     avgLatency,
+					Requests:    fmt.Sprintf("%d 次", cell.requests),
+				})
+				continue
+			}
+			cells = append(cells, ModelHealthWallCell{
+				BucketLabel: bucket.label,
+				Status:      "空窗",
+				Latency:     "--",
+				Requests:    "0 次",
+			})
+		}
+
+		avgLatency := "0 ms"
+		if acc.totalRequests > 0 && acc.totalLatencyMS > 0 {
+			avgLatency = fmt.Sprintf("%d ms", int(math.Round(float64(acc.totalLatencyMS)/float64(acc.totalRequests))))
+		}
+		lanes = append(lanes, ModelHealthWallLane{
+			Model:          acc.model,
+			Provider:       acc.provider,
+			RouteLabel:     acc.routeLabel,
+			SuccessRate:    fmt.Sprintf("%d%%", int(math.Round((float64(acc.successCount)*100.0)/float64(maxInt(acc.totalRequests, 1))))),
+			AverageLatency: avgLatency,
+			Cells:          cells,
+		})
+	}
+
+	sort.Slice(lanes, func(i, j int) bool {
+		if lanes[i].Model == lanes[j].Model {
+			return lanes[i].RouteLabel < lanes[j].RouteLabel
+		}
+		return lanes[i].Model < lanes[j].Model
+	})
+
+	labels := make([]string, 0, len(buckets))
+	for _, bucket := range buckets {
+		labels = append(labels, bucket.label)
+	}
+
+	return ModelHealthWall{
+		Window:      window,
+		WindowLabel: windowLabel,
+		Buckets:     labels,
+		Lanes:       lanes,
+	}, nil
+}
+
+type modelHealthBucket struct {
+	time  time.Time
+	label string
+}
+
+func buildModelHealthBuckets(since time.Time, bucketWidth time.Duration, bucketCount int, window string) []modelHealthBucket {
+	start := since.UTC().Truncate(bucketWidth)
+	buckets := make([]modelHealthBucket, 0, bucketCount)
+	for index := 0; index < bucketCount; index++ {
+		current := start.Add(time.Duration(index) * bucketWidth)
+		label := current.In(shanghaiLocation()).Format("15:04")
+		if window == "7d" {
+			label = current.In(shanghaiLocation()).Format("01-02")
+		}
+		buckets = append(buckets, modelHealthBucket{time: current, label: label})
+	}
+	return buckets
+}
+
+func modelHealthStatusLabel(status string) string {
+	switch strings.TrimSpace(status) {
+	case "healthy":
+		return "健康"
+	case "warning":
+		return "告警"
+	case "degraded":
+		return "降级"
+	default:
+		return "空窗"
+	}
+}
+
+func healthSeverity(status string) int {
+	switch strings.TrimSpace(status) {
+	case "degraded":
+		return 3
+	case "warning":
+		return 2
+	case "healthy":
+		return 1
+	default:
+		return 0
+	}
+}
+
+func maxInt(value int, floor int) int {
+	if value < floor {
+		return floor
+	}
+	return value
+}
+
 func (s postgresConsoleService) Routes(ctx context.Context) (RoutesPageData, error) {
 	var activeProviders int
 	var modelMappings int
@@ -1485,7 +2396,7 @@ func (s postgresConsoleService) RunPlayground(ctx context.Context, req Playgroun
 		Endpoint:    neutralizeConsoleEndpoint(endpoint),
 		Latency:     fmt.Sprintf("%d ms", latencyMS),
 		Status:      "200 成功",
-		Response:    responseText,
+		Response:    security.RedactText(responseText),
 		PlatformKey: platformKeyName,
 	}, nil
 }
@@ -1584,12 +2495,13 @@ func (s postgresConsoleService) StreamPlayground(ctx context.Context, req Playgr
 			}
 
 			responseText := extractPlaygroundResponseText(result.Response)
+			redactedResponseText := security.RedactText(responseText)
 			finalResponse := PlaygroundRunResponse{
 				RouteLabel:  neutralizeConsoleRouteLabel(resolved.SelectedProviderName),
 				Endpoint:    neutralizeConsoleEndpoint("/v1/chat/completions"),
 				Latency:     fmt.Sprintf("%d ms", latencyMS),
 				Status:      fmt.Sprintf("%d %s", statusCode, mapBool(statusCode < 400, "成功", "失败")),
-				Response:    responseText,
+				Response:    redactedResponseText,
 				PlatformKey: platformKeyName,
 			}
 			if err := s.insertPlaygroundRun(ctx, resolved, model, prompt, "/v1/chat/completions", responseText, statusCode, latencyMS); err != nil {
@@ -1845,6 +2757,221 @@ func (s postgresConsoleService) UsageOverview(ctx context.Context, query UsageQu
 	return s.usageOverviewFromLogs(ctx, query)
 }
 
+func (s postgresConsoleService) TenantBilling(ctx context.Context, query TenantBillingQuery) (TenantBillingPageData, error) {
+	normalized, monthStart, monthEnd, err := normalizeTenantBillingQuery(query)
+	if err != nil {
+		return TenantBillingPageData{}, err
+	}
+
+	payload := TenantBillingPageData{
+		Summary: TenantBillingSummary{
+			TenantID: normalized.TenantID,
+			Month:    normalized.Month,
+		},
+		Providers: []TenantBillingProviderItem{},
+		Models:    []TenantBillingModelItem{},
+		APIKeys:   []TenantBillingAPIKeyItem{},
+	}
+
+	if err := s.db.QueryRow(ctx, `
+		select
+			coalesce(sum(l.request_count), 0),
+			coalesce(sum(l.success_count), 0),
+			coalesce(sum(l.failure_count), 0),
+			coalesce(sum(l.input_tokens), 0),
+			coalesce(sum(l.output_tokens), 0),
+			coalesce(sum(l.cached_tokens), 0),
+			coalesce(sum(l.total_tokens), 0),
+			coalesce(sum(l.input_cost_microyuan), 0),
+			coalesce(sum(l.output_cost_microyuan), 0),
+			coalesce(sum(l.cached_cost_microyuan), 0),
+			coalesce(sum(l.total_cost_microyuan), 0)
+		from tenant_usage_ledger l
+		where l.tenant_id = $1
+		  and l.bucket_start >= $2
+		  and l.bucket_start < $3;
+	`, normalized.TenantID, monthStart, monthEnd).Scan(
+		&payload.Summary.RequestCount,
+		&payload.Summary.SuccessCount,
+		&payload.Summary.FailureCount,
+		&payload.Summary.InputTokens,
+		&payload.Summary.OutputTokens,
+		&payload.Summary.CachedTokens,
+		&payload.Summary.TotalTokens,
+		new(int64),
+		new(int64),
+		new(int64),
+		new(int64),
+	); err != nil {
+		return TenantBillingPageData{}, err
+	}
+
+	var inputCostMicroyuan int64
+	var outputCostMicroyuan int64
+	var cachedCostMicroyuan int64
+	var totalCostMicroyuan int64
+	if err := s.db.QueryRow(ctx, `
+		select
+			coalesce(sum(l.input_cost_microyuan), 0),
+			coalesce(sum(l.output_cost_microyuan), 0),
+			coalesce(sum(l.cached_cost_microyuan), 0),
+			coalesce(sum(l.total_cost_microyuan), 0)
+		from tenant_usage_ledger l
+		where l.tenant_id = $1
+		  and l.bucket_start >= $2
+		  and l.bucket_start < $3;
+	`, normalized.TenantID, monthStart, monthEnd).Scan(
+		&inputCostMicroyuan,
+		&outputCostMicroyuan,
+		&cachedCostMicroyuan,
+		&totalCostMicroyuan,
+	); err != nil {
+		return TenantBillingPageData{}, err
+	}
+	payload.Summary.InputCost = formatMicroyuanAmount(inputCostMicroyuan)
+	payload.Summary.OutputCost = formatMicroyuanAmount(outputCostMicroyuan)
+	payload.Summary.CachedCost = formatMicroyuanAmount(cachedCostMicroyuan)
+	payload.Summary.TotalCost = formatMicroyuanAmount(totalCostMicroyuan)
+
+	providerRows, err := s.db.Query(ctx, `
+		select
+			l.provider_credential_id,
+			coalesce(pc.provider, ''),
+			coalesce(nullif(pc.display_name, ''), l.provider_credential_id),
+			count(*) as request_count,
+			count(*) filter (where l.usage_status = 'success') as success_count,
+			count(*) filter (where l.usage_status <> 'success') as failure_count,
+			coalesce(sum(l.total_tokens), 0) as total_tokens,
+			coalesce(sum(l.total_cost_microyuan), 0) as total_cost_microyuan
+		from llm_request_logs l
+		left join provider_credentials pc on pc.id = l.provider_credential_id
+		where l.tenant_id = $1
+		  and l.request_started_at >= $2
+		  and l.request_started_at < $3
+		group by l.provider_credential_id, coalesce(pc.provider, ''), coalesce(nullif(pc.display_name, ''), l.provider_credential_id)
+		order by count(*) desc, l.provider_credential_id asc;
+	`, normalized.TenantID, monthStart, monthEnd)
+	if err != nil {
+		return TenantBillingPageData{}, err
+	}
+	defer providerRows.Close()
+
+	for providerRows.Next() {
+		var item TenantBillingProviderItem
+		var totalCost int64
+		if err := providerRows.Scan(
+			&item.ProviderCredentialID,
+			&item.Provider,
+			&item.DisplayName,
+			&item.RequestCount,
+			&item.SuccessCount,
+			&item.FailureCount,
+			&item.TotalTokens,
+			&totalCost,
+		); err != nil {
+			return TenantBillingPageData{}, err
+		}
+		item.Provider = normalizeConsoleProvider(item.Provider, item.DisplayName, item.DisplayName, "")
+		item.DisplayName = neutralizeConsoleRouteLabel(item.DisplayName)
+		item.TotalCost = formatMicroyuanAmount(totalCost)
+		payload.Providers = append(payload.Providers, item)
+	}
+	if err := providerRows.Err(); err != nil {
+		return TenantBillingPageData{}, err
+	}
+
+	modelRows, err := s.db.Query(ctx, `
+		select
+			l.request_model,
+			l.provider_credential_id,
+			coalesce(nullif(pc.display_name, ''), l.provider_credential_id),
+			count(*) as request_count,
+			count(*) filter (where l.usage_status = 'success') as success_count,
+			count(*) filter (where l.usage_status <> 'success') as failure_count,
+			coalesce(sum(l.total_tokens), 0) as total_tokens,
+			coalesce(sum(l.total_cost_microyuan), 0) as total_cost_microyuan
+		from llm_request_logs l
+		left join provider_credentials pc on pc.id = l.provider_credential_id
+		where l.tenant_id = $1
+		  and l.request_started_at >= $2
+		  and l.request_started_at < $3
+		group by l.request_model, l.provider_credential_id, coalesce(nullif(pc.display_name, ''), l.provider_credential_id)
+		order by count(*) desc, l.request_model asc, l.provider_credential_id asc;
+	`, normalized.TenantID, monthStart, monthEnd)
+	if err != nil {
+		return TenantBillingPageData{}, err
+	}
+	defer modelRows.Close()
+
+	for modelRows.Next() {
+		var item TenantBillingModelItem
+		var totalCost int64
+		if err := modelRows.Scan(
+			&item.Model,
+			&item.ProviderCredentialID,
+			&item.ProviderDisplayName,
+			&item.RequestCount,
+			&item.SuccessCount,
+			&item.FailureCount,
+			&item.TotalTokens,
+			&totalCost,
+		); err != nil {
+			return TenantBillingPageData{}, err
+		}
+		item.ProviderDisplayName = neutralizeConsoleRouteLabel(item.ProviderDisplayName)
+		item.TotalCost = formatMicroyuanAmount(totalCost)
+		payload.Models = append(payload.Models, item)
+	}
+	if err := modelRows.Err(); err != nil {
+		return TenantBillingPageData{}, err
+	}
+
+	apiKeyRows, err := s.db.Query(ctx, `
+		select
+			l.platform_api_key_id,
+			coalesce(nullif(max(k.name), ''), l.platform_api_key_id) as key_name,
+			count(*) as request_count,
+			count(*) filter (where l.usage_status = 'success') as success_count,
+			count(*) filter (where l.usage_status <> 'success') as failure_count,
+			coalesce(sum(l.total_tokens), 0) as total_tokens,
+			coalesce(sum(l.total_cost_microyuan), 0) as total_cost_microyuan
+		from llm_request_logs l
+		left join platform_api_keys k on k.id = l.platform_api_key_id
+		where l.tenant_id = $1
+		  and l.request_started_at >= $2
+		  and l.request_started_at < $3
+		group by l.platform_api_key_id
+		order by count(*) desc, l.platform_api_key_id asc;
+	`, normalized.TenantID, monthStart, monthEnd)
+	if err != nil {
+		return TenantBillingPageData{}, err
+	}
+	defer apiKeyRows.Close()
+
+	for apiKeyRows.Next() {
+		var item TenantBillingAPIKeyItem
+		var totalCost int64
+		if err := apiKeyRows.Scan(
+			&item.PlatformAPIKeyID,
+			&item.Name,
+			&item.RequestCount,
+			&item.SuccessCount,
+			&item.FailureCount,
+			&item.TotalTokens,
+			&totalCost,
+		); err != nil {
+			return TenantBillingPageData{}, err
+		}
+		item.TotalCost = formatMicroyuanAmount(totalCost)
+		payload.APIKeys = append(payload.APIKeys, item)
+	}
+	if err := apiKeyRows.Err(); err != nil {
+		return TenantBillingPageData{}, err
+	}
+
+	return payload, nil
+}
+
 func (s postgresConsoleService) UsageTrends(ctx context.Context, query UsageQuery) (UsageTrendData, error) {
 	var err error
 	query, err = normalizeUsageQuery(query, time.Now())
@@ -1904,6 +3031,7 @@ func (s postgresConsoleService) UsageLatencyWall(ctx context.Context, query Usag
 			lane = &usageLatencyLaneAccumulator{
 				model:    model,
 				provider: provider,
+				source:   "真实调用",
 				buckets:  make(map[time.Time]usageLatencyBucketStat),
 			}
 			lanesByKey[key] = lane
@@ -1933,8 +3061,67 @@ func (s postgresConsoleService) UsageLatencyWall(ctx context.Context, query Usag
 		lanesByKey[key] = &usageLatencyLaneAccumulator{
 			model:    route.model,
 			provider: route.provider,
+			source:   "真实调用",
 			buckets:  make(map[time.Time]usageLatencyBucketStat),
 		}
+	}
+
+	healthRows, err := s.db.Query(ctx, `
+		select
+			mhh.requested_model,
+			coalesce(nullif(pc.display_name, ''), mhh.provider_credential_id),
+			mhh.health_status,
+			coalesce(mhh.latency_ms, 0),
+			mhh.checked_at
+		from model_healthcheck_history mhh
+		left join provider_credentials pc on pc.id = mhh.provider_credential_id
+		where mhh.checked_at >= $1
+		  and mhh.checked_at < $2
+		order by mhh.requested_model asc, mhh.checked_at asc;
+	`, query.From, query.To)
+	if err != nil {
+		return UsageLatencyWallData{}, err
+	}
+	defer healthRows.Close()
+
+	for healthRows.Next() {
+		var model string
+		var provider string
+		var healthStatus string
+		var latencyMS int64
+		var checkedAt time.Time
+		if err := healthRows.Scan(&model, &provider, &healthStatus, &latencyMS, &checkedAt); err != nil {
+			return UsageLatencyWallData{}, err
+		}
+
+		key := strings.TrimSpace(model) + "::" + strings.TrimSpace(provider) + "::healthcheck"
+		lane := lanesByKey[key]
+		if lane == nil {
+			lane = &usageLatencyLaneAccumulator{
+				model:    strings.TrimSpace(model),
+				provider: strings.TrimSpace(provider),
+				source:   "健康检查",
+				buckets:  make(map[time.Time]usageLatencyBucketStat),
+			}
+			lanesByKey[key] = lane
+		}
+
+		bucketStart := checkedAt.UTC().Truncate(bucketStep)
+		stat := lane.buckets[bucketStart]
+		stat.requestCount++
+		if strings.TrimSpace(healthStatus) == "healthy" {
+			stat.successCount++
+		}
+		stat.avgLatencyMS += maxInt64(latencyMS, 0)
+		lane.buckets[bucketStart] = stat
+		lane.totalRequests++
+		if strings.TrimSpace(healthStatus) == "healthy" {
+			lane.totalSuccess++
+		}
+		lane.totalLatencyTimes += maxInt64(latencyMS, 0)
+	}
+	if err := healthRows.Err(); err != nil {
+		return UsageLatencyWallData{}, err
 	}
 
 	buckets := usageLatencyBuckets(query.From, query.To, bucketStep, bucketLayout)
@@ -1952,11 +3139,16 @@ func (s postgresConsoleService) UsageLatencyWall(ctx context.Context, query Usag
 		laneList = append(laneList, lane)
 	}
 	sort.Slice(laneList, func(i, j int) bool {
+		if laneList[i].source != laneList[j].source {
+			return laneList[i].source == "健康检查"
+		}
 		if laneList[i].totalRequests == laneList[j].totalRequests {
 			return laneList[i].model < laneList[j].model
 		}
 		return laneList[i].totalRequests > laneList[j].totalRequests
 	})
+
+	laneList = dedupeUsageLatencyLanes(laneList)
 
 	for _, lane := range laneList {
 		averageLatency := "0 ms"
@@ -1968,12 +3160,25 @@ func (s postgresConsoleService) UsageLatencyWall(ctx context.Context, query Usag
 		for index, bucketStart := range buckets.times {
 			if bucket, ok := lane.buckets[bucketStart]; ok {
 				status := "健康"
-				if bucket.successCount < bucket.requestCount {
+				if lane.source == "健康检查" {
+					switch {
+					case bucket.requestCount == 0:
+						status = "空窗"
+					case bucket.successCount == bucket.requestCount:
+						status = "健康"
+					default:
+						status = "降级"
+					}
+				} else if bucket.successCount < bucket.requestCount {
 					status = "失败"
+				}
+				avgLatencyMS := bucket.avgLatencyMS
+				if bucket.requestCount > 0 && avgLatencyMS > 0 && lane.source == "健康检查" {
+					avgLatencyMS = int64(math.Round(float64(avgLatencyMS) / float64(bucket.requestCount)))
 				}
 				cells = append(cells, UsageLatencyCell{
 					BucketLabel: buckets.labels[index],
-					Latency:     fmt.Sprintf("%d ms", bucket.avgLatencyMS),
+					Latency:     fmt.Sprintf("%d ms", avgLatencyMS),
 					Status:      status,
 					Requests:    fmt.Sprintf("%d 次", bucket.requestCount),
 				})
@@ -1990,6 +3195,8 @@ func (s postgresConsoleService) UsageLatencyWall(ctx context.Context, query Usag
 
 		result.Lanes = append(result.Lanes, UsageLatencyLane{
 			Model:          lane.model,
+			Provider:       lane.provider,
+			Source:         lane.source,
 			RouteLabel:     neutralizeConsoleRouteLabel(lane.provider),
 			SuccessRate:    formatPercentage(successRateForCounts(lane.totalSuccess, lane.totalRequests)),
 			AverageLatency: averageLatency,
@@ -1998,6 +3205,116 @@ func (s postgresConsoleService) UsageLatencyWall(ctx context.Context, query Usag
 	}
 
 	return result, nil
+}
+
+func dedupeUsageLatencyLanes(lanes []*usageLatencyLaneAccumulator) []*usageLatencyLaneAccumulator {
+	if len(lanes) == 0 {
+		return lanes
+	}
+
+	groupedByModel := make(map[string][]*usageLatencyLaneAccumulator, len(lanes))
+	order := make([]string, 0, len(lanes))
+	for _, lane := range lanes {
+		model := strings.TrimSpace(lane.model)
+		if model == "" {
+			continue
+		}
+		if _, ok := groupedByModel[model]; !ok {
+			order = append(order, model)
+		}
+		groupedByModel[model] = append(groupedByModel[model], lane)
+	}
+
+	deduped := make([]*usageLatencyLaneAccumulator, 0, len(order))
+	for _, model := range order {
+		group := groupedByModel[model]
+		if len(group) == 0 {
+			continue
+		}
+		base := cloneUsageLatencyLane(group[0])
+		for _, candidate := range group[1:] {
+			if shouldReplaceUsageLatencyBase(base, candidate) {
+				base = cloneUsageLatencyLane(candidate)
+			}
+		}
+		for _, candidate := range group {
+			if candidate == nil || candidate == base {
+				continue
+			}
+			mergeUsageLatencyLane(base, candidate)
+		}
+		deduped = append(deduped, base)
+	}
+	return deduped
+}
+
+func cloneUsageLatencyLane(lane *usageLatencyLaneAccumulator) *usageLatencyLaneAccumulator {
+	if lane == nil {
+		return nil
+	}
+	cloned := &usageLatencyLaneAccumulator{
+		model:             lane.model,
+		provider:          lane.provider,
+		source:            lane.source,
+		totalRequests:     lane.totalRequests,
+		totalSuccess:      lane.totalSuccess,
+		totalLatencyTimes: lane.totalLatencyTimes,
+		buckets:           make(map[time.Time]usageLatencyBucketStat, len(lane.buckets)),
+	}
+	for bucketTime, stat := range lane.buckets {
+		cloned.buckets[bucketTime] = stat
+	}
+	return cloned
+}
+
+func shouldReplaceUsageLatencyBase(current *usageLatencyLaneAccumulator, candidate *usageLatencyLaneAccumulator) bool {
+	if current == nil {
+		return true
+	}
+	if candidate == nil {
+		return false
+	}
+
+	currentIsHealthcheck := current.source == "健康检查"
+	candidateIsHealthcheck := candidate.source == "健康检查"
+	currentHasRequests := current.totalRequests > 0
+	candidateHasRequests := candidate.totalRequests > 0
+
+	if !candidateIsHealthcheck && candidateHasRequests {
+		return currentIsHealthcheck || !currentHasRequests
+	}
+	if candidateIsHealthcheck && candidateHasRequests {
+		return !currentHasRequests
+	}
+	if !candidateIsHealthcheck && !currentHasRequests && currentIsHealthcheck {
+		return true
+	}
+	return false
+}
+
+func mergeUsageLatencyLane(base *usageLatencyLaneAccumulator, candidate *usageLatencyLaneAccumulator) {
+	if base == nil || candidate == nil {
+		return
+	}
+
+	baseIsHealthcheck := base.source == "健康检查"
+	candidateIsHealthcheck := candidate.source == "健康检查"
+	baseHasRequests := base.totalRequests > 0
+	candidateHasRequests := candidate.totalRequests > 0
+
+	for bucketTime, stat := range candidate.buckets {
+		current, ok := base.buckets[bucketTime]
+		if !ok {
+			base.buckets[bucketTime] = stat
+			continue
+		}
+		switch {
+		case !candidateIsHealthcheck && candidateHasRequests && (current.requestCount == 0 || baseIsHealthcheck):
+			base.buckets[bucketTime] = stat
+		case candidateIsHealthcheck && !baseHasRequests && current.requestCount == 0:
+			base.buckets[bucketTime] = stat
+		}
+	}
 }
 
 type usageLatencyConfiguredRoute struct {
@@ -2449,16 +3766,20 @@ func (s postgresConsoleService) UsageFailures(ctx context.Context, query UsageQu
 	eventRows, err := s.db.Query(ctx, `
 		select
 			e.created_at,
+			l.tenant_id,
+			coalesce(t.name, l.tenant_id),
+			l.request_model,
+			`+usageResolvedModelExpr("l")+`,
+			coalesce(pc.display_name, l.provider_credential_id),
 			`+usageEventFailureCategoryExpr("l", "e")+` as failure_category,
 			e.event_type,
 			e.status_code,
 			e.detail,
-			l.request_model,
-			coalesce(pc.display_name, l.provider_credential_id),
 			l.latency_ms,
 			e.usage_source
 		from llm_request_events e
 		join llm_request_logs l on l.id = e.request_log_id and l.tenant_id = e.tenant_id
+		left join tenants t on t.id = l.tenant_id
 		left join route_catalog r on r.id = l.route_id
 		left join provider_credentials pc on pc.id = l.provider_credential_id
 		where `+eventWhere+`
@@ -2472,35 +3793,66 @@ func (s postgresConsoleService) UsageFailures(ctx context.Context, query UsageQu
 	defer eventRows.Close()
 
 	recentEvents := make([]string, 0)
+	recentEventItems := make([]UsageFailureEventItem, 0)
 	for eventRows.Next() {
 		var createdAt time.Time
+		var tenantID string
+		var tenantName string
+		var requestModel string
+		var resolvedModel string
+		var provider string
 		var failureCategory string
 		var eventType string
 		var statusCode int
 		var detail string
-		var requestModel string
-		var provider string
 		var latencyMS int64
 		var usageSource string
-		if err := eventRows.Scan(&createdAt, &failureCategory, &eventType, &statusCode, &detail, &requestModel, &provider, &latencyMS, &usageSource); err != nil {
+		if err := eventRows.Scan(
+			&createdAt,
+			&tenantID,
+			&tenantName,
+			&requestModel,
+			&resolvedModel,
+			&provider,
+			&failureCategory,
+			&eventType,
+			&statusCode,
+			&detail,
+			&latencyMS,
+			&usageSource,
+		); err != nil {
 			return UsageFailureData{}, err
 		}
 
+		translatedCategory := translateUsageFailureCategory(failureCategory)
+		reason := describeUsageEvent(detail, eventType, requestModel, provider, latencyMS, statusCode, usageSource)
 		message := fmt.Sprintf(
 			"%s · %s · %s",
 			createdAt.In(shanghaiLocation()).Format("01-02 15:04"),
-			translateUsageFailureCategory(failureCategory),
-			describeUsageEvent(detail, eventType, requestModel, provider, latencyMS, statusCode, usageSource),
+			translatedCategory,
+			reason,
 		)
 		recentEvents = append(recentEvents, message)
+		recentEventItems = append(recentEventItems, UsageFailureEventItem{
+			Time:          createdAt.In(shanghaiLocation()).Format("01-02 15:04"),
+			TenantID:      tenantID,
+			TenantName:    tenantName,
+			RequestModel:  requestModel,
+			ResolvedModel: resolvedModel,
+			Provider:      strings.TrimSpace(provider),
+			StatusCode:    statusCode,
+			Category:      translatedCategory,
+			Reason:        reason,
+		})
 	}
 	if err := eventRows.Err(); err != nil {
 		return UsageFailureData{}, err
 	}
 
 	return UsageFailureData{
-		Breakdown:    breakdown,
-		RecentEvents: recentEvents,
+		Breakdown:        breakdown,
+		RecentEvents:     recentEvents,
+		RecentEventItems: recentEventItems,
 	}, nil
 }
 
@@ -2512,6 +3864,10 @@ func (s postgresConsoleService) UsageRequests(ctx context.Context, query UsageQu
 	}
 
 	whereClause, args := buildUsageLogWhere(query, "l.request_started_at")
+	if query.ResolvedModel != "" {
+		args = append(args, query.ResolvedModel)
+		whereClause += fmt.Sprintf(" and %s = $%d", usageResolvedModelExpr("l"), len(args))
+	}
 	var total int64
 	if err := s.db.QueryRow(ctx, `
 		select count(*)
@@ -2523,6 +3879,36 @@ func (s postgresConsoleService) UsageRequests(ctx context.Context, query UsageQu
 		return UsageRequestsPageData{}, err
 	}
 
+	resolvedModelRows, err := s.db.Query(ctx, `
+		select distinct `+usageResolvedModelExpr("l")+` as resolved_model
+		from llm_request_logs l
+		left join route_catalog r on r.id = l.route_id
+		left join provider_credentials pc on pc.id = l.provider_credential_id
+		where `+whereClause+`
+		  and `+usageResolvedModelExpr("l")+` <> ''
+		order by resolved_model asc;
+	`, args...)
+	if err != nil {
+		return UsageRequestsPageData{}, err
+	}
+	resolvedModelOptions := make([]string, 0)
+	for resolvedModelRows.Next() {
+		var resolvedModel string
+		if err := resolvedModelRows.Scan(&resolvedModel); err != nil {
+			resolvedModelRows.Close()
+			return UsageRequestsPageData{}, err
+		}
+		resolvedModel = strings.TrimSpace(resolvedModel)
+		if resolvedModel != "" {
+			resolvedModelOptions = append(resolvedModelOptions, resolvedModel)
+		}
+	}
+	if err := resolvedModelRows.Err(); err != nil {
+		resolvedModelRows.Close()
+		return UsageRequestsPageData{}, err
+	}
+	resolvedModelRows.Close()
+
 	args = append(args, query.Limit, query.Offset)
 	limitIndex := len(args) - 1
 	offsetIndex := len(args)
@@ -2530,9 +3916,10 @@ func (s postgresConsoleService) UsageRequests(ctx context.Context, query UsageQu
 		select
 			l.id,
 			l.tenant_id,
+			coalesce(t.name, l.tenant_id),
 			l.request_path,
 			l.request_model,
-			coalesce(nullif(l.resolved_model, ''), coalesce(nullif(l.upstream_model, ''), l.request_model)),
+			`+usageResolvedModelExpr("l")+`,
 			l.task_class,
 			l.routing_reason,
 			l.target_model_tier,
@@ -2552,6 +3939,7 @@ func (s postgresConsoleService) UsageRequests(ctx context.Context, query UsageQu
 			l.output_price_microyuan_per_million,
 			l.cached_price_microyuan_per_million
 		from llm_request_logs l
+		left join tenants t on t.id = l.tenant_id
 		left join route_catalog r on r.id = l.route_id
 		left join provider_credentials pc on pc.id = l.provider_credential_id
 		where `+whereClause+`
@@ -2581,9 +3969,11 @@ func (s postgresConsoleService) UsageRequests(ctx context.Context, query UsageQu
 		var inputPriceMicroyuanPerMillion int64
 		var outputPriceMicroyuanPerMillion int64
 		var cachedPriceMicroyuanPerMillion int64
+		var tenantID string
 		if err := rows.Scan(
 			&item.RequestID,
-			&item.Tenant,
+			&tenantID,
+			&item.TenantName,
 			&item.Endpoint,
 			&item.Model,
 			&item.ResolvedModel,
@@ -2608,6 +3998,11 @@ func (s postgresConsoleService) UsageRequests(ctx context.Context, query UsageQu
 		); err != nil {
 			return UsageRequestsPageData{}, err
 		}
+		item.TenantID = tenantID
+		item.Tenant = tenantID
+		if strings.TrimSpace(item.TenantName) == "" {
+			item.TenantName = tenantID
+		}
 		item.Endpoint = neutralizeConsoleEndpoint(item.Endpoint)
 		item.Status = translateUsageStatus(status)
 		item.TotalTokens = formatLargeNumber(totalTokens)
@@ -2631,11 +4026,197 @@ func (s postgresConsoleService) UsageRequests(ctx context.Context, query UsageQu
 	}
 
 	return UsageRequestsPageData{
-		Items:  items,
-		Total:  total,
-		Limit:  query.Limit,
-		Offset: query.Offset,
+		Items:                items,
+		ResolvedModelOptions: resolvedModelOptions,
+		Total:                total,
+		Limit:                query.Limit,
+		Offset:               query.Offset,
 	}, nil
+}
+
+func (s postgresConsoleService) UsageRequestDetail(ctx context.Context, requestID string) (UsageRequestDetail, error) {
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" {
+		return UsageRequestDetail{}, StatusError{
+			Code:    http.StatusBadRequest,
+			Message: "request id is required",
+		}
+	}
+
+	var payload UsageRequestDetail
+	var status string
+	var inputTokens int
+	var outputTokens int
+	var totalTokens int
+	var cachedTokens int
+	var latencyMS int64
+	var usageSource string
+	var inputCostMicroyuan int64
+	var outputCostMicroyuan int64
+	var cachedCostMicroyuan int64
+	var totalCostMicroyuan int64
+	var inputPriceMicroyuanPerMillion int64
+	var outputPriceMicroyuanPerMillion int64
+	var cachedPriceMicroyuanPerMillion int64
+	err := s.db.QueryRow(ctx, `
+		select
+			l.id,
+			l.tenant_id,
+			coalesce(t.name, l.tenant_id),
+			l.request_path,
+			l.request_model,
+			`+usageResolvedModelExpr("l")+`,
+			coalesce(l.task_class, ''),
+			coalesce(l.routing_reason, ''),
+			coalesce(l.target_model_tier, ''),
+			l.usage_status,
+			l.prompt_tokens,
+			l.completion_tokens,
+			l.total_tokens,
+			l.cached_tokens,
+			l.latency_ms,
+			coalesce(l.first_token_latency_ms, 0),
+			l.usage_source,
+			l.input_cost_microyuan,
+			l.output_cost_microyuan,
+			l.cached_cost_microyuan,
+			l.total_cost_microyuan,
+			l.input_price_microyuan_per_million,
+			l.output_price_microyuan_per_million,
+			l.cached_price_microyuan_per_million,
+			coalesce(l.prompt_excerpt, ''),
+			coalesce(l.response_excerpt, ''),
+			coalesce(l.error_code, ''),
+			coalesce(l.error_message, '')
+		from llm_request_logs l
+		left join tenants t on t.id = l.tenant_id
+		where l.id = $1;
+	`, requestID).Scan(
+		&payload.RequestID,
+		&payload.TenantID,
+		&payload.TenantName,
+		&payload.Endpoint,
+		&payload.Model,
+		&payload.ResolvedModel,
+		&payload.TaskClass,
+		&payload.RoutingReason,
+		&payload.TargetModelTier,
+		&status,
+		&inputTokens,
+		&outputTokens,
+		&totalTokens,
+		&cachedTokens,
+		&latencyMS,
+		&payload.FirstTokenLatencyMS,
+		&usageSource,
+		&inputCostMicroyuan,
+		&outputCostMicroyuan,
+		&cachedCostMicroyuan,
+		&totalCostMicroyuan,
+		&inputPriceMicroyuanPerMillion,
+		&outputPriceMicroyuanPerMillion,
+		&cachedPriceMicroyuanPerMillion,
+		&payload.PromptExcerpt,
+		&payload.ResponseExcerpt,
+		&payload.ErrorCode,
+		&payload.ErrorMessage,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return UsageRequestDetail{}, StatusError{
+				Code:    http.StatusNotFound,
+				Message: "usage request not found",
+				Err:     err,
+			}
+		}
+		return UsageRequestDetail{}, err
+	}
+
+	payload.Endpoint = neutralizeConsoleEndpoint(payload.Endpoint)
+	payload.Status = translateUsageStatus(status)
+	payload.TotalTokens = formatLargeNumber(totalTokens)
+	payload.InputTokens = formatLargeNumber(inputTokens)
+	payload.OutputTokens = formatLargeNumber(outputTokens)
+	payload.CachedTokens = formatLargeNumber(cachedTokens)
+	payload.Latency = fmt.Sprintf("%d ms", latencyMS)
+	payload.UsageSource = translateUsageSource(usageSource)
+	payload.InputCost = formatMicroyuanAmount(inputCostMicroyuan)
+	payload.OutputCost = formatMicroyuanAmount(outputCostMicroyuan)
+	payload.CachedCost = formatMicroyuanAmount(cachedCostMicroyuan)
+	payload.TotalCost = formatMicroyuanAmount(totalCostMicroyuan)
+	payload.InputPrice = formatMicroyuanPerMillionPrice(inputPriceMicroyuanPerMillion)
+	payload.OutputPrice = formatMicroyuanPerMillionPrice(outputPriceMicroyuanPerMillion)
+	payload.CachedPrice = formatMicroyuanPerMillionPrice(cachedPriceMicroyuanPerMillion)
+
+	eventRows, err := s.db.Query(ctx, `
+		select
+			e.created_at,
+			l.tenant_id,
+			coalesce(t.name, l.tenant_id),
+			l.request_model,
+			`+usageResolvedModelExpr("l")+`,
+				coalesce(pc.display_name, l.provider_credential_id),
+				`+usageEventFailureCategoryExpr("l", "e")+` as failure_category,
+				e.event_type,
+				e.usage_status,
+				e.status_code,
+				e.detail,
+			l.latency_ms,
+			e.usage_source
+		from llm_request_events e
+		join llm_request_logs l on l.id = e.request_log_id and l.tenant_id = e.tenant_id
+		left join tenants t on t.id = l.tenant_id
+		left join provider_credentials pc on pc.id = l.provider_credential_id
+		where e.request_log_id = $1
+		order by e.created_at desc
+		limit 20;
+	`, requestID)
+	if err != nil {
+		return UsageRequestDetail{}, err
+	}
+	defer eventRows.Close()
+
+	payload.FailureEvents = make([]UsageFailureEventItem, 0)
+	for eventRows.Next() {
+		var createdAt time.Time
+		var item UsageFailureEventItem
+		var provider string
+		var failureCategory string
+		var eventType string
+		var eventUsageStatus string
+		var detail string
+		var latency int64
+		var usageSourceValue string
+		if err := eventRows.Scan(
+			&createdAt,
+			&item.TenantID,
+			&item.TenantName,
+			&item.RequestModel,
+			&item.ResolvedModel,
+			&provider,
+			&failureCategory,
+			&eventType,
+			&eventUsageStatus,
+			&item.StatusCode,
+			&detail,
+			&latency,
+			&usageSourceValue,
+		); err != nil {
+			return UsageRequestDetail{}, err
+		}
+		item.Time = createdAt.In(shanghaiLocation()).Format("01-02 15:04")
+		item.Provider = strings.TrimSpace(provider)
+		if strings.TrimSpace(eventUsageStatus) != "success" || strings.TrimSpace(eventType) == "usage_publish_failed" {
+			item.Category = translateUsageFailureCategory(failureCategory)
+		}
+		item.Reason = describeUsageEvent(detail, eventType, item.RequestModel, provider, latency, item.StatusCode, usageSourceValue)
+		payload.FailureEvents = append(payload.FailureEvents, item)
+	}
+	if err := eventRows.Err(); err != nil {
+		return UsageRequestDetail{}, err
+	}
+
+	return payload, nil
 }
 
 func (s postgresConsoleService) collectTableRows(ctx context.Context, sql string) ([]TableRow, error) {
@@ -2692,7 +4273,7 @@ func (s postgresConsoleService) insertPlaygroundRun(ctx context.Context, request
 			status_code,
 			latency_ms
 		) values ($1, $2, $3, $4, $5, $6, $7, $8, $9);
-	`, requestContext.TenantID, requestContext.PlatformAPIKeyID, model, prompt, truncateText(responseText, 240), endpoint, requestContext.SelectedProviderName, statusCode, latencyMS)
+	`, requestContext.TenantID, requestContext.PlatformAPIKeyID, model, security.RedactText(prompt), truncateText(security.RedactText(responseText), 240), endpoint, requestContext.SelectedProviderName, statusCode, latencyMS)
 	return err
 }
 
@@ -2806,6 +4387,21 @@ func formatMicroyuanPerMillionPrice(value int64) string {
 
 func formatPercentage(value float64) string {
 	return fmt.Sprintf("%.2f%%", math.Round(value*100)/100)
+}
+
+func normalizeTenantBillingQuery(query TenantBillingQuery) (TenantBillingQuery, time.Time, time.Time, error) {
+	tenantID := strings.TrimSpace(query.TenantID)
+	month := strings.TrimSpace(query.Month)
+	if tenantID == "" {
+		return TenantBillingQuery{}, time.Time{}, time.Time{}, StatusError{Code: http.StatusBadRequest, Message: "tenant_id is required"}
+	}
+	parsedMonth, err := time.ParseInLocation("2006-01", month, shanghaiLocation())
+	if err != nil || parsedMonth.Format("2006-01") != month {
+		return TenantBillingQuery{}, time.Time{}, time.Time{}, StatusError{Code: http.StatusBadRequest, Message: "month must be YYYY-MM"}
+	}
+	monthStart := time.Date(parsedMonth.Year(), parsedMonth.Month(), 1, 0, 0, 0, 0, shanghaiLocation())
+	monthEnd := monthStart.AddDate(0, 1, 0)
+	return TenantBillingQuery{TenantID: tenantID, Month: month}, monthStart.UTC(), monthEnd.UTC(), nil
 }
 
 func mapBool(condition bool, yes string, no string) string {
@@ -3072,6 +4668,23 @@ func newPlatformAPIKeyID() string {
 	return "pak_" + strings.ReplaceAll(uuid.NewString(), "-", "")
 }
 
+func newProviderCredentialID() string {
+	return "provider_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+}
+
+func newRouteCatalogID(providerCredentialID string, requestedModel string) string {
+	providerCredentialID = strings.TrimSpace(providerCredentialID)
+	requestedModel = strings.TrimSpace(requestedModel)
+	if providerCredentialID == "" {
+		providerCredentialID = "provider"
+	}
+	if requestedModel == "" {
+		requestedModel = strings.ReplaceAll(uuid.NewString(), "-", "")
+	}
+	sum := sha256.Sum256([]byte(requestedModel))
+	return "route:" + providerCredentialID + ":" + hex.EncodeToString(sum[:8])
+}
+
 func newApplicationID() string {
 	return "app_" + strings.ReplaceAll(uuid.NewString(), "-", "")
 }
@@ -3224,6 +4837,7 @@ func normalizeUsageQuery(query UsageQuery, now time.Time) (UsageQuery, error) {
 	query.PlatformAPIKeyID = strings.TrimSpace(query.PlatformAPIKeyID)
 	query.Provider = strings.TrimSpace(query.Provider)
 	query.Model = strings.TrimSpace(query.Model)
+	query.ResolvedModel = strings.TrimSpace(query.ResolvedModel)
 	query.RouteID = strings.TrimSpace(query.RouteID)
 	query.RequestPath = strings.TrimSpace(query.RequestPath)
 	query.Status = strings.TrimSpace(query.Status)
@@ -3490,6 +5104,15 @@ func translateUsageFailureCategory(category string) string {
 func usageFailureCategoryExpr(logAlias string) string {
 	return fmt.Sprintf(
 		"case when %s.error_code <> '' then %s.error_code else %s.usage_status end",
+		logAlias,
+		logAlias,
+		logAlias,
+	)
+}
+
+func usageResolvedModelExpr(logAlias string) string {
+	return fmt.Sprintf(
+		"coalesce(nullif(%s.resolved_model, ''), coalesce(nullif(%s.upstream_model, ''), %s.request_model))",
 		logAlias,
 		logAlias,
 		logAlias,

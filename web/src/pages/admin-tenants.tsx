@@ -1,7 +1,8 @@
-import { useCallback } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { DataTable, ErrorSection, LoadingSection, StatCard } from "../components/console";
-import { getAPIKeys, getOverview, getUsageOverview } from "../lib/console-api";
+import { getAPIKeys, getOverview, getTenantBilling, getUsageOverview } from "../lib/console-api";
 import { useRemoteData } from "../lib/use-remote-data";
 
 type TenantSummary = {
@@ -13,6 +14,13 @@ type TenantSummary = {
 };
 
 const numberFormatter = new Intl.NumberFormat("zh-CN");
+
+function currentMonthValue() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  return `${year}-${month}`;
+}
 
 function formatNumber(value: number | undefined) {
   return numberFormatter.format(value ?? 0);
@@ -62,7 +70,119 @@ function findOverviewStat(
   return stats.find((item) => item.label === label)?.value ?? fallback;
 }
 
+function isHTMLElement(value: unknown): value is HTMLElement {
+  return typeof HTMLElement !== "undefined" && value instanceof HTMLElement;
+}
+
+function getScrollableAncestor(target: HTMLElement) {
+  let current: HTMLElement | null = target.parentElement;
+
+  while (current) {
+    const styles = window.getComputedStyle(current);
+    const overflowY = styles.overflowY;
+    const canScroll = /(auto|scroll|overlay)/.test(overflowY) && current.scrollHeight > current.clientHeight + 8;
+
+    if (canScroll) {
+      return current;
+    }
+
+    current = current.parentElement;
+  }
+
+  const scrollingElement = document.scrollingElement;
+  return isHTMLElement(scrollingElement) ? scrollingElement : null;
+}
+
+function scrollSectionIntoView(target: HTMLElement | null) {
+  if (!target) {
+    return;
+  }
+
+  const scrollContainer = getScrollableAncestor(target);
+
+  if (scrollContainer) {
+    const containerTop = scrollContainer.getBoundingClientRect().top;
+    const targetTop = target.getBoundingClientRect().top;
+    const top = scrollContainer.scrollTop + (targetTop - containerTop) - 12;
+
+    if (typeof scrollContainer.scrollTo === "function") {
+      try {
+        scrollContainer.scrollTo({
+          top: Math.max(top, 0),
+          behavior: "auto",
+        });
+      } catch {
+        // jsdom 不支持 scrollTo，保留后续 fallback。
+      }
+    } else {
+      scrollContainer.scrollTop = Math.max(top, 0);
+    }
+  }
+
+  if (typeof target.scrollIntoView === "function") {
+    try {
+      target.scrollIntoView({
+        behavior: "auto",
+        block: "start",
+      });
+    } catch {
+      // 某些测试环境不支持 scrollIntoView。
+    }
+  }
+
+  if (!scrollContainer && document.scrollingElement) {
+    const absoluteTop = window.scrollY + target.getBoundingClientRect().top - 12;
+    document.scrollingElement.scrollTop = Math.max(absoluteTop, 0);
+  }
+}
+
+function scheduleScrollIntoView(target: HTMLElement | null) {
+  if (!target) {
+    return () => {};
+  }
+
+  let cancelled = false;
+  const timeoutIds: number[] = [];
+  const rafIds: number[] = [];
+
+  const run = () => {
+    if (cancelled) {
+      return;
+    }
+
+    scrollSectionIntoView(target);
+  };
+
+  run();
+
+  if (typeof window.requestAnimationFrame === "function") {
+    const firstFrame = window.requestAnimationFrame(() => {
+      const secondFrame = window.requestAnimationFrame(run);
+      rafIds.push(secondFrame);
+    });
+    rafIds.push(firstFrame);
+  }
+
+  timeoutIds.push(window.setTimeout(run, 80));
+  timeoutIds.push(window.setTimeout(run, 220));
+
+  return () => {
+    cancelled = true;
+    timeoutIds.forEach((timeoutId) => window.clearTimeout(timeoutId));
+    rafIds.forEach((rafId) => window.cancelAnimationFrame?.(rafId));
+  };
+}
+
 export function AdminTenantsPage() {
+  const navigate = useNavigate();
+  const billingSectionRef = useRef<HTMLElement | null>(null);
+  const billingResultsRef = useRef<HTMLDivElement | null>(null);
+  const [searchParams] = useSearchParams();
+  const selectedTenant = searchParams.get("tenant")?.trim() ?? "";
+  const selectedMonth = searchParams.get("month")?.trim() || currentMonthValue();
+  const [scrollNonce, setScrollNonce] = useState(0);
+  const [tenantInput, setTenantInput] = useState(selectedTenant);
+  const [monthInput, setMonthInput] = useState(selectedMonth);
   const loadTenants = useCallback(
     async () => {
       const [overview, apiKeys, usageOverview] = await Promise.all([
@@ -81,6 +201,63 @@ export function AdminTenantsPage() {
     [],
   );
   const { data, loading, error } = useRemoteData(loadTenants);
+  const loadTenantBilling = useCallback(
+    () => (selectedTenant ? getTenantBilling(selectedTenant, selectedMonth) : Promise.resolve(null)),
+    [selectedTenant, selectedMonth],
+  );
+  const { data: billing, loading: billingLoading, error: billingError } = useRemoteData(
+    loadTenantBilling,
+    [loadTenantBilling],
+  );
+
+  useEffect(() => {
+    setTenantInput(selectedTenant);
+    setMonthInput(selectedMonth);
+  }, [selectedTenant, selectedMonth]);
+
+  useEffect(() => {
+    if (!selectedTenant) {
+      return;
+    }
+
+    return scheduleScrollIntoView(billingSectionRef.current);
+  }, [selectedTenant, scrollNonce]);
+
+  useEffect(() => {
+    if (!selectedTenant || billingLoading || !billing) {
+      return;
+    }
+
+    return scheduleScrollIntoView(billingResultsRef.current);
+  }, [selectedTenant, billingLoading, billing, scrollNonce]);
+
+  function updateSearch(nextTenant: string, nextMonth: string) {
+    const tenant = nextTenant.trim();
+    const month = nextMonth.trim() || currentMonthValue();
+    const next = new URLSearchParams();
+    if (tenant) {
+      next.set("tenant", tenant);
+      next.set("month", month);
+    } else if (nextMonth.trim()) {
+      next.set("month", month);
+    }
+
+    const search = next.toString();
+    navigate(search ? `/tenants?${search}` : "/tenants");
+  }
+
+  function handleBillingSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    updateSearch(tenantInput, monthInput);
+  }
+
+  function handleViewTenantBilling(tenant: string) {
+    if (isHTMLElement(document.activeElement)) {
+      document.activeElement.blur();
+    }
+    setScrollNonce((value) => value + 1);
+    updateSearch(tenant, monthInput);
+  }
 
   if (loading) {
     return <LoadingSection text="正在加载租户治理视图..." />;
@@ -112,13 +289,22 @@ export function AdminTenantsPage() {
           <p>共 {data.tenantSummaries.length} 个租户</p>
         </div>
         <DataTable
-          columns={["租户 ID", "密钥数", "启用中", "示例密钥", "权限范围"]}
+          columns={["租户 ID", "密钥数", "启用中", "示例密钥", "权限范围", "操作"]}
           rows={data.tenantSummaries.map((item) => [
             item.tenant,
             String(item.keyCount),
             String(item.activeKeyCount),
             item.sampleKeyName,
             item.scopes || "-",
+            <button
+              key={`view-billing-${item.tenant}`}
+              className="button-shell button-shell--table"
+              onClick={() => handleViewTenantBilling(item.tenant)}
+              type="button"
+              aria-label={`查看账单 ${item.tenant}`}
+            >
+              查看账单
+            </button>,
           ])}
         />
       </section>
@@ -221,6 +407,155 @@ export function AdminTenantsPage() {
             <p>剩余 {formatNumber(data.overview.quota_summary.tokens_remaining)}</p>
           </article>
         </section>
+      ) : null}
+
+      <section ref={billingSectionRef} className="section-card">
+        <div className="section-card__header">
+          <div>
+            <h2>租户账单详情</h2>
+            <p>按自然月展示 summary、provider、model 与 API Key 账单分项。</p>
+          </div>
+        </div>
+        <form className="filter-bar tenant-billing-filter" onSubmit={handleBillingSubmit}>
+          <label className="field-shell">
+            <span>租户 ID</span>
+            <input
+              aria-label="租户 ID"
+              value={tenantInput}
+              onChange={(event) => setTenantInput(event.target.value)}
+            />
+          </label>
+          <label className="field-shell">
+            <span>月份</span>
+            <input
+              aria-label="月份"
+              type="month"
+              value={monthInput}
+              onChange={(event) => setMonthInput(event.target.value)}
+            />
+          </label>
+          <button className="button-shell button-shell--primary" type="submit">
+            应用筛选
+          </button>
+        </form>
+        {!selectedTenant ? (
+          <p>请在租户列表中点击“查看账单”以加载租户账单详情。</p>
+        ) : null}
+      </section>
+
+      {selectedTenant ? (
+        billingLoading ? (
+          <LoadingSection text="正在加载租户账单..." />
+        ) : billingError || !billing ? (
+          <ErrorSection message={billingError ?? "租户账单加载失败。"} />
+        ) : (
+          <>
+            <div ref={billingResultsRef} className="stats-grid stats-grid--four">
+              <StatCard label="总请求" value={formatNumber(billing.summary.request_count)} />
+              <StatCard
+                label="成功 / 失败"
+                value={`${formatNumber(billing.summary.success_count)} / ${formatNumber(billing.summary.failure_count)}`}
+              />
+              <StatCard label="总 Token" value={formatNumber(billing.summary.total_tokens)} />
+              <StatCard label="总费用" value={billing.summary.total_cost || "-"} />
+            </div>
+
+            <section className="section-card">
+              <div className="section-card__header">
+                <div>
+                  <h3>账单概览</h3>
+                  <p>
+                    {billing.summary.tenant_id} · {billing.summary.month}
+                  </p>
+                </div>
+              </div>
+              <DataTable
+                columns={["指标", "数值"]}
+                rows={[
+                  [
+                    "输入 Token / 费用",
+                    `${formatNumber(billing.summary.input_tokens)} / ${billing.summary.input_cost}`,
+                  ],
+                  [
+                    "输出 Token / 费用",
+                    `${formatNumber(billing.summary.output_tokens)} / ${billing.summary.output_cost}`,
+                  ],
+                  [
+                    "缓存 Token / 费用",
+                    `${formatNumber(billing.summary.cached_tokens)} / ${billing.summary.cached_cost}`,
+                  ],
+                  [
+                    "总 Token / 费用",
+                    `${formatNumber(billing.summary.total_tokens)} / ${billing.summary.total_cost}`,
+                  ],
+                ]}
+              />
+            </section>
+
+            <section className="section-card">
+              <div className="section-card__header">
+                <div>
+                  <h3>Provider 分项</h3>
+                  <p>基于 `llm_request_logs` 按 provider 聚合。</p>
+                </div>
+              </div>
+              <DataTable
+                columns={["显示名", "Provider", "请求", "成功", "失败", "Token", "费用"]}
+                rows={billing.providers.map((item) => [
+                  item.display_name,
+                  item.provider,
+                  formatNumber(item.request_count),
+                  formatNumber(item.success_count),
+                  formatNumber(item.failure_count),
+                  formatNumber(item.total_tokens),
+                  item.total_cost,
+                ])}
+              />
+            </section>
+
+            <section className="section-card">
+              <div className="section-card__header">
+                <div>
+                  <h3>模型分项</h3>
+                  <p>基于 `llm_request_logs` 按 model 聚合。</p>
+                </div>
+              </div>
+              <DataTable
+                columns={["模型", "Provider", "请求", "成功", "失败", "Token", "费用"]}
+                rows={billing.models.map((item) => [
+                  item.model,
+                  item.provider_display_name,
+                  formatNumber(item.request_count),
+                  formatNumber(item.success_count),
+                  formatNumber(item.failure_count),
+                  formatNumber(item.total_tokens),
+                  item.total_cost,
+                ])}
+              />
+            </section>
+
+            <section className="section-card">
+              <div className="section-card__header">
+                <div>
+                  <h3>API Key 分项</h3>
+                  <p>基于 `llm_request_logs` 按平台密钥聚合。</p>
+                </div>
+              </div>
+              <DataTable
+                columns={["名称", "Key ID", "请求", "成功", "失败", "Token", "费用"]}
+                rows={billing.api_keys.map((item) => [
+                  item.name,
+                  item.platform_api_key_id,
+                  formatNumber(item.request_count),
+                  formatNumber(item.success_count),
+                  formatNumber(item.failure_count),
+                  formatNumber(item.total_tokens),
+                  item.total_cost,
+                ])}
+              />
+            </section>
+          </>
+        )
       ) : null}
     </div>
   );

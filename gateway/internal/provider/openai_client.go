@@ -20,6 +20,18 @@ type OpenAIClient struct {
 	httpClient *http.Client
 }
 
+type openAIChatResponse struct {
+	Model   string              `json:"model,omitempty"`
+	Usage   *service.TokenUsage `json:"usage,omitempty"`
+	Choices []struct {
+		Message struct {
+			Role             string `json:"role"`
+			Content          string `json:"content"`
+			ReasoningContent string `json:"reasoning_content,omitempty"`
+		} `json:"message"`
+	} `json:"choices"`
+}
+
 func NewOpenAIClient(httpClient *http.Client) *OpenAIClient {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
@@ -29,9 +41,9 @@ func NewOpenAIClient(httpClient *http.Client) *OpenAIClient {
 }
 
 func (c *OpenAIClient) Complete(ctx context.Context, target domain.ProviderTarget, request service.ChatRequest) (service.ChatResponse, int, error) {
-	var response service.ChatResponse
+	var response openAIChatResponse
 	statusCode, err := c.doJSONRequest(ctx, http.MethodPost, joinURL(target.BaseURL, "/chat/completions"), target.APIKey, request, &response)
-	return response, statusCode, err
+	return normalizeOpenAIChatResponse(response), statusCode, err
 }
 
 func (c *OpenAIClient) StreamComplete(ctx context.Context, target domain.ProviderTarget, request service.ChatRequest) (service.ChatCompletionStream, int, error) {
@@ -117,18 +129,22 @@ func joinURL(baseURL string, path string) string {
 type openAIChatCompletionChunk struct {
 	Model   string              `json:"model"`
 	Usage   *service.TokenUsage `json:"usage,omitempty"`
+	ReasoningContent string     `json:"reasoning_content,omitempty"`
 	Choices []struct {
 		Index int `json:"index"`
+		ReasoningContent string `json:"reasoning_content,omitempty"`
 		Delta struct {
-			Role    string `json:"role"`
-			Content string `json:"content"`
+			Role             string `json:"role"`
+			Content          string `json:"content"`
+			ReasoningContent string `json:"reasoning_content"`
 		} `json:"delta"`
 	} `json:"choices"`
 }
 
 type openAIChoiceAccumulator struct {
-	Role    string
-	Content strings.Builder
+	Role             string
+	Content          strings.Builder
+	ReasoningContent strings.Builder
 }
 
 func consumeChatCompletionStream(body io.Reader, emit func([]byte) error, onFirstToken func()) (service.ChatStreamResult, error) {
@@ -151,10 +167,14 @@ func consumeChatCompletionStream(body io.Reader, emit func([]byte) error, onFirs
 			if role == "" {
 				role = "assistant"
 			}
+			content := accumulator.Content.String()
+			if strings.TrimSpace(content) == "" && shouldFallbackReasoningContent(finalResponse.Model) {
+				content = accumulator.ReasoningContent.String()
+			}
 			finalResponse.Choices = append(finalResponse.Choices, service.ChatChoice{
 				Message: service.ChatMessage{
 					Role:    role,
-					Content: accumulator.Content.String(),
+					Content: content,
 				},
 			})
 		}
@@ -207,7 +227,12 @@ func consumeChatCompletionStream(body io.Reader, emit func([]byte) error, onFirs
 					accumulator.Role = strings.TrimSpace(choice.Delta.Role)
 				}
 				accumulator.Content.WriteString(choice.Delta.Content)
-				if !result.SawContentToken && choice.Delta.Content != "" {
+				accumulator.ReasoningContent.WriteString(firstNonEmpty(
+					choice.Delta.ReasoningContent,
+					choice.ReasoningContent,
+					chunk.ReasoningContent,
+				))
+				if !result.SawContentToken && openAIChunkHasVisibleToken(chunk, choice) {
 					result.SawContentToken = true
 					if onFirstToken != nil {
 						onFirstToken()
@@ -233,4 +258,64 @@ func consumeChatCompletionStream(body io.Reader, emit func([]byte) error, onFirs
 
 	result.Response = buildResponse()
 	return result, nil
+}
+
+func openAIChunkHasVisibleToken(chunk openAIChatCompletionChunk, choice struct {
+	Index            int    `json:"index"`
+	ReasoningContent string `json:"reasoning_content,omitempty"`
+	Delta            struct {
+		Role             string `json:"role"`
+		Content          string `json:"content"`
+		ReasoningContent string `json:"reasoning_content"`
+	} `json:"delta"`
+}) bool {
+	if strings.TrimSpace(choice.Delta.Content) != "" {
+		return true
+	}
+	if strings.TrimSpace(choice.Delta.ReasoningContent) != "" {
+		return true
+	}
+	if strings.TrimSpace(choice.ReasoningContent) != "" {
+		return true
+	}
+	return strings.TrimSpace(chunk.ReasoningContent) != ""
+}
+
+func normalizeOpenAIChatResponse(response openAIChatResponse) service.ChatResponse {
+	finalResponse := service.ChatResponse{
+		Model:   strings.TrimSpace(response.Model),
+		Usage:   response.Usage,
+		Choices: make([]service.ChatChoice, 0, len(response.Choices)),
+	}
+	for _, choice := range response.Choices {
+		content := strings.TrimSpace(choice.Message.Content)
+		if content == "" && shouldFallbackReasoningContent(response.Model) {
+			content = strings.TrimSpace(choice.Message.ReasoningContent)
+		}
+		role := strings.TrimSpace(choice.Message.Role)
+		if role == "" {
+			role = "assistant"
+		}
+		finalResponse.Choices = append(finalResponse.Choices, service.ChatChoice{
+			Message: service.ChatMessage{
+				Role:    role,
+				Content: content,
+			},
+		})
+	}
+	return finalResponse
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func shouldFallbackReasoningContent(model string) bool {
+	model = strings.ToLower(strings.TrimSpace(model))
+	return strings.Contains(model, "deepseek-r1")
 }

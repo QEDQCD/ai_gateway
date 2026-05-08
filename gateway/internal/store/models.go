@@ -157,6 +157,8 @@ type LlmRequestLog struct {
 	TotalCostMicroyuan             int64              `json:"total_cost_microyuan"`
 	ErrorCode                      string             `json:"error_code"`
 	ErrorMessage                   string             `json:"error_message"`
+	PromptExcerpt                  string             `json:"prompt_excerpt"`
+	ResponseExcerpt                string             `json:"response_excerpt"`
 	RequestStartedAt               pgtype.Timestamptz `json:"request_started_at"`
 	RequestCompletedAt             pgtype.Timestamptz `json:"request_completed_at"`
 	CreatedAt                      pgtype.Timestamptz `json:"created_at"`
@@ -232,19 +234,27 @@ type ProviderCredential struct {
 	CreatedAt       pgtype.Timestamptz `json:"created_at"`
 	SupportedModels []string           `json:"supported_models"`
 	BaseUrl         string             `json:"base_url"`
+	SecretRef       string             `json:"secret_ref"`
+	CredentialMode  string             `json:"credential_mode"`
 }
 
 type RouteCatalog struct {
-	ID                   string             `json:"id"`
-	RequestedModel       string             `json:"requested_model"`
-	ResolvedProvider     string             `json:"resolved_provider"`
-	ProviderCredentialID string             `json:"provider_credential_id"`
-	Endpoint             string             `json:"endpoint"`
-	LatencyMs            int32              `json:"latency_ms"`
-	HealthStatus         string             `json:"health_status"`
-	RequestMode          string             `json:"request_mode"`
-	CreatedAt            pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
+	ID                       string             `json:"id"`
+	RequestedModel           string             `json:"requested_model"`
+	ResolvedProvider         string             `json:"resolved_provider"`
+	ProviderCredentialID     string             `json:"provider_credential_id"`
+	Endpoint                 string             `json:"endpoint"`
+	LatencyMs                int32              `json:"latency_ms"`
+	HealthStatus             string             `json:"health_status"`
+	RequestMode              string             `json:"request_mode"`
+	CreatedAt                pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt                pgtype.Timestamptz `json:"updated_at"`
+	Status                   string             `json:"status"`
+	HealthcheckEnabled       bool               `json:"healthcheck_enabled"`
+	HealthcheckAssertionType string             `json:"healthcheck_assertion_type"`
+	LastHealthCheckedAt      pgtype.Timestamptz `json:"last_health_checked_at"`
+	LastHealthError          string             `json:"last_health_error"`
+	FirstTokenLatencyMs      int32              `json:"first_token_latency_ms"`
 }
 
 type SystemSetting struct {

@@ -12,6 +12,10 @@ func Embeddings(proxy service.EmbeddingProxyService) fiber.Handler {
 			proxy.RecordFailure(c.UserContext(), c.Locals("requestContext"), fiber.StatusBadRequest)
 			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
 		}
+		if err := service.ValidateEmbeddingsRequest(req); err != nil {
+			proxy.RecordFailure(c.UserContext(), c.Locals("requestContext"), fiber.StatusBadRequest)
+			return fiber.NewError(fiber.StatusBadRequest, err.Error())
+		}
 
 		resp, err := proxy.Create(c.UserContext(), req, c.Locals("requestContext"))
 		if err != nil {

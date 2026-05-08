@@ -19,16 +19,18 @@ type compositeQuotaGuard struct {
 }
 
 type TenantQuotaSummary struct {
-	Configured        bool   `json:"configured"`
-	RequestLimit      int64  `json:"request_limit"`
-	RequestsUsed      int64  `json:"requests_used"`
-	RequestsRemaining int64  `json:"requests_remaining"`
-	TokenLimit        int64  `json:"token_limit"`
-	TokensUsed        int64  `json:"tokens_used"`
-	TokensRemaining   int64  `json:"tokens_remaining"`
-	PeriodStart       string `json:"period_start,omitempty"`
-	PeriodEnd         string `json:"period_end,omitempty"`
-	ResetsAt          string `json:"resets_at"`
+	Configured          bool   `json:"configured"`
+	RequestLimit        int64  `json:"request_limit"`
+	RequestsUsed        int64  `json:"requests_used"`
+	RequestsRemaining   int64  `json:"requests_remaining"`
+	TokenLimit          int64  `json:"token_limit"`
+	TokensUsed          int64  `json:"tokens_used"`
+	TokensRemaining     int64  `json:"tokens_remaining"`
+	CostLimitMicroyuan  int64  `json:"cost_limit_microyuan,omitempty"`
+	TotalCostMicroyuan  int64  `json:"total_cost_microyuan,omitempty"`
+	PeriodStart         string `json:"period_start,omitempty"`
+	PeriodEnd           string `json:"period_end,omitempty"`
+	ResetsAt            string `json:"resets_at"`
 }
 
 func NewCompositeQuotaGuard(guards ...QuotaGuard) QuotaGuard {
@@ -67,14 +69,24 @@ func (g DatabaseQuotaGuard) CheckTenantQuota(ctx context.Context, tenantID strin
 
 	var requestLimit int64
 	var tokenLimit int64
+	var costLimitMicroyuan int64
 	var requestsUsed int64
 	var tokensUsed int64
+	var totalCostMicroyuan int64
 	err = g.db.QueryRow(ctx, `
 		select
 			p.request_limit,
 			p.token_limit,
+			p.cost_limit_microyuan,
 			coalesce(u.requests_used, 0),
-			coalesce(u.tokens_used, 0)
+			coalesce(u.tokens_used, 0),
+			coalesce((
+				select sum(l.total_cost_microyuan)
+				from tenant_usage_ledger l
+				where l.tenant_id = p.tenant_id
+				  and l.bucket_start >= $2
+				  and l.bucket_start < $3
+			), 0)
 		from tenant_quota_policies p
 		left join tenant_quota_usage_periods u
 		  on u.tenant_id = p.tenant_id
@@ -85,14 +97,20 @@ func (g DatabaseQuotaGuard) CheckTenantQuota(ctx context.Context, tenantID strin
 		  and p.effective_from <= $4
 		order by p.effective_from desc
 		limit 1;
-	`, tenantID, periodStart, periodEnd, now).Scan(&requestLimit, &tokenLimit, &requestsUsed, &tokensUsed)
+	`, tenantID, periodStart, periodEnd, now).Scan(&requestLimit, &tokenLimit, &costLimitMicroyuan, &requestsUsed, &tokensUsed, &totalCostMicroyuan)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil
 		}
 		return err
 	}
-	if requestsUsed >= requestLimit || tokensUsed >= tokenLimit {
+	if requestLimit > 0 && requestsUsed >= requestLimit {
+		return ErrQuotaExceeded
+	}
+	if tokenLimit > 0 && tokensUsed >= tokenLimit {
+		return ErrQuotaExceeded
+	}
+	if costLimitMicroyuan > 0 && totalCostMicroyuan >= costLimitMicroyuan {
 		return ErrQuotaExceeded
 	}
 	return nil
@@ -117,8 +135,16 @@ func loadTenantQuotaSummary(ctx context.Context, db store.DBTX, tenantID string,
 		select
 			p.request_limit,
 			p.token_limit,
+			p.cost_limit_microyuan,
 			coalesce(u.requests_used, 0),
-			coalesce(u.tokens_used, 0)
+			coalesce(u.tokens_used, 0),
+			coalesce((
+				select sum(l.total_cost_microyuan)
+				from tenant_usage_ledger l
+				where l.tenant_id = p.tenant_id
+				  and l.bucket_start >= $2
+				  and l.bucket_start < $3
+			), 0)
 		from tenant_quota_policies p
 		left join tenant_quota_usage_periods u
 		  on u.tenant_id = p.tenant_id
@@ -132,8 +158,10 @@ func loadTenantQuotaSummary(ctx context.Context, db store.DBTX, tenantID string,
 	`, tenantID, periodStart, periodEnd, now).Scan(
 		&summary.RequestLimit,
 		&summary.TokenLimit,
+		&summary.CostLimitMicroyuan,
 		&summary.RequestsUsed,
 		&summary.TokensUsed,
+		&summary.TotalCostMicroyuan,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -169,7 +197,8 @@ func loadAggregateTenantQuotaSummary(ctx context.Context, db store.DBTX, now tim
 			select distinct on (tenant_id)
 				tenant_id,
 				request_limit,
-				token_limit
+				token_limit,
+				cost_limit_microyuan
 			from tenant_quota_policies
 			where period_type = 'monthly'
 			  and effective_from <= $1
@@ -179,8 +208,15 @@ func loadAggregateTenantQuotaSummary(ctx context.Context, db store.DBTX, now tim
 			count(*),
 			coalesce(sum(p.request_limit), 0),
 			coalesce(sum(p.token_limit), 0),
+			coalesce(sum(p.cost_limit_microyuan), 0),
 			coalesce(sum(u.requests_used), 0),
-			coalesce(sum(u.tokens_used), 0)
+			coalesce(sum(u.tokens_used), 0),
+			coalesce((
+				select sum(l.total_cost_microyuan)
+				from tenant_usage_ledger l
+				where l.bucket_start >= $2
+				  and l.bucket_start < $3
+			), 0)
 		from latest_policies p
 		left join tenant_quota_usage_periods u
 		  on u.tenant_id = p.tenant_id
@@ -190,8 +226,10 @@ func loadAggregateTenantQuotaSummary(ctx context.Context, db store.DBTX, now tim
 		&configuredCount,
 		&summary.RequestLimit,
 		&summary.TokenLimit,
+		&summary.CostLimitMicroyuan,
 		&summary.RequestsUsed,
 		&summary.TokensUsed,
+		&summary.TotalCostMicroyuan,
 	)
 	if err != nil {
 		return TenantQuotaSummary{}, err

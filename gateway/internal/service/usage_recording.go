@@ -5,11 +5,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/example/ai_gateway/gateway/internal/domain"
 	"github.com/example/ai_gateway/gateway/internal/queue"
+	"github.com/example/ai_gateway/gateway/internal/security"
 	"github.com/example/ai_gateway/gateway/internal/store"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -51,6 +53,8 @@ type UsageRecord struct {
 	CostSnapshot         UsageCosts
 	ErrorCode            string
 	ErrorMessage         string
+	PromptExcerpt        string
+	ResponseExcerpt      string
 	RequestStartedAt     time.Time
 	RequestCompletedAt   time.Time
 }
@@ -111,12 +115,14 @@ insert into llm_request_logs (
 	task_class,
 	routing_reason,
 	target_model_tier,
-	resolved_model
+	resolved_model,
+	prompt_excerpt,
+	response_excerpt
 ) values (
 	$1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
 	$11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
 	$21, $22, $23, $24, $25, $26, $27, $28, $29, $30,
-	$31, $32, $33
+	$31, $32, $33, $34, $35
 )`
 
 const insertUsagePublishFailureEventSQL = `
@@ -275,6 +281,8 @@ func insertUsageRecord(ctx context.Context, db store.DBTX, record UsageRecord) e
 		record.RoutingReason,
 		record.TargetModelTier,
 		record.ResolvedModel,
+		record.PromptExcerpt,
+		record.ResponseExcerpt,
 	)
 	return err
 }
@@ -433,6 +441,11 @@ func NewChatUsageRecord(
 	record.RoutingReason = strings.TrimSpace(requestContext.RoutingReason)
 	record.TargetModelTier = strings.TrimSpace(requestContext.TargetModelTier)
 	record.ResolvedModel = firstNonEmpty(resp.Model, requestContext.ResolvedModel, req.Model)
+	record.PromptExcerpt = redactAndTruncateUsageExcerpt(chatPromptExcerpt(req))
+	record.ResponseExcerpt = redactAndTruncateUsageExcerpt(chatResponseExcerpt(resp))
+	if record.ResponseExcerpt == "" && err != nil {
+		record.ResponseExcerpt = redactAndTruncateUsageExcerpt(err.Error())
+	}
 	record.ensureDefaults()
 	return record
 }
@@ -448,7 +461,7 @@ func NewEmbeddingsUsageRecord(
 	err error,
 ) UsageRecord {
 	usage, usageSource := normalizeUsage(resp.Usage, estimateEmbeddingsUsage(req))
-	return newUsageRecord(
+	record := newUsageRecord(
 		requestID,
 		requestContext,
 		"/v1/embeddings",
@@ -463,6 +476,12 @@ func NewEmbeddingsUsageRecord(
 		completedAt,
 		err,
 	)
+	record.PromptExcerpt = redactAndTruncateUsageExcerpt(embeddingInputExcerpt(req.Input))
+	if err != nil {
+		record.ResponseExcerpt = redactAndTruncateUsageExcerpt(err.Error())
+	}
+	record.ensureDefaults()
+	return record
 }
 
 func NewFailureUsageRecord(
@@ -595,6 +614,8 @@ func (r *UsageRecord) ensureDefaults() {
 	if r.CachedTokens < 0 {
 		r.CachedTokens = 0
 	}
+	r.PromptExcerpt = redactAndTruncateUsageExcerpt(r.PromptExcerpt)
+	r.ResponseExcerpt = redactAndTruncateUsageExcerpt(r.ResponseExcerpt)
 }
 
 func lifecycleEventForRecord(record UsageRecord) (string, string) {
@@ -755,6 +776,60 @@ func normalizeUsage(upstream *TokenUsage, estimated TokenUsage) (TokenUsage, Usa
 		return normalized, UsageSourceUpstream
 	}
 	return estimated, UsageSourceEstimated
+}
+
+func chatPromptExcerpt(req ChatRequest) string {
+	if len(req.Messages) == 0 {
+		return ""
+	}
+	contents := make([]string, 0, len(req.Messages))
+	for _, message := range req.Messages {
+		content := strings.TrimSpace(message.Content)
+		if content == "" {
+			continue
+		}
+		contents = append(contents, content)
+	}
+	return strings.Join(contents, "\n")
+}
+
+func chatResponseExcerpt(resp ChatResponse) string {
+	if len(resp.Choices) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(resp.Choices[0].Message.Content)
+}
+
+func embeddingInputExcerpt(input any) string {
+	switch value := input.(type) {
+	case string:
+		return strings.TrimSpace(value)
+	case []string:
+		return strings.TrimSpace(strings.Join(value, "\n"))
+	case []any:
+		parts := make([]string, 0, len(value))
+		for _, item := range value {
+			switch typed := item.(type) {
+			case string:
+				trimmed := strings.TrimSpace(typed)
+				if trimmed != "" {
+					parts = append(parts, trimmed)
+				}
+			default:
+				text := strings.TrimSpace(fmt.Sprint(typed))
+				if text != "" {
+					parts = append(parts, text)
+				}
+			}
+		}
+		return strings.TrimSpace(strings.Join(parts, "\n"))
+	default:
+		return strings.TrimSpace(fmt.Sprint(input))
+	}
+}
+
+func redactAndTruncateUsageExcerpt(value string) string {
+	return truncateText(security.RedactText(strings.TrimSpace(value)), 240)
 }
 
 func trustworthyUpstreamUsage(upstream *TokenUsage) (TokenUsage, bool) {

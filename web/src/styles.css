@@ -327,6 +327,25 @@ a {
   vertical-align: top;
 }
 
+.data-table-scroll {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.data-table--wide {
+  min-width: 1580px;
+}
+
+.data-table--clickable tbody tr {
+  cursor: pointer;
+  transition: background 140ms ease;
+}
+
+.data-table--clickable tbody tr:hover td,
+.data-table--clickable tbody tr:focus-visible td {
+  background: rgba(124, 92, 255, 0.08);
+}
+
 .table-row--selected td {
   background: rgba(124, 92, 255, 0.12);
 }
@@ -612,7 +631,8 @@ a {
   .stats-grid--five,
   .stats-grid--four,
   .two-column-grid,
-  .three-column-grid {
+  .three-column-grid,
+  .filter-bar {
     grid-template-columns: 1fr;
   }
 
@@ -627,6 +647,52 @@ a {
 .button-shell--table {
   padding: 6px 10px;
   font-size: 13px;
+}
+
+.filter-bar {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 280px));
+  gap: 16px;
+}
+
+.usage-request-filters {
+  grid-template-columns: repeat(3, minmax(0, 280px));
+  margin-bottom: 18px;
+  align-items: end;
+}
+
+.tenant-billing-filter {
+  grid-template-columns: repeat(3, minmax(0, 280px));
+  align-items: end;
+}
+
+.filter-bar .field-shell input,
+.filter-bar .field-shell select {
+  height: 44px;
+  border-radius: 12px;
+  border: 1px solid rgba(129, 149, 222, 0.2);
+  background: rgba(255, 255, 255, 0.05);
+  padding: 0 14px;
+  font-size: 15px;
+  color: var(--text-primary);
+  outline: none;
+}
+
+.filter-bar .field-shell select {
+  appearance: none;
+  color-scheme: dark;
+  background: rgba(16, 24, 54, 0.94);
+}
+
+.filter-bar .field-shell option {
+  color: var(--text-primary);
+  background: #101836;
+}
+
+.filter-bar .field-shell input:focus,
+.filter-bar .field-shell select:focus {
+  border-color: rgba(87, 187, 255, 0.8);
+  box-shadow: 0 0 0 4px rgba(76, 152, 255, 0.16);
 }
 
 .summary-list {
@@ -707,8 +773,8 @@ a {
 }
 
 .status-pill--warning {
-  background: rgba(255, 184, 0, 0.16);
-  color: #ffe083;
+  background: rgba(255, 210, 90, 0.22);
+  color: #ffe38f;
 }
 
 .status-pill--danger {
@@ -764,6 +830,26 @@ a {
   background: rgba(255, 255, 255, 0.04);
 }
 
+.event-timeline li p {
+  margin: 8px 0 0;
+}
+
+.usage-detail__excerpt {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border-radius: 14px;
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-primary);
+  font: inherit;
+  line-height: 1.65;
+}
+
+.usage-detail__events {
+  margin-top: 12px;
+}
+
 .form-grid {
   display: grid;
   gap: 16px;
@@ -776,7 +862,13 @@ a {
   font-weight: 600;
 }
 
-.field-shell input,
+.field-shell__hint {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.field-shell input:not([type="checkbox"]),
 .field-shell select,
 .field-shell textarea {
   width: 100%;
@@ -788,9 +880,45 @@ a {
   background: rgba(255, 255, 255, 0.05);
 }
 
+.provider-model-create-form {
+  display: grid;
+  gap: 16px;
+}
+
+.provider-model-create-form .field-shell select {
+  appearance: none;
+  color-scheme: dark;
+  background: rgba(16, 24, 54, 0.92);
+}
+
+.provider-model-create-form .field-shell option {
+  color: var(--text-primary);
+  background: #101836;
+}
+
+.provider-model-create-form--embedded {
+  gap: 14px;
+}
+
+.provider-model-create-modal .provider-model-create-form--embedded .section-card {
+  margin: 0;
+}
+
 .field-shell input::placeholder,
 .field-shell textarea::placeholder {
   color: var(--text-muted);
+}
+
+.field-shell--checkbox {
+  grid-template-columns: auto 1fr;
+  align-items: center;
+}
+
+.field-shell__checkbox {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: #7c9cff;
 }
 
 .field-shell textarea {
@@ -1177,6 +1305,11 @@ a {
   border-color: rgba(98, 235, 162, 0.28);
 }
 
+.usage-wall__cell--warning {
+  background: linear-gradient(180deg, rgba(167, 127, 30, 0.42) 0%, rgba(58, 45, 92, 0.82) 100%);
+  border-color: rgba(255, 220, 126, 0.38);
+}
+
 .usage-wall__cell--danger {
   background: linear-gradient(180deg, rgba(163, 31, 37, 0.5) 0%, rgba(54, 13, 17, 0.86) 100%);
   border-color: rgba(255, 134, 134, 0.28);
@@ -1241,6 +1374,10 @@ a {
 
   .usage-pagination {
     justify-items: flex-start;
+  }
+
+  .usage-request-filters {
+    grid-template-columns: 1fr;
   }
 
   .usage-wall__header,

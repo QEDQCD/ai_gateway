@@ -152,6 +152,18 @@ GATEWAY_SMART_ROUTING_LONG_PROMPT_THRESHOLD=240
 - `GATEWAY_SEED_PROVIDER=dashscope`
 - `GATEWAY_MIMO_PROVIDER_BASE_URL=https://api.xiaomimimo.com/v1`
 
+### 模型健康检查配置
+
+`gateway` 已预留模型健康检查 runner 配置，但 Compose 默认关闭：
+
+- `GATEWAY_MODEL_HEALTHCHECK_ENABLED=false`
+- `GATEWAY_MODEL_HEALTHCHECK_INTERVAL=1h`
+- `GATEWAY_MODEL_HEALTHCHECK_TIMEOUT=20s`
+- `GATEWAY_MODEL_HEALTHCHECK_PROMPT=你好`
+- `GATEWAY_MODEL_HEALTHCHECK_MAX_TOKENS=1`
+
+只有在你显式把 `GATEWAY_MODEL_HEALTHCHECK_ENABLED` 改成 `true` 时，后台定时健康检查才会启动。
+
 ### 2. 准备 secrets 目录
 
 ```bash
@@ -164,6 +176,16 @@ mkdir -p "${HOME}/.ai_gateway_secrets"
 - `mimo_api_key`
 - `gateway_seed_platform_api_key`
 - `provider_master_key`
+
+控制台创建 provider 时支持两种上游凭据模式：
+
+- `credential_mode=encrypted`：直接提交上游 API Key，由 `gateway` 用 `provider_master_key` 加密后入库
+- `credential_mode=secret_ref`：只保存 `secret_ref`，运行时再从环境变量或文件路径解引用真实上游密钥
+
+`secret_ref` 推荐用于 Compose / 容器部署场景，例如：
+
+- 环境变量名：`DASHSCOPE_API_KEY`
+- 容器内文件路径：`/run/secrets/dashscope_api_key`
 
 示例命令：
 
@@ -325,6 +347,11 @@ member 侧使用同一组 Basic Auth，并改为 member 登录拿到 `X-Console-
 - 管理员邮箱：`<ADMIN_CONSOLE_EMAIL>`
 - 普通用户邮箱：`<MEMBER_CONSOLE_EMAIL>`
 - 对应密码：`GATEWAY_CONSOLE_ADMIN_PASSWORD`、`GATEWAY_CONSOLE_MEMBER_PASSWORD`
+
+admin 登录后，模型管理相关页面入口为：
+
+- `http://127.0.0.1:31873/provider-models`：创建 provider、创建聊天模型挂载
+- `http://127.0.0.1:31873/model-health`：查看最小健康状态视图
 
 ### 公开申请注册
 

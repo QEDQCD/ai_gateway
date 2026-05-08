@@ -31,7 +31,7 @@ func RequirePlatformAPIKey(authService service.AuthService) fiber.Handler {
 
 func requestedModel(c *fiber.Ctx) string {
 	if model := strings.TrimSpace(c.Query("model")); model != "" {
-		return model
+		return normalizeRequestedModel(model)
 	}
 
 	if len(c.Body()) == 0 {
@@ -44,21 +44,29 @@ func requestedModel(c *fiber.Ctx) string {
 	if err := json.Unmarshal(c.Body(), &payload); err != nil {
 		return ""
 	}
-	return strings.TrimSpace(payload.Model)
+	return normalizeRequestedModel(payload.Model)
+}
+
+func normalizeRequestedModel(model string) string {
+	model = strings.TrimSpace(model)
+	if strings.EqualFold(model, "mimo") {
+		return "mimo-v2.5-pro"
+	}
+	return model
 }
 
 func authError(err error) error {
 	switch {
 	case errors.Is(err, service.ErrUnauthorized):
-		return fiber.NewError(fiber.StatusUnauthorized, "unauthorized")
+		return fiber.NewError(fiber.StatusUnauthorized, "认证失败：API Key 无效或已过期")
 	case errors.Is(err, service.ErrQuotaExceeded):
-		return fiber.NewError(fiber.StatusTooManyRequests, "quota exceeded")
+		return fiber.NewError(fiber.StatusTooManyRequests, "租户额度不足：请求次数或 Token 配额已耗尽")
 	case errors.Is(err, service.ErrModelNotAllowed):
-		return fiber.NewError(fiber.StatusForbidden, "model not allowed")
+		return fiber.NewError(fiber.StatusForbidden, "模型未授权：当前租户不可使用该模型")
 	case errors.Is(err, service.ErrRouteNotFound):
-		return fiber.NewError(fiber.StatusBadGateway, "route resolution failed")
+		return fiber.NewError(fiber.StatusBadGateway, "路由解析失败：未找到可用的模型映射")
 	default:
-		return fiber.NewError(fiber.StatusInternalServerError, "internal server error")
+		return fiber.NewError(fiber.StatusInternalServerError, "服务暂时不可用，请稍后重试")
 	}
 }
 
