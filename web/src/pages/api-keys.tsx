@@ -27,6 +27,54 @@ type ActionMode = "create" | "rotate" | "deactivate" | "delete" | null;
 
 const apiKeyScopeOptions: APIKeyScope[] = ["chat", "rag", "embeddings"];
 const defaultScopes: APIKeyScope[] = ["chat"];
+const gatewayBaseURL = "http://8.148.70.187:46819/v1";
+const gatewayChatCompletionsURL = `${gatewayBaseURL}/chat/completions`;
+const curlDefaultExample = [
+  "curl -sS \\",
+  '  -H "Authorization: Bearer <YOUR_API_KEY>" \\',
+  '  -H "Content-Type: application/json" \\',
+  `  -X POST ${gatewayChatCompletionsURL} \\`,
+  `  -d '{"messages":[{"role":"user","content":"你好"}]}'`,
+].join("\n");
+const curlExplicitModelExample = [
+  "curl -sS \\",
+  '  -H "Authorization: Bearer <YOUR_API_KEY>" \\',
+  '  -H "Content-Type: application/json" \\',
+  `  -X POST ${gatewayChatCompletionsURL} \\`,
+  `  -d '{"model":"qwen-flash","messages":[{"role":"user","content":"你好"}]}'`,
+].join("\n");
+const pythonSDKDefaultExample = [
+  "from openai import OpenAI",
+  "import httpx",
+  "",
+  "client = OpenAI(",
+  '    api_key="<YOUR_API_KEY>",',
+  `    base_url="${gatewayBaseURL}",`,
+  ")",
+  "",
+  "response = client.post(",
+  '    "/chat/completions",',
+  "    cast_to=httpx.Response,",
+  '    body={"messages": [{"role": "user", "content": "你好"}]},',
+  ")",
+  "",
+  "print(response.json())",
+].join("\n");
+const pythonSDKExplicitModelExample = [
+  "from openai import OpenAI",
+  "",
+  "client = OpenAI(",
+  '    api_key="<YOUR_API_KEY>",',
+  `    base_url="${gatewayBaseURL}",`,
+  ")",
+  "",
+  "response = client.chat.completions.create(",
+  '    model="qwen-flash",',
+  '    messages=[{"role": "user", "content": "你好"}],',
+  ")",
+  "",
+  "print(response.choices[0].message.content)",
+].join("\n");
 
 function maskAPIKey(rawKey: string) {
   if (rawKey.length <= 8) {
@@ -647,6 +695,45 @@ export function APIKeysPage() {
         </div>
         {secretError ? <p className="form-error">{secretError}</p> : null}
         {selectedCopyNotice ? <p>{selectedCopyNotice}</p> : null}
+      </section>
+
+      <section className="section-card api-key-examples-card">
+        <div className="section-card__header">
+          <div>
+            <h3>调用示例</h3>
+            <p>公网网关固定地址为 8.148.70.187:46819，示例中的 API Key 使用占位符表示。</p>
+          </div>
+        </div>
+        <div className="two-column-grid api-key-examples-grid">
+          <article className="api-key-example-panel" aria-label="curl 调用示例">
+            <div className="api-key-example-panel__header">
+              <span className="api-key-example-panel__badge">HTTP</span>
+              <strong>curl 调用</strong>
+            </div>
+            <div className="api-key-example-group">
+              <p className="api-key-example-group__label">默认路由（不传 model）</p>
+              <pre className="api-key-example-panel__code">{curlDefaultExample}</pre>
+            </div>
+            <div className="api-key-example-group">
+              <p className="api-key-example-group__label">显式指定模型</p>
+              <pre className="api-key-example-panel__code">{curlExplicitModelExample}</pre>
+            </div>
+          </article>
+          <article className="api-key-example-panel" aria-label="Python SDK 调用示例">
+            <div className="api-key-example-panel__header">
+              <span className="api-key-example-panel__badge">SDK</span>
+              <strong>Python SDK 调用</strong>
+            </div>
+            <div className="api-key-example-group">
+              <p className="api-key-example-group__label">默认路由（不传 model）</p>
+              <pre className="api-key-example-panel__code">{pythonSDKDefaultExample}</pre>
+            </div>
+            <div className="api-key-example-group">
+              <p className="api-key-example-group__label">显式指定模型</p>
+              <pre className="api-key-example-panel__code">{pythonSDKExplicitModelExample}</pre>
+            </div>
+          </article>
+        </div>
       </section>
 
       {actionMode ? (

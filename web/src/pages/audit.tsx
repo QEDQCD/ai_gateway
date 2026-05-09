@@ -80,7 +80,6 @@ export function AuditPage() {
             "状态",
             "平台线路",
             "延迟",
-            "计量来源",
             "总费用",
           ]}
           rows={items.map((item) => [
@@ -96,7 +95,6 @@ export function AuditPage() {
             item.status,
             neutralizeLineLabel(item.route_label),
             item.latency,
-            item.usage_source,
             formatValue(item.total_cost),
           ])}
         />
@@ -118,14 +116,6 @@ export function AuditPage() {
             <p>暂无事件</p>
           )}
         </section>
-        <div className="page-grid">
-          {summaries.map((summary) => (
-            <section key={summary.title} className="section-card">
-              <h3>{summary.title}</h3>
-              <p>{neutralizePlatformNarrative(summary.content)}</p>
-            </section>
-          ))}
-        </div>
       </div>
     </div>
   );

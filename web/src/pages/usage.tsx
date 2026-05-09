@@ -19,12 +19,13 @@ import {
   getUsageTrends,
   type UsageRequestDetail,
 } from "../lib/console-api";
-import { neutralizeLineLabel, neutralizePlatformNarrative } from "../lib/platform-routing";
+import { neutralizeLineLabel } from "../lib/platform-routing";
 import {
   formatRoutingReasonLabel,
   formatTargetModelTierLabel,
   formatTaskClassLabel,
 } from "../lib/smart-routing";
+import { formatUsageReason } from "../lib/usage-errors";
 import { useRemoteData } from "../lib/use-remote-data";
 
 const PAGE_SIZE = 20;
@@ -125,17 +126,16 @@ export function UsagePage() {
       getUsageRequests({
         limit: PAGE_SIZE,
         offset,
-        window: wallWindow,
         tenant_id: tenantFilter || undefined,
         resolved_model: resolvedModelFilter || undefined,
         status: statusFilter || undefined,
       }),
-    [offset, resolvedModelFilter, statusFilter, tenantFilter, wallWindow],
+    [offset, resolvedModelFilter, statusFilter, tenantFilter],
   );
   const loadLatencyWall = useCallback(() => getUsageLatencyWall(wallWindow), [wallWindow]);
   const loadOverview = useCallback(() => getUsageOverview(wallWindow), [wallWindow]);
   const loadTrends = useCallback(() => getUsageTrends(wallWindow), [wallWindow]);
-  const loadFailures = useCallback(() => getUsageFailures(wallWindow), [wallWindow]);
+  const loadFailures = useCallback(() => getUsageFailures(), []);
 
   const overview = useRemoteData(loadOverview);
   const trends = useRemoteData(loadTrends);
@@ -344,12 +344,17 @@ export function UsagePage() {
 
       <div className="two-column-grid">
         <section className="section-card">
-          <h2>失败分类强弱条</h2>
+          <div className="section-card__header">
+            <div>
+              <h2>失败分类强弱条</h2>
+              <p>全部历史</p>
+            </div>
+          </div>
           <ul className="meter-list">
             {failures.data.breakdown.map((item) => (
               <li key={item.label} className="meter-list__item">
                 <div className="meter-list__meta">
-                  <span>{item.label}</span>
+                  <span>{formatUsageReason(item.label)}</span>
                   <strong>{item.value}</strong>
                 </div>
                 <div className="meter-list__track">
@@ -363,7 +368,12 @@ export function UsagePage() {
           </ul>
         </section>
         <section className="section-card">
-          <h2>异常事件流</h2>
+          <div className="section-card__header">
+            <div>
+              <h2>异常事件流</h2>
+              <p>全部历史</p>
+            </div>
+          </div>
           {failures.data.recent_event_items.length > 0 ? (
             <ul className="event-timeline">
               {failures.data.recent_event_items.map((event) => (
@@ -375,14 +385,14 @@ export function UsagePage() {
                   <p>{formatTenantLabel(event.tenant_name, event.tenant_id)}</p>
                   <p>实际模型：{formatValue(event.resolved_model || event.request_model)}</p>
                   <p>供应商：{formatValue(event.provider)}</p>
-                  <p>{neutralizePlatformNarrative(event.reason)}</p>
+                  <p>{formatUsageReason(event.reason)}</p>
                 </li>
               ))}
             </ul>
           ) : failures.data.recent_events.length > 0 ? (
             <ul className="event-timeline">
               {failures.data.recent_events.map((event) => (
-                <li key={event}>{neutralizePlatformNarrative(event)}</li>
+                <li key={event}>{formatUsageReason(event)}</li>
               ))}
             </ul>
           ) : (
@@ -395,6 +405,7 @@ export function UsagePage() {
         <div className="section-card__header">
           <div>
             <h2>调用明细</h2>
+            <p>全部历史</p>
             <p>支持按租户、实际模型、状态筛选，点击任意一行可查看脱敏后的输入输出摘要。</p>
           </div>
           <div className="usage-pagination">
@@ -594,7 +605,7 @@ export function UsagePage() {
                   <DetailList
                     items={[
                       { label: "错误代码", value: requestDetail.error_code || "--" },
-                      { label: "错误信息", value: requestDetail.error_message || "--" },
+                      { label: "错误信息", value: formatUsageReason(requestDetail.error_message || "--") },
                     ]}
                   />
                   {requestDetail.failure_events.length > 0 ? (
@@ -605,7 +616,7 @@ export function UsagePage() {
                             {event.time} · {event.category}
                             {formatFailureStatusCode(event.status_code)}
                           </strong>
-                          <p>{event.reason}</p>
+                          <p>{formatUsageReason(event.reason)}</p>
                         </li>
                       ))}
                     </ul>

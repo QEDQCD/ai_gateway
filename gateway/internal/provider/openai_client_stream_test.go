@@ -113,6 +113,66 @@ func TestOpenAIClientStreamCompleteForwardsSSEAndBuildsFinalResponse(t *testing.
 	}
 }
 
+func TestOpenAIClientStreamCompleteRedactsSensitiveContentInForwardedChunksAndFinalResponse(t *testing.T) {
+	t.Parallel()
+
+	providerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Fatal("expected response writer to implement http.Flusher")
+		}
+
+		_, _ = io.WriteString(w, "data: {\"model\":\"qwen-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"手机号是13333333333\"}}]}\n\n")
+		flusher.Flush()
+		_, _ = io.WriteString(w, "data: {\"model\":\"qwen-flash\",\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":8,\"total_tokens\":18}}\n\n")
+		flusher.Flush()
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	}))
+	t.Cleanup(providerServer.Close)
+
+	client := NewOpenAIClient(http.DefaultClient)
+	stream, _, err := client.StreamComplete(
+		context.Background(),
+		domain.ProviderTarget{
+			BaseURL: providerServer.URL,
+			APIKey:  "provider-secret-key",
+		},
+		service.ChatRequest{
+			Model:  "qwen-flash",
+			Stream: true,
+			Messages: []service.ChatMessage{
+				{Role: "user", Content: "你好"},
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("StreamComplete returned unexpected error: %v", err)
+	}
+
+	var chunks bytes.Buffer
+	result, err := stream.Run(func(chunk []byte) error {
+		_, writeErr := chunks.Write(chunk)
+		return writeErr
+	}, nil)
+	if err != nil {
+		t.Fatalf("stream.Run returned unexpected error: %v", err)
+	}
+
+	if strings.Contains(chunks.String(), "13333333333") {
+		t.Fatalf("expected forwarded stream chunks to redact phone number, got %q", chunks.String())
+	}
+	if !strings.Contains(chunks.String(), "133XXXX3333") {
+		t.Fatalf("expected forwarded stream chunks to contain redacted phone number, got %q", chunks.String())
+	}
+	if got := result.Response.Choices[0].Message.Content; got != "手机号是133XXXX3333" {
+		t.Fatalf("expected final content %q, got %q", "手机号是133XXXX3333", got)
+	}
+}
+
 func TestOpenAIClientStreamCompleteMarksClientAbortAfterFirstContentToken(t *testing.T) {
 	t.Parallel()
 

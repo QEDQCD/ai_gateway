@@ -2989,7 +2989,7 @@ func (s postgresConsoleService) UsageLatencyWall(ctx context.Context, query Usag
 	}
 
 	windowLabel, bucketExpr, bucketStep, bucketLayout := usageLatencyWindowConfig(query)
-	whereClause, args := buildUsageLogWhere(query, "l.request_started_at")
+	whereClause, args := buildUsageLogWhere(query, "l.request_started_at", true)
 	rows, err := s.db.Query(ctx, `
 		select
 			l.request_model,
@@ -3475,7 +3475,7 @@ func translateRouteHealthStatus(status string) string {
 }
 
 func (s postgresConsoleService) usageOverviewFromLogs(ctx context.Context, query UsageQuery) (UsageOverviewData, error) {
-	logWhere, logArgs := buildUsageLogWhere(query, "l.request_started_at")
+	logWhere, logArgs := buildUsageLogWhere(query, "l.request_started_at", true)
 	var totalRequests int64
 	var totalTokens int64
 	var inputTokens int64
@@ -3646,7 +3646,7 @@ func (s postgresConsoleService) usagePricingModelsFromLogs(ctx context.Context, 
 }
 
 func (s postgresConsoleService) usageTrendsFromLogs(ctx context.Context, query UsageQuery) (UsageTrendData, error) {
-	whereClause, args := buildUsageLogWhere(query, "l.request_started_at")
+	whereClause, args := buildUsageLogWhere(query, "l.request_started_at", true)
 	rows, err := s.db.Query(ctx, `
 		select
 			date_trunc('hour', l.request_started_at) as bucket_start,
@@ -3700,13 +3700,14 @@ func (s postgresConsoleService) usageTrendsFromLogs(ctx context.Context, query U
 }
 
 func (s postgresConsoleService) UsageFailures(ctx context.Context, query UsageQuery) (UsageFailureData, error) {
+	queryAllHistory := strings.TrimSpace(query.Window) == "" && query.From.IsZero() && query.To.IsZero()
 	var err error
 	query, err = normalizeUsageQuery(query, time.Now())
 	if err != nil {
 		return UsageFailureData{}, err
 	}
 
-	whereClause, args := buildUsageLogWhere(query, "l.request_started_at")
+	whereClause, args := buildUsageLogWhere(query, "l.request_started_at", !queryAllHistory)
 	rows, err := s.db.Query(ctx, `
 		select
 			case
@@ -3762,7 +3763,7 @@ func (s postgresConsoleService) UsageFailures(ctx context.Context, query UsageQu
 		}
 	}
 
-	eventWhere, eventArgs := buildUsageEventWhere(query)
+	eventWhere, eventArgs := buildUsageEventWhere(query, !queryAllHistory)
 	eventRows, err := s.db.Query(ctx, `
 		select
 			e.created_at,
@@ -3857,13 +3858,14 @@ func (s postgresConsoleService) UsageFailures(ctx context.Context, query UsageQu
 }
 
 func (s postgresConsoleService) UsageRequests(ctx context.Context, query UsageQuery) (UsageRequestsPageData, error) {
+	queryAllHistory := strings.TrimSpace(query.Window) == "" && query.From.IsZero() && query.To.IsZero()
 	var err error
 	query, err = normalizeUsageQuery(query, time.Now())
 	if err != nil {
 		return UsageRequestsPageData{}, err
 	}
 
-	whereClause, args := buildUsageLogWhere(query, "l.request_started_at")
+	whereClause, args := buildUsageLogWhere(query, "l.request_started_at", !queryAllHistory)
 	if query.ResolvedModel != "" {
 		args = append(args, query.ResolvedModel)
 		whereClause += fmt.Sprintf(" and %s = $%d", usageResolvedModelExpr("l"), len(args))
@@ -4725,8 +4727,12 @@ type usageWhereBuilder struct {
 	args       []any
 }
 
-func newUsageWhereBuilder(from time.Time, to time.Time, timeColumn string) *usageWhereBuilder {
-	builder := &usageWhereBuilder{}
+func newUsageWhereBuilder() *usageWhereBuilder {
+	return &usageWhereBuilder{}
+}
+
+func newUsageWhereBuilderWithTime(from time.Time, to time.Time, timeColumn string) *usageWhereBuilder {
+	builder := newUsageWhereBuilder()
 	builder.add(fmt.Sprintf("%s >= $%%d", timeColumn), from)
 	builder.add(fmt.Sprintf("%s < $%%d", timeColumn), to)
 	return builder
@@ -4779,11 +4785,14 @@ func (b *usageWhereBuilder) addFailureCategory(expr string, value string) {
 }
 
 func (b *usageWhereBuilder) whereClause() string {
+	if len(b.conditions) == 0 {
+		return "true"
+	}
 	return strings.Join(b.conditions, " and ")
 }
 
 func buildUsageAggregateWhere(query UsageQuery) (string, []any) {
-	builder := newUsageWhereBuilder(query.From, query.To, "a.bucket_start")
+	builder := newUsageWhereBuilderWithTime(query.From, query.To, "a.bucket_start")
 	builder.addIfNotEmpty("a.tenant_id = $%d", query.TenantID)
 	builder.addIfNotEmpty("a.platform_api_key_id = $%d", query.PlatformAPIKeyID)
 	builder.addIfNotEmpty("a.route_id = $%d", query.RouteID)
@@ -4795,8 +4804,12 @@ func buildUsageAggregateWhere(query UsageQuery) (string, []any) {
 	return builder.whereClause(), builder.args
 }
 
-func buildUsageLogWhere(query UsageQuery, timeColumn string) (string, []any) {
-	builder := newUsageWhereBuilder(query.From, query.To, timeColumn)
+func buildUsageLogWhere(query UsageQuery, timeColumn string, includeTime bool) (string, []any) {
+	builder := newUsageWhereBuilder()
+	if includeTime {
+		builder.add(fmt.Sprintf("%s >= $%%d", timeColumn), query.From)
+		builder.add(fmt.Sprintf("%s < $%%d", timeColumn), query.To)
+	}
 	builder.addIfNotEmpty("l.tenant_id = $%d", query.TenantID)
 	builder.addIfNotEmpty("l.platform_api_key_id = $%d", query.PlatformAPIKeyID)
 	builder.addIfNotEmpty("l.route_id = $%d", query.RouteID)
@@ -4809,8 +4822,12 @@ func buildUsageLogWhere(query UsageQuery, timeColumn string) (string, []any) {
 	return builder.whereClause(), builder.args
 }
 
-func buildUsageEventWhere(query UsageQuery) (string, []any) {
-	builder := newUsageWhereBuilder(query.From, query.To, "l.request_started_at")
+func buildUsageEventWhere(query UsageQuery, includeTime bool) (string, []any) {
+	builder := newUsageWhereBuilder()
+	if includeTime {
+		builder.add("l.request_started_at >= $%d", query.From)
+		builder.add("l.request_started_at < $%d", query.To)
+	}
 	builder.addIfNotEmpty("l.tenant_id = $%d", query.TenantID)
 	builder.addIfNotEmpty("l.platform_api_key_id = $%d", query.PlatformAPIKeyID)
 	builder.addIfNotEmpty("l.route_id = $%d", query.RouteID)

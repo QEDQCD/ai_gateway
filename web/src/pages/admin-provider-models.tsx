@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { ProviderModelCreateForm } from "../components/provider-model-create-form";
 import { DataTable, ErrorSection, LoadingSection, StatCard } from "../components/console";
 import { getProviderModels, type ProviderModelsPageData } from "../lib/console-api";
+import { neutralizeLineLabel } from "../lib/platform-routing";
 import { useRemoteData } from "../lib/use-remote-data";
 
 function formatValue(value: string | number | undefined) {
@@ -153,7 +154,7 @@ export function AdminProviderModelsPage() {
             item.requested_model,
             item.provider,
             item.provider_credential_id,
-            item.route_label,
+            neutralizeLineLabel(item.route_label),
             item.request_mode,
             item.health_status,
             item.latency_ms > 0 ? `${item.latency_ms} ms` : "-",

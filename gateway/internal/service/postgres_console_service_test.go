@@ -4490,6 +4490,172 @@ func TestPostgresConsoleServiceUsageFailuresUsesRequestStartedAtWindow(t *testin
 	}
 }
 
+func TestPostgresConsoleServiceUsageFailuresWithEmptyWindowQueriesFullHistory(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	if _, err := conn.Exec(ctx, `
+		insert into llm_request_logs (
+			id,
+			tenant_id,
+			platform_api_key_id,
+			platform_api_key_name,
+			provider_credential_id,
+			route_id,
+			request_path,
+			request_model,
+			upstream_model,
+			usage_source,
+			usage_status,
+			status_code,
+			latency_ms,
+			prompt_tokens,
+			completion_tokens,
+			total_tokens,
+			error_code,
+			error_message,
+			request_started_at,
+			request_completed_at,
+			created_at
+		) values (
+			'llmreq_demo_full_history_fail',
+			'tenant_demo',
+			'pak_demo',
+			'demo key',
+			'provider_openai_demo',
+			'route:provider_openai_demo:default',
+			'/v1/chat/completions',
+			'legacy-history-only-model',
+			'legacy-history-only-model',
+			'upstream',
+			'upstream_error',
+			503,
+			420,
+			24,
+			6,
+			30,
+			'service_unavailable',
+			'legacy full history failure',
+			timestamptz '2000-01-02T03:04:05Z',
+			timestamptz '2000-01-02T03:04:05.420Z',
+			timestamptz '2000-01-02T03:04:06Z'
+		)
+	`); err != nil {
+		t.Fatalf("insert full-history failure log failed: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `
+		insert into llm_request_events (
+			id,
+			request_log_id,
+			tenant_id,
+			event_type,
+			usage_source,
+			usage_status,
+			status_code,
+			detail,
+			created_at
+		) values (
+			'llmevt_demo_full_history_fail',
+			'llmreq_demo_full_history_fail',
+			'tenant_demo',
+			'request_failed',
+			'upstream',
+			'upstream_error',
+			503,
+			'legacy full history failure detail',
+			timestamptz '2000-01-02T03:04:05.420Z'
+		)
+	`); err != nil {
+		t.Fatalf("insert full-history failure event failed: %v", err)
+	}
+
+	payload, err := console.UsageFailures(ctx, service.UsageQuery{
+		Model: "legacy-history-only-model",
+	})
+	if err != nil {
+		t.Fatalf("UsageFailures failed: %v", err)
+	}
+
+	if !containsFailureBucket(payload.Breakdown, "service_unavailable", "1 次") {
+		t.Fatalf("expected full-history breakdown to contain legacy failure, got %#v", payload.Breakdown)
+	}
+	if !containsRecentEvent(payload.RecentEvents, "legacy full history failure detail") {
+		t.Fatalf("expected full-history recent_events to include legacy failure, got %#v", payload.RecentEvents)
+	}
+}
+
+func TestPostgresConsoleServiceUsageFailuresWithEmptyWindowAndNoFilters(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	if _, err := conn.Exec(ctx, `
+		insert into llm_request_logs (
+			id,
+			tenant_id,
+			platform_api_key_id,
+			platform_api_key_name,
+			provider_credential_id,
+			route_id,
+			request_path,
+			request_model,
+			upstream_model,
+			usage_source,
+			usage_status,
+			status_code,
+			latency_ms,
+			prompt_tokens,
+			completion_tokens,
+			total_tokens,
+			error_code,
+			error_message,
+			request_started_at,
+			request_completed_at,
+			created_at
+		) values (
+			'llmreq_demo_full_history_fail_unfiltered',
+			'tenant_demo',
+			'pak_demo',
+			'demo key',
+			'provider_openai_demo',
+			'route:provider_openai_demo:default',
+			'/v1/chat/completions',
+			'legacy-history-no-filter-model',
+			'legacy-history-no-filter-model',
+			'upstream',
+			'upstream_error',
+			503,
+			420,
+			24,
+			6,
+			30,
+			'service_unavailable',
+			'legacy full history no filter failure',
+			timestamptz '2000-01-03T03:04:05Z',
+			timestamptz '2000-01-03T03:04:05.420Z',
+			timestamptz '2000-01-03T03:04:06Z'
+		)
+	`); err != nil {
+		t.Fatalf("insert unfiltered full-history failure log failed: %v", err)
+	}
+
+	payload, err := console.UsageFailures(ctx, service.UsageQuery{})
+	if err != nil {
+		t.Fatalf("UsageFailures failed: %v", err)
+	}
+
+	if len(payload.Breakdown) == 0 {
+		t.Fatalf("expected non-empty breakdown for unfiltered full-history query, got %#v", payload)
+	}
+}
+
 func TestPostgresConsoleServiceUsageFailuresMergesEquivalentLabels(t *testing.T) {
 	t.Parallel()
 
@@ -5231,6 +5397,147 @@ func TestPostgresConsoleServiceUsageRequestsUsesRequestStartedAtWindow(t *testin
 	}
 	if payload.Items[0].RequestID != "llmreq_demo_delayed_request" {
 		t.Fatalf("expected delayed request to be selected by request_started_at, got %q", payload.Items[0].RequestID)
+	}
+}
+
+func TestPostgresConsoleServiceUsageRequestsWithEmptyWindowQueriesFullHistory(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	if _, err := conn.Exec(ctx, `
+		insert into llm_request_logs (
+			id,
+			tenant_id,
+			platform_api_key_id,
+			platform_api_key_name,
+			provider_credential_id,
+			route_id,
+			request_path,
+			request_model,
+			upstream_model,
+			usage_source,
+			usage_status,
+			status_code,
+			latency_ms,
+			prompt_tokens,
+			completion_tokens,
+			total_tokens,
+			error_code,
+			error_message,
+			request_started_at,
+			request_completed_at,
+			created_at
+		) values (
+			'llmreq_demo_full_history_request',
+			'tenant_demo',
+			'pak_demo',
+			'demo key',
+			'provider_openai_demo',
+			'route:provider_openai_demo:default',
+			'/v1/chat/completions',
+			'legacy-history-request-model',
+			'legacy-history-request-model',
+			'upstream',
+			'success',
+			200,
+			88,
+			18,
+			4,
+			22,
+			'',
+			'',
+			timestamptz '2000-01-02T03:14:05Z',
+			timestamptz '2000-01-02T03:14:05.088Z',
+			timestamptz '2000-01-02T03:14:06Z'
+		)
+	`); err != nil {
+		t.Fatalf("insert full-history request log failed: %v", err)
+	}
+
+	payload, err := console.UsageRequests(ctx, service.UsageQuery{
+		Model: "legacy-history-request-model",
+	})
+	if err != nil {
+		t.Fatalf("UsageRequests failed: %v", err)
+	}
+
+	if len(payload.Items) != 1 {
+		t.Fatalf("expected 1 full-history request item, got %d", len(payload.Items))
+	}
+	if payload.Items[0].RequestID != "llmreq_demo_full_history_request" {
+		t.Fatalf("expected legacy request to be returned for empty window, got %q", payload.Items[0].RequestID)
+	}
+}
+
+func TestPostgresConsoleServiceUsageRequestsWithEmptyWindowAndNoFilters(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	if _, err := conn.Exec(ctx, `
+		insert into llm_request_logs (
+			id,
+			tenant_id,
+			platform_api_key_id,
+			platform_api_key_name,
+			provider_credential_id,
+			route_id,
+			request_path,
+			request_model,
+			upstream_model,
+			usage_source,
+			usage_status,
+			status_code,
+			latency_ms,
+			prompt_tokens,
+			completion_tokens,
+			total_tokens,
+			error_code,
+			error_message,
+			request_started_at,
+			request_completed_at,
+			created_at
+		) values (
+			'llmreq_demo_full_history_request_unfiltered',
+			'tenant_demo',
+			'pak_demo',
+			'demo key',
+			'provider_openai_demo',
+			'route:provider_openai_demo:default',
+			'/v1/chat/completions',
+			'legacy-history-request-no-filter-model',
+			'legacy-history-request-no-filter-model',
+			'upstream',
+			'success',
+			200,
+			88,
+			18,
+			4,
+			22,
+			'',
+			'',
+			timestamptz '2000-01-03T03:14:05Z',
+			timestamptz '2000-01-03T03:14:05.088Z',
+			timestamptz '2000-01-03T03:14:06Z'
+		)
+	`); err != nil {
+		t.Fatalf("insert unfiltered full-history request log failed: %v", err)
+	}
+
+	payload, err := console.UsageRequests(ctx, service.UsageQuery{})
+	if err != nil {
+		t.Fatalf("UsageRequests failed: %v", err)
+	}
+
+	if len(payload.Items) == 0 {
+		t.Fatalf("expected non-empty request list for unfiltered full-history query, got %#v", payload)
 	}
 }
 

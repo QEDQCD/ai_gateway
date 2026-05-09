@@ -474,7 +474,7 @@ write_summary() {
       [
         "- 请求总数：\(.overall.requests)",
         "- 成功数：\(.overall.success)",
-        "- reasoning_only：\(.overall.reasoning_only)",
+        "- 仅返回推理过程，未返回最终答案（reasoning_only）：\(.overall.reasoning_only)",
         "- 失败数：\(.overall.failures)",
         "- 总 Token：\(.overall.total_tokens)",
         "- 平均耗时：\(.overall.avg_time_s | tostring)s"
@@ -484,14 +484,14 @@ write_summary() {
     jq -r '
       .by_model
       | to_entries[]
-      | "- \(.key)：请求 \(.value.requests)，成功 \(.value.success)，reasoning_only \(.value.reasoning_only)，失败 \(.value.failures)，总 Token \(.value.total_tokens)，平均耗时 \(.value.avg_time_s | tostring)s"
+      | "- \(.key)：请求 \(.value.requests)，成功 \(.value.success)，仅返回推理过程未返回最终答案 \(.value.reasoning_only)，失败 \(.value.failures)，总 Token \(.value.total_tokens)，平均耗时 \(.value.avg_time_s | tostring)s"
     ' "${SUMMARY_JSON}"
     echo
     echo "## By Phase"
     jq -r '
       .by_phase
       | to_entries[]
-      | "- \(.key)：请求 \(.value.requests)，成功 \(.value.success)，reasoning_only \(.value.reasoning_only)，失败 \(.value.failures)，总 Token \(.value.total_tokens)"
+      | "- \(.key)：请求 \(.value.requests)，成功 \(.value.success)，仅返回推理过程未返回最终答案 \(.value.reasoning_only)，失败 \(.value.failures)，总 Token \(.value.total_tokens)"
     ' "${SUMMARY_JSON}"
   } > "${SUMMARY_MD}"
 }

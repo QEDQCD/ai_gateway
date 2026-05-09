@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/example/ai_gateway/gateway/internal/domain"
+	"github.com/example/ai_gateway/gateway/internal/security"
 	"github.com/example/ai_gateway/gateway/internal/service"
 )
 
@@ -216,7 +217,9 @@ func consumeChatCompletionStream(body io.Reader, emit func([]byte) error, onFirs
 				usageCopy := *chunk.Usage
 				result.Response.Usage = &usageCopy
 			}
-			for _, choice := range chunk.Choices {
+			chunk.ReasoningContent = security.RedactText(chunk.ReasoningContent)
+			for index := range chunk.Choices {
+				choice := chunk.Choices[index]
 				accumulator := accumulators[choice.Index]
 				if accumulator == nil {
 					accumulator = &openAIChoiceAccumulator{}
@@ -226,12 +229,17 @@ func consumeChatCompletionStream(body io.Reader, emit func([]byte) error, onFirs
 				if strings.TrimSpace(choice.Delta.Role) != "" {
 					accumulator.Role = strings.TrimSpace(choice.Delta.Role)
 				}
-				accumulator.Content.WriteString(choice.Delta.Content)
-				accumulator.ReasoningContent.WriteString(firstNonEmpty(
+				redactedContent := security.RedactText(choice.Delta.Content)
+				redactedReasoning := security.RedactText(firstNonEmpty(
 					choice.Delta.ReasoningContent,
 					choice.ReasoningContent,
 					chunk.ReasoningContent,
 				))
+				accumulator.Content.WriteString(redactedContent)
+				accumulator.ReasoningContent.WriteString(redactedReasoning)
+				chunk.Choices[index].Delta.Content = redactedContent
+				chunk.Choices[index].Delta.ReasoningContent = redactedReasoning
+				chunk.Choices[index].ReasoningContent = redactedReasoning
 				if !result.SawContentToken && openAIChunkHasVisibleToken(chunk, choice) {
 					result.SawContentToken = true
 					if onFirstToken != nil {
@@ -241,7 +249,12 @@ func consumeChatCompletionStream(body io.Reader, emit func([]byte) error, onFirs
 			}
 
 			if emit != nil {
-				if emitErr := emit([]byte("data: " + payload + "\n\n")); emitErr != nil {
+				redactedPayload, marshalErr := json.Marshal(chunk)
+				if marshalErr != nil {
+					result.Response = buildResponse()
+					return result, marshalErr
+				}
+				if emitErr := emit([]byte("data: " + string(redactedPayload) + "\n\n")); emitErr != nil {
 					if result.SawContentToken {
 						result.ClientAborted = true
 					}
@@ -292,6 +305,7 @@ func normalizeOpenAIChatResponse(response openAIChatResponse) service.ChatRespon
 		if content == "" && shouldFallbackReasoningContent(response.Model) {
 			content = strings.TrimSpace(choice.Message.ReasoningContent)
 		}
+		content = security.RedactText(content)
 		role := strings.TrimSpace(choice.Message.Role)
 		if role == "" {
 			role = "assistant"

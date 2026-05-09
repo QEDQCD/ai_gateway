@@ -21,6 +21,31 @@
 - 平台按租户记录请求量、Token、失败率与审计事件
 - 平台隐藏真实上游 provider 凭据，仅暴露统一平台接口
 
+## 界面预览
+
+以下截图位于仓库 `docs/image/` 目录，可直接随代码版本一起查看：
+
+### 1. 总览与租户治理
+
+<p align="center">
+  <img src="docs/image/总览.png" alt="总览" width="48%" />
+  <img src="docs/image/租户管理.png" alt="租户管理" width="48%" />
+</p>
+
+### 2. API Key 与调用接入
+
+<p align="center">
+  <img src="docs/image/API KEY管理.png" alt="API Key 管理" width="48%" />
+  <img src="docs/image/调用示例.png" alt="调用示例" width="48%" />
+</p>
+
+### 3. 调用观测与模型健康
+
+<p align="center">
+  <img src="docs/image/调用明细列表.png" alt="调用明细列表" width="48%" />
+  <img src="docs/image/模型健康检查.png" alt="模型健康检查" width="48%" />
+</p>
+
 ## 公网访问
 
 当前公网访问入口如下：

@@ -839,6 +839,35 @@ describe("控制台路由", () => {
     expect(fetchMock).toHaveBeenCalledWith("/api/admin/api-keys");
   });
 
+  test("API 密钥页展示 curl 和 Python SDK 调用示例", async () => {
+    mockFetch({
+      "/api/admin/api-keys": {
+        items: [
+          {
+            id: "key_1",
+            name: "生产网关",
+            tenant: "tenant_alpha",
+            status: "启用",
+            scopes: ["chat"],
+            last_used_at: "2 分钟前",
+          },
+        ],
+        credential_mode: "平台密钥与上游凭证分离管理。",
+      },
+    });
+
+    renderRoute("/api-keys");
+
+    expect(await screen.findByRole("heading", { level: 3, name: "调用示例" })).toBeInTheDocument();
+    expect(screen.getAllByText(/http:\/\/8\.148\.70\.187:46819\/v1/)).not.toHaveLength(0);
+    expect(screen.getAllByText(/http:\/\/8\.148\.70\.187:46819\/v1\/chat\/completions/)).not.toHaveLength(0);
+    expect(screen.getAllByText(/Authorization: Bearer <YOUR_API_KEY>/)).not.toHaveLength(0);
+    expect(screen.getAllByText(/显式指定模型/)).not.toHaveLength(0);
+    expect(screen.getByText(/"model":"qwen-flash"/)).toBeInTheDocument();
+    expect(screen.getAllByText(/from openai import OpenAI/)).not.toHaveLength(0);
+    expect(screen.getAllByText(/base_url="http:\/\/8\.148\.70\.187:46819\/v1"/)).not.toHaveLength(0);
+  });
+
   test("API 密钥页展示稳定详情区并支持历史密钥回显复制", async () => {
     mockFetch({
       "/api/admin/api-keys": {
@@ -2671,9 +2700,9 @@ describe("控制台路由", () => {
             request_model: "qwen-flash",
             resolved_model: "qwen-plus",
             upstream_model: "qwen-plus",
-            task_class: "coding_complex",
+            task_class: "explicit_model",
             target_model_tier: "gateway-chat-reasoning",
-            routing_reason: "keyword:debug,pattern:code_fence",
+            routing_reason: "explicit_model:qwen-flash",
             status: "200",
             route_label: "default-route",
             latency: "218 ms",
@@ -2692,16 +2721,17 @@ describe("控制台路由", () => {
 
     expect(await screen.findByRole("heading", { level: 1, name: "审计" })).toBeInTheDocument();
     expect(screen.getByText("最近事件流")).toBeInTheDocument();
-    expect(screen.getByText("配额超限和 平台托管凭证 回退事件会在这里汇总。")).toBeInTheDocument();
+    expect(screen.queryByText("配额超限和 平台托管凭证 回退事件会在这里汇总。")).not.toBeInTheDocument();
     expect(screen.getByText("平台上游 限流")).toBeInTheDocument();
     expect(screen.getByText("内部检索能力链路回退到 平台默认线路后恢复成功")).toBeInTheDocument();
     expect(screen.getByText("/v1/chat/completions")).toBeInTheDocument();
     expect(screen.getAllByText("qwen-plus").length).toBeGreaterThan(0);
-    expect(screen.getByText("复杂编码请求")).toBeInTheDocument();
+    expect(screen.getByText("显式指定模型")).toBeInTheDocument();
     expect(screen.getByText("强模型档位")).toBeInTheDocument();
-    expect(screen.getByText("命中关键词：debug；包含代码块")).toBeInTheDocument();
+    expect(screen.getByText("直接指定模型：qwen-flash")).toBeInTheDocument();
     expect(screen.getAllByText("总费用").length).toBeGreaterThan(0);
     expect(screen.getByText("2.50 ￥")).toBeInTheDocument();
+    expect(screen.queryByText("计量来源")).not.toBeInTheDocument();
     expect(screen.queryByText(new RegExp(providerAlias))).not.toBeInTheDocument();
     expect(screen.queryByText(/OpenAI/)).not.toBeInTheDocument();
     expect(screen.queryByText(new RegExp(hiddenKnowledgeTerm))).not.toBeInTheDocument();
@@ -2745,6 +2775,40 @@ describe("控制台路由", () => {
     expect(screen.queryByRole("button", { name: "创建 Provider" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "新建模型" })).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith("/api/admin/provider-models");
+  });
+
+  test("后台模型页把英文线路名转为中文", async () => {
+    mockFetch({
+      "/api/admin/provider-models": {
+        providers: [],
+        models: [
+          {
+            requested_model: "qwen-flash",
+            provider: "qwen",
+            provider_credential_id: "provider_dashscope_primary",
+            route_label: "default-route",
+            health_status: "healthy",
+            latency_ms: 218,
+            request_mode: "聊天",
+          },
+          {
+            requested_model: "rag-query",
+            provider: "other",
+            provider_credential_id: "provider_rag_service",
+            route_label: "shared-route",
+            health_status: "healthy",
+            latency_ms: 120,
+            request_mode: "聊天",
+          },
+        ],
+      },
+    });
+
+    renderRoute("/provider-models");
+
+    expect(await screen.findByRole("heading", { level: 1, name: "后台模型" })).toBeInTheDocument();
+    expect(screen.getByText("平台默认线路")).toBeInTheDocument();
+    expect(screen.getByText("平台统一线路")).toBeInTheDocument();
   });
 
   test("后台模型页点击新建模型后打开弹窗并展示创建上游供应商区域", async () => {
@@ -3569,7 +3633,7 @@ describe("控制台路由", () => {
     renderRoute("/audit");
 
     expect(await screen.findByText("最近 24 小时请求")).toBeInTheDocument();
-    expect(screen.getByText("真实摘要")).toBeInTheDocument();
+    expect(screen.queryByText("真实摘要")).not.toBeInTheDocument();
     expect(screen.getAllByText("qwen-flash")).toHaveLength(2);
     expect(screen.getByText("0.32 ￥")).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith("/api/admin/audit");
@@ -3737,6 +3801,7 @@ describe("控制台路由", () => {
     expect(screen.getByText("模型延时健康墙")).toBeInTheDocument();
     expect(screen.getByText("总调用数")).toBeInTheDocument();
     expect(screen.getByText("趋势概览")).toBeInTheDocument();
+    expect(screen.getAllByText("全部历史").length).toBeGreaterThanOrEqual(2);
     expect(screen.getAllByText("总费用").length).toBeGreaterThan(0);
     expect(screen.getByText("0.52 ￥")).toBeInTheDocument();
     expect(screen.getByText("费用趋势")).toBeInTheDocument();
@@ -3754,8 +3819,59 @@ describe("控制台路由", () => {
     expect(fetchMock).toHaveBeenCalledWith("/api/admin/usage/overview?window=7d");
     expect(fetchMock).toHaveBeenCalledWith("/api/admin/usage/trends?window=7d");
     expect(fetchMock).toHaveBeenCalledWith("/api/admin/usage/latency-wall?window=7d");
-    expect(fetchMock).toHaveBeenCalledWith("/api/admin/usage/failures?window=7d");
-    expect(fetchMock).toHaveBeenCalledWith("/api/admin/usage/requests?limit=20&offset=0&window=7d");
+    expect(fetchMock).toHaveBeenCalledWith("/api/admin/usage/failures");
+    expect(fetchMock).toHaveBeenCalledWith("/api/admin/usage/requests?limit=20&offset=0");
+  });
+
+  test("调用观测页切换 wallWindow 时仅实时视图接口跟随窗口变化", async () => {
+    const fetchMock = mockFetch({
+      "/api/admin/usage/overview": createUsageOverviewMock(),
+      "/api/admin/usage/overview?window=24h": createUsageOverviewMock(),
+      "/api/admin/usage/trends": { requests: [], tokens: [], success: [], costs: [] },
+      "/api/admin/usage/trends?window=24h": { requests: [], tokens: [], success: [], costs: [] },
+      "/api/admin/usage/latency-wall?window=24h": {
+        window_label: "最近 24 小时",
+        buckets: [],
+        lanes: [],
+      },
+      "/api/admin/usage/failures": {
+        breakdown: [{ label: "限流", value: "1 次" }],
+        recent_events: [],
+      },
+      "/api/admin/usage/failures?window=24h": {
+        breakdown: [{ label: "限流", value: "1 次" }],
+        recent_events: [],
+      },
+      "/api/admin/usage/requests?limit=20&offset=0": {
+        items: [createUsageRequestMock()],
+        total: 1,
+        limit: 20,
+        offset: 0,
+      },
+      "/api/admin/usage/requests?limit=20&offset=0&window=24h": {
+        items: [createUsageRequestMock()],
+        total: 1,
+        limit: 20,
+        offset: 0,
+      },
+    });
+
+    renderRoute("/usage");
+
+    expect(await screen.findByText("实时运行视图")).toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByRole("button", { name: "最近 24 小时" })[0]!);
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith("/api/admin/usage/overview?window=24h");
+      expect(fetchMock).toHaveBeenCalledWith("/api/admin/usage/trends?window=24h");
+      expect(fetchMock).toHaveBeenCalledWith("/api/admin/usage/latency-wall?window=24h");
+    });
+
+    expect(fetchMock.mock.calls.map(([input]) => String(input))).not.toContain("/api/admin/usage/failures?window=24h");
+    expect(fetchMock.mock.calls.map(([input]) => String(input))).not.toContain(
+      "/api/admin/usage/requests?limit=20&offset=0&window=24h",
+    );
   });
 
   test("调用观测页在健康墙中展示健康检查来源与供应商", async () => {
@@ -3792,7 +3908,7 @@ describe("控制台路由", () => {
           },
         ],
       },
-      "/api/admin/usage/failures?window=24h": { breakdown: [], recent_events: [] },
+      "/api/admin/usage/failures": { breakdown: [], recent_events: [] },
       "/api/admin/usage/requests?limit=20&offset=0": { items: [], total: 0, limit: 20, offset: 0 },
     });
 
@@ -3825,7 +3941,7 @@ describe("控制台路由", () => {
           },
         ],
       },
-      "/api/admin/usage/failures?window=24h": { breakdown: [], recent_events: [] },
+      "/api/admin/usage/failures": { breakdown: [], recent_events: [] },
       "/api/admin/usage/requests?limit=20&offset=0": { items: [], total: 0, limit: 20, offset: 0 },
     });
 
@@ -3863,7 +3979,7 @@ describe("控制台路由", () => {
 
     expect(await screen.findByText("复杂编码请求")).toBeInTheDocument();
     expect(screen.getByText("强模型档位")).toBeInTheDocument();
-    expect(screen.getByText("命中关键词：debug；包含代码块")).toBeInTheDocument();
+    expect(screen.getByText("命中关键词：调试；包含代码块")).toBeInTheDocument();
     expect(screen.getAllByText("qwen-plus").length).toBeGreaterThan(0);
   });
 
@@ -3963,7 +4079,7 @@ describe("控制台路由", () => {
           }),
         );
       }
-      if (url === "/api/admin/usage/failures?window=7d") {
+      if (url === "/api/admin/usage/failures") {
         return Promise.resolve(
           new Response(JSON.stringify({ breakdown: [], recent_events: [] }), {
             status: 200,
@@ -3971,7 +4087,7 @@ describe("控制台路由", () => {
           }),
         );
       }
-      if (url === "/api/admin/usage/requests?limit=20&offset=0&window=7d") {
+      if (url === "/api/admin/usage/requests?limit=20&offset=0") {
         return Promise.resolve(
           new Response(JSON.stringify({ items: [], total: 0, limit: 20, offset: 0 }), {
             status: 200,
@@ -4048,7 +4164,7 @@ describe("控制台路由", () => {
       expect(screen.getByText("llmreq_page_2")).toBeInTheDocument();
     });
 
-    expect(fetchMock).toHaveBeenCalledWith("/api/admin/usage/requests?limit=20&offset=20&window=7d");
+    expect(fetchMock).toHaveBeenCalledWith("/api/admin/usage/requests?limit=20&offset=20");
   });
 
   test("调用观测页在分页边界正确禁用按钮并支持返回上一页", async () => {
@@ -4119,7 +4235,7 @@ describe("控制台路由", () => {
       expect(screen.getByText("llmreq_page_1")).toBeInTheDocument();
     });
 
-    expect(fetchMock).toHaveBeenCalledWith("/api/admin/usage/requests?limit=20&offset=20&window=7d");
+    expect(fetchMock).toHaveBeenCalledWith("/api/admin/usage/requests?limit=20&offset=20");
     expect(fetchMock).toHaveBeenCalledTimes(8);
   });
 
@@ -4133,7 +4249,7 @@ describe("控制台路由", () => {
           buckets: [],
           lanes: [],
         },
-        "/api/admin/usage/failures?window=24h": {
+        "/api/admin/usage/failures": {
           breakdown: [{ label: "限流", value: "1 次" }],
           recent_events: [],
           recent_event_items: [
@@ -4165,7 +4281,7 @@ describe("控制台路由", () => {
           limit: 20,
           offset: 0,
         },
-        "/api/admin/usage/requests?limit=20&offset=0&resolved_model=mimo-v2.5-pro&window=7d": {
+        "/api/admin/usage/requests?limit=20&offset=0&resolved_model=mimo-v2.5-pro": {
           items: [
             createUsageRequestMock({
               tenant_id: "tenant_demo",
@@ -4181,7 +4297,7 @@ describe("控制台路由", () => {
           limit: 20,
           offset: 0,
         },
-        "/api/admin/usage/requests?limit=20&offset=0&tenant_id=tenant_demo&resolved_model=qwen-flash&status=success&window=7d":
+        "/api/admin/usage/requests?limit=20&offset=0&tenant_id=tenant_demo&resolved_model=qwen-flash&status=success":
           {
             items: [
               createUsageRequestMock({
@@ -4209,7 +4325,7 @@ describe("控制台路由", () => {
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
-        "/api/admin/usage/requests?limit=20&offset=0&resolved_model=mimo-v2.5-pro&window=7d",
+        "/api/admin/usage/requests?limit=20&offset=0&resolved_model=mimo-v2.5-pro",
       );
     });
 
@@ -4219,7 +4335,7 @@ describe("控制台路由", () => {
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
-        "/api/admin/usage/requests?limit=20&offset=0&tenant_id=tenant_demo&resolved_model=qwen-flash&status=success&window=7d",
+        "/api/admin/usage/requests?limit=20&offset=0&tenant_id=tenant_demo&resolved_model=qwen-flash&status=success",
       );
     });
   });
@@ -4233,7 +4349,7 @@ describe("控制台路由", () => {
         buckets: [],
         lanes: [],
       },
-      "/api/admin/usage/failures?window=24h": {
+      "/api/admin/usage/failures": {
         breakdown: [{ label: "限流", value: "1 次" }],
         recent_events: [],
         recent_event_items: [
@@ -4300,5 +4416,83 @@ describe("控制台路由", () => {
     expect(within(dialog).getByText("助手输出：你好，请问有什么可以帮你？")).toBeInTheDocument();
     expect(within(dialog).getByText("上游返回 429，请稍后重试")).toBeInTheDocument();
     expect(within(dialog).getByText("上游返回 429，请求被限流")).toBeInTheDocument();
+  });
+
+  test("调用观测页把内部错误原因翻译成用户可理解文案", async () => {
+    mockFetch({
+      "/api/admin/usage/overview?window=24h": createUsageOverviewMock(),
+      "/api/admin/usage/trends?window=24h": { requests: [], tokens: [], success: [], costs: [] },
+      "/api/admin/usage/latency-wall?window=24h": {
+        window_label: "最近 24 小时",
+        buckets: [],
+        lanes: [],
+      },
+      "/api/admin/usage/failures": {
+        breakdown: [{ label: "模型只返回推理过程，未返回最终答案", value: "1 次" }],
+        recent_events: [],
+        recent_event_items: [
+          {
+            time: "05-08 10:00",
+            tenant_id: "tenant_demo",
+            tenant_name: "研发一部",
+            request_model: "mimo-v2.5-pro",
+            resolved_model: "mimo-v2.5-pro",
+            provider: "MIMO",
+            status_code: 200,
+            category: "响应异常",
+            reason: "reasoning_only",
+          },
+        ],
+      },
+      "/api/admin/usage/requests?limit=20&offset=0": {
+        items: [
+          createUsageRequestMock({
+            request_id: "llmreq_reasoning_only_demo",
+            tenant_id: "tenant_demo",
+            tenant_name: "研发一部",
+            tenant: "tenant_demo",
+            resolved_model: "mimo-v2.5-pro",
+            model: "mimo",
+            status: "失败",
+          }),
+        ],
+        total: 1,
+        limit: 20,
+        offset: 0,
+      },
+      "/api/admin/usage/requests/llmreq_reasoning_only_demo": createUsageRequestDetailMock({
+        request_id: "llmreq_reasoning_only_demo",
+        tenant_name: "研发一部",
+        resolved_model: "mimo-v2.5-pro",
+        status: "失败",
+        error_code: "upstream_incomplete_response",
+        error_message: "no non-empty content token received",
+        failure_events: [
+          {
+            time: "05-08 10:00",
+            tenant_id: "tenant_demo",
+            tenant_name: "研发一部",
+            request_model: "mimo-v2.5-pro",
+            resolved_model: "mimo-v2.5-pro",
+            provider: "MIMO",
+            status_code: 200,
+            category: "响应异常",
+            reason: "reasoning_only",
+          },
+        ],
+      }),
+    });
+
+    renderRoute("/usage");
+
+    expect((await screen.findAllByText("模型只返回推理过程，未返回最终答案")).length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByText("llmreq_reasoning_only_demo"));
+
+    const dialog = await screen.findByRole("dialog", { name: "请求详情" });
+    expect(
+      within(dialog).getByText("模型已返回响应片段，但没有生成可交付的最终答案。"),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByText("模型只返回推理过程，未返回最终答案")).toBeInTheDocument();
   });
 });

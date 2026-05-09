@@ -1198,6 +1198,81 @@ a {
   color: #8bb8ff;
 }
 
+.api-key-examples-card {
+  border-color: rgba(129, 149, 222, 0.22);
+  background:
+    radial-gradient(circle at top left, rgba(80, 174, 255, 0.1), transparent 32%),
+    radial-gradient(circle at 85% 0%, rgba(124, 92, 255, 0.12), transparent 24%),
+    linear-gradient(180deg, rgba(10, 18, 42, 0.94), rgba(7, 11, 24, 0.92));
+}
+
+.api-key-examples-grid {
+  align-items: stretch;
+}
+
+.api-key-example-panel {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid rgba(129, 149, 222, 0.16);
+  border-radius: 16px;
+  background: rgba(7, 14, 30, 0.72);
+}
+
+.api-key-example-panel__header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-primary);
+}
+
+.api-key-example-group {
+  display: grid;
+  gap: 8px;
+}
+
+.api-key-example-group + .api-key-example-group {
+  margin-top: 4px;
+}
+
+.api-key-example-group__label {
+  color: #9fc0ff;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.api-key-example-panel__badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 48px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(95, 136, 255, 0.16);
+  color: #9fc0ff;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.api-key-example-panel__code {
+  margin: 0;
+  min-height: 152px;
+  overflow-x: auto;
+  padding: 16px;
+  border: 1px solid rgba(129, 149, 222, 0.12);
+  border-radius: 14px;
+  background: rgba(4, 10, 24, 0.92);
+  color: #eef5ff;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 13px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .quota-summary-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

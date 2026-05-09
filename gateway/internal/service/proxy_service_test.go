@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -123,6 +124,118 @@ func TestChatProxyCompletePublishesUsageEventWithCostSnapshot(t *testing.T) {
 	}
 	if event.TotalCostMicroyuan != 73 {
 		t.Fatalf("expected total_cost_microyuan 73, got %d", event.TotalCostMicroyuan)
+	}
+}
+
+func TestChatProxyCompleteRedactsSensitiveContentInResponse(t *testing.T) {
+	t.Parallel()
+
+	proxy := service.NewChatProxyService(
+		stubChatClient{
+			response: service.ChatResponse{
+				Model: "qwen-flash",
+				Choices: []service.ChatChoice{
+					{Message: service.ChatMessage{Role: "assistant", Content: "您的手机号是13333333333"}},
+				},
+			},
+		},
+		queue.NewNoopUsagePublisher(),
+	)
+
+	resp, err := proxy.Complete(context.Background(), service.ChatRequest{
+		Model: "qwen-flash",
+		Messages: []service.ChatMessage{
+			{Role: "user", Content: "本人手机号是13333333333，我的手机号多少"},
+		},
+	}, domain.RequestContext{
+		TenantID:           "tenant_demo",
+		PlatformAPIKeyID:   "pak_demo",
+		PlatformAPIKeyName: "demo key",
+		RouteID:            "route:provider_openai_demo:default",
+		ProviderTarget: domain.ProviderTarget{
+			CredentialID: "provider_openai_demo",
+			Provider:     "openai",
+			BaseURL:      "https://api.openai.example/v1",
+			APIKey:       "provider-secret",
+		},
+	})
+	if err != nil {
+		t.Fatalf("proxy.Complete returned unexpected error: %v", err)
+	}
+
+	if got := resp.Choices[0].Message.Content; got != "您的手机号是133XXXX3333" {
+		t.Fatalf("expected redacted response %q, got %q", "您的手机号是133XXXX3333", got)
+	}
+}
+
+func TestChatProxyStreamRedactsSensitiveContentInFinalResponseAndForwardedChunks(t *testing.T) {
+	t.Parallel()
+
+	proxy := service.NewChatProxyService(
+		stubChatClient{
+			streamRun: func(emit func([]byte) error, onFirstToken func()) (service.ChatStreamResult, error) {
+				if onFirstToken != nil {
+					onFirstToken()
+				}
+				if err := emit([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"手机号13333333333\"}}]}\n\n")); err != nil {
+					return service.ChatStreamResult{}, err
+				}
+				if err := emit([]byte("data: [DONE]\n\n")); err != nil {
+					return service.ChatStreamResult{}, err
+				}
+				return service.ChatStreamResult{
+					SawContentToken: true,
+					Response: service.ChatResponse{
+						Model: "qwen-flash",
+						Choices: []service.ChatChoice{
+							{Message: service.ChatMessage{Role: "assistant", Content: "手机号13333333333"}},
+						},
+					},
+				}, nil
+			},
+		},
+		queue.NewNoopUsagePublisher(),
+	)
+
+	stream, err := proxy.Stream(context.Background(), service.ChatRequest{
+		Model:  "qwen-flash",
+		Stream: true,
+		Messages: []service.ChatMessage{
+			{Role: "user", Content: "本人手机号是13333333333"},
+		},
+	}, domain.RequestContext{
+		TenantID:           "tenant_demo",
+		PlatformAPIKeyID:   "pak_demo",
+		PlatformAPIKeyName: "demo key",
+		RouteID:            "route:provider_openai_demo:default",
+		ProviderTarget: domain.ProviderTarget{
+			CredentialID: "provider_openai_demo",
+			Provider:     "openai",
+			BaseURL:      "https://api.openai.example/v1",
+			APIKey:       "provider-secret",
+		},
+	})
+	if err != nil {
+		t.Fatalf("proxy.Stream returned unexpected error: %v", err)
+	}
+
+	var chunks bytes.Buffer
+	result, err := stream.Run(func(chunk []byte) error {
+		_, writeErr := chunks.Write(chunk)
+		return writeErr
+	}, nil)
+	if err != nil {
+		t.Fatalf("stream.Run returned unexpected error: %v", err)
+	}
+
+	if strings.Contains(chunks.String(), "13333333333") {
+		t.Fatalf("expected stream chunks to redact phone number, got %q", chunks.String())
+	}
+	if !strings.Contains(chunks.String(), "133XXXX3333") {
+		t.Fatalf("expected stream chunks to contain redacted phone number, got %q", chunks.String())
+	}
+	if got := result.Response.Choices[0].Message.Content; got != "手机号133XXXX3333" {
+		t.Fatalf("expected redacted final response %q, got %q", "手机号133XXXX3333", got)
 	}
 }
 

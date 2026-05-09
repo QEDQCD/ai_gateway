@@ -1,6 +1,8 @@
 const taskClassLabels: Record<string, string> = {
   coding_complex: "复杂编码请求",
   simple_qa: "简单问答",
+  embedding_simple: "向量检索请求",
+  explicit_model: "显式指定模型",
 };
 
 const modelTierLabels: Record<string, string> = {
@@ -18,6 +20,17 @@ const routingPatternLabels: Record<string, string> = {
 const routingSignalLabels: Record<string, string> = {
   long_prompt: "提示词较长",
   soft_keyword_combo: "命中组合编码信号",
+};
+
+const routingKeywordLabels: Record<string, string> = {
+  debug: "调试",
+  "报错": "报错",
+  "异常": "异常",
+  "写代码": "写代码",
+  "单元测试": "单元测试",
+  "架构设计": "架构设计",
+  "实现": "实现",
+  "重构": "重构",
 };
 
 export function formatTaskClassLabel(value: string) {
@@ -39,6 +52,11 @@ export function formatRoutingReasonLabel(value: string) {
     return "--";
   }
 
+  const explicitModelMatch = value.match(/^explicit_model:(.+)$/);
+  if (explicitModelMatch) {
+    return `直接指定模型：${explicitModelMatch[1]}`;
+  }
+
   const translatedParts = value
     .split(",")
     .map((part) => part.trim())
@@ -48,7 +66,7 @@ export function formatRoutingReasonLabel(value: string) {
       const detail = rawDetail?.trim() ?? "";
       switch (prefix) {
         case "keyword":
-          return detail ? `命中关键词：${detail}` : "命中关键词";
+          return detail ? `命中关键词：${routingKeywordLabels[detail] ?? detail}` : "命中关键词";
         case "pattern":
           return routingPatternLabels[detail] ?? (detail ? `命中特征：${detail}` : "命中特征");
         case "signal":

@@ -1,7 +1,9 @@
 package service
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -11,6 +13,7 @@ import (
 
 	"github.com/example/ai_gateway/gateway/internal/domain"
 	"github.com/example/ai_gateway/gateway/internal/queue"
+	"github.com/example/ai_gateway/gateway/internal/security"
 )
 
 var ErrProxyUnavailable = errors.New("proxy service not configured")
@@ -212,7 +215,7 @@ func (s chatProxyService) Complete(ctx context.Context, req ChatRequest, resolve
 			Err:     err,
 		}
 	}
-	return resp, nil
+	return redactChatResponse(resp), nil
 }
 
 func (s chatProxyService) Stream(ctx context.Context, req ChatRequest, resolved any) (ChatCompletionStream, error) {
@@ -248,7 +251,9 @@ func (s chatProxyService) Stream(ctx context.Context, req ChatRequest, resolved 
 		ContentType: upstreamStream.ContentType,
 		Run: func(emit func([]byte) error, onFirstToken func()) (ChatStreamResult, error) {
 			var firstTokenAt time.Time
-			result, streamErr := upstreamStream.Run(emit, func() {
+			result, streamErr := upstreamStream.Run(func(chunk []byte) error {
+				return emit(redactSSEChunk(chunk))
+			}, func() {
 				if firstTokenAt.IsZero() {
 					firstTokenAt = time.Now().UTC()
 				}
@@ -279,6 +284,7 @@ func (s chatProxyService) Stream(ctx context.Context, req ChatRequest, resolved 
 				})
 			}
 			s.recordWithEvents(ctx, record, events...)
+			result.Response = redactChatResponse(result.Response)
 			return result, streamErr
 		},
 	}, nil
@@ -421,6 +427,74 @@ func resolvedRequestContext(resolved any) (domain.RequestContext, bool) {
 		return domain.RequestContext{}, false
 	}
 	return requestContext, true
+}
+
+func redactChatResponse(resp ChatResponse) ChatResponse {
+	if len(resp.Choices) == 0 {
+		return resp
+	}
+	redacted := resp
+	redacted.Choices = make([]ChatChoice, len(resp.Choices))
+	for index, choice := range resp.Choices {
+		redacted.Choices[index] = choice
+		redacted.Choices[index].Message.Content = security.RedactText(choice.Message.Content)
+	}
+	return redacted
+}
+
+func redactSSEChunk(chunk []byte) []byte {
+	trimmed := bytes.TrimSpace(chunk)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("data: [DONE]")) {
+		return chunk
+	}
+
+	text := string(chunk)
+	if !strings.HasPrefix(strings.TrimSpace(text), "data: ") {
+		return []byte(security.RedactText(text))
+	}
+
+	lines := strings.Split(text, "\n")
+	for index, line := range lines {
+		trimmedLine := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmedLine, "data: ") || trimmedLine == "data: [DONE]" {
+			continue
+		}
+		payload := strings.TrimSpace(strings.TrimPrefix(trimmedLine, "data: "))
+		var decoded any
+		if err := json.Unmarshal([]byte(payload), &decoded); err != nil {
+			lines[index] = strings.Replace(line, payload, security.RedactText(payload), 1)
+			continue
+		}
+		redactAnyJSON(decoded)
+		encoded, err := json.Marshal(decoded)
+		if err != nil {
+			lines[index] = strings.Replace(line, payload, security.RedactText(payload), 1)
+			continue
+		}
+		lines[index] = strings.Replace(line, payload, string(encoded), 1)
+	}
+	return []byte(strings.Join(lines, "\n"))
+}
+
+func redactAnyJSON(value any) {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, nested := range typed {
+			if text, ok := nested.(string); ok {
+				typed[key] = security.RedactText(text)
+				continue
+			}
+			redactAnyJSON(nested)
+		}
+	case []any:
+		for index := range typed {
+			if text, ok := typed[index].(string); ok {
+				typed[index] = security.RedactText(text)
+				continue
+			}
+			redactAnyJSON(typed[index])
+		}
+	}
 }
 
 func validateProviderTarget(requestContext domain.RequestContext) error {

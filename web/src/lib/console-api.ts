@@ -1194,8 +1194,8 @@ export function getUsageLatencyWall(window: "6h" | "24h" | "7d" = "24h") {
   }));
 }
 
-export function getUsageFailures(window: "6h" | "24h" | "7d" = "24h") {
-  return requestJson<JsonRecord>(`/api/admin/usage/failures?window=${window}`).then(toUsageFailureData);
+export function getUsageFailures() {
+  return requestJson<JsonRecord>("/api/admin/usage/failures").then(toUsageFailureData);
 }
 
 function createUsageRequestsSearch(query: UsageRequestsQuery) {
