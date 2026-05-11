@@ -59,6 +59,9 @@ type Config struct {
 	ChatReasoningModel               string
 	SmartRoutingCodingKeywords       []string
 	SmartRoutingLongPromptThreshold  int
+	ContentGuardEnabled              bool
+	ContentGuardModel                string
+	ContentGuardTimeout              time.Duration
 	ModelHealthcheckEnabled          bool
 	ModelHealthcheckInterval         time.Duration
 	ModelHealthcheckTimeout          time.Duration
@@ -126,6 +129,9 @@ func Load() Config {
 		ChatReasoningModel:               defaultString(os.Getenv("GATEWAY_CHAT_REASONING_MODEL"), "mimo-v2.5-pro"),
 		SmartRoutingCodingKeywords:       splitCommaSeparatedEnv(defaultString(os.Getenv("GATEWAY_SMART_ROUTING_CODING_KEYWORDS"), "写代码,实现,重构,debug,报错,异常,单元测试,架构设计")),
 		SmartRoutingLongPromptThreshold:  int(lookupInt64Env("GATEWAY_SMART_ROUTING_LONG_PROMPT_THRESHOLD", 240)),
+		ContentGuardEnabled:              lookupBoolEnv("GATEWAY_CONTENT_GUARD_ENABLED", false),
+		ContentGuardModel:                defaultString(lookupEnv("GATEWAY_CONTENT_GUARD_MODEL"), "qwen-mt-flash"),
+		ContentGuardTimeout:              lookupMillisecondsEnv("GATEWAY_CONTENT_GUARD_TIMEOUT_MS", 3000*time.Millisecond),
 		ModelHealthcheckEnabled:          lookupBoolEnv("GATEWAY_MODEL_HEALTHCHECK_ENABLED", false),
 		ModelHealthcheckInterval:         lookupDurationEnv("GATEWAY_MODEL_HEALTHCHECK_INTERVAL", time.Hour),
 		ModelHealthcheckTimeout:          lookupDurationEnv("GATEWAY_MODEL_HEALTHCHECK_TIMEOUT", 20*time.Second),
@@ -210,6 +216,22 @@ func lookupDurationEnv(name string, fallback time.Duration) time.Duration {
 		panic(fmt.Sprintf("config: %s must be > 0", name))
 	}
 	return parsed
+}
+
+func lookupMillisecondsEnv(name string, fallback time.Duration) time.Duration {
+	value := strings.TrimSpace(lookupEnv(name))
+	if value == "" {
+		return fallback
+	}
+
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		panic(fmt.Sprintf("config: parse %s: %v", name, err))
+	}
+	if parsed <= 0 {
+		panic(fmt.Sprintf("config: %s must be > 0", name))
+	}
+	return time.Duration(parsed) * time.Millisecond
 }
 
 func splitCommaSeparatedEnv(value string) []string {

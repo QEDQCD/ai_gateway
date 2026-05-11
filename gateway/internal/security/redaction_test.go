@@ -30,3 +30,36 @@ func TestRedactText(t *testing.T) {
 		})
 	}
 }
+
+func TestSanitizeTextForUpstream(t *testing.T) {
+	t.Parallel()
+
+	input := "请联系我 13812345678"
+	want := "请联系我 ***"
+
+	if got := security.SanitizeTextForUpstream(input); got != want {
+		t.Fatalf("expected %q, got %q", want, got)
+	}
+}
+
+func TestRedactTextForDisplay(t *testing.T) {
+	t.Parallel()
+
+	input := "请联系我 13812345678"
+	want := "请联系我 138XXXX5678"
+
+	if got := security.RedactTextForDisplay(input); got != want {
+		t.Fatalf("expected %q, got %q", want, got)
+	}
+}
+
+func TestRedactTextCompatibility(t *testing.T) {
+	t.Parallel()
+
+	input := "请联系我 13812345678"
+	want := "请联系我 138XXXX5678"
+
+	if got := security.RedactText(input); got != want {
+		t.Fatalf("expected compatibility result %q, got %q", want, got)
+	}
+}

@@ -4394,6 +4394,80 @@ func TestPostgresConsoleServiceUsageFailuresIncludesUsagePublishFailedEvents(t *
 	}
 }
 
+func TestPostgresConsoleServiceUsageFailuresIncludesSecurityGuardEvents(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	if _, err := conn.Exec(ctx, `
+		insert into llm_request_logs (
+			id, tenant_id, platform_api_key_id, platform_api_key_name, provider_credential_id, route_id,
+			request_path, request_model, upstream_model, usage_source, usage_status, status_code,
+			latency_ms, first_token_latency_ms, prompt_tokens, completion_tokens, total_tokens, cached_tokens,
+			input_price_microyuan_per_million, output_price_microyuan_per_million, cached_price_microyuan_per_million,
+			input_cost_microyuan, output_cost_microyuan, cached_cost_microyuan, total_cost_microyuan,
+			error_code, error_message, request_started_at, request_completed_at, task_class, routing_reason,
+			target_model_tier, resolved_model, prompt_excerpt, response_excerpt
+		) values (
+			'req_guard_block', 'tenant_demo', 'pak_demo', 'demo key', 'provider_openai_demo', 'route:provider_openai_demo:default',
+			'/v1/chat/completions', 'qwen-flash', 'qwen-flash', 'estimated', 'failed', 400,
+			21, 0, 15, 0, 15, 0,
+			0, 0, 0,
+			0, 0, 0, 0,
+			'', '请求被安全策略拦截：包含明显 SQL 注入攻击意图', now() - interval '10 minutes', now() - interval '10 minutes', '', '',
+			'', 'qwen-flash', 'SELECT * FROM users WHERE name = '' OR 1=1 --', '请求被安全策略拦截：包含明显 SQL 注入攻击意图'
+		), (
+			'req_guard_fallback', 'tenant_demo', 'pak_demo', 'demo key', 'provider_openai_demo', 'route:provider_openai_demo:default',
+			'/v1/chat/completions', 'qwen-flash', 'qwen-flash', 'estimated', 'success', 200,
+			98, 0, 20, 10, 30, 0,
+			0, 0, 0,
+			0, 0, 0, 0,
+			'', '', now() - interval '5 minutes', now() - interval '5 minutes', '', '',
+			'', 'qwen-flash', '我的手机号是138XXXX5678', 'ok'
+		);
+
+		insert into llm_request_failures (
+			id, request_log_id, tenant_id, user_id, platform_api_key_id, failure_stage, error_category,
+			status_code, retryable, user_message, internal_message_digest, created_at
+		) values (
+			'failure_guard_block', 'req_guard_block', 'tenant_demo', null, 'pak_demo', 'request', 'failed',
+			400, false, '请求被安全策略拦截', 'digest_guard_block', now() - interval '10 minutes'
+		);
+
+		insert into llm_request_events (
+			id, request_log_id, tenant_id, event_type, usage_source, usage_status, status_code, detail, created_at
+		) values (
+			'evt_guard_block', 'req_guard_block', 'tenant_demo', 'security_guard_blocked', 'estimated', 'failed', 400, '包含明显 SQL 注入攻击意图', now() - interval '10 minutes'
+		), (
+			'evt_guard_fallback', 'req_guard_fallback', 'tenant_demo', 'security_guard_fallback', 'estimated', 'success', 200, 'content moderation unavailable, fallback_regex applied', now() - interval '5 minutes'
+		);
+	`); err != nil {
+		t.Fatalf("seed security guard events failed: %v", err)
+	}
+
+	payload, err := console.UsageFailures(ctx, service.UsageQuery{
+		Window: "7d",
+	})
+	if err != nil {
+		t.Fatalf("UsageFailures failed: %v", err)
+	}
+
+	if len(payload.RecentEvents) < 2 {
+		t.Fatalf("expected at least 2 recent events, got %d", len(payload.RecentEvents))
+	}
+
+	joined := strings.Join(payload.RecentEvents, "\n")
+	if !strings.Contains(joined, "安全拦截") {
+		t.Fatalf("expected recent events to mention 安全拦截, got %q", joined)
+	}
+	if !strings.Contains(joined, "降级") {
+		t.Fatalf("expected recent events to mention 降级, got %q", joined)
+	}
+}
+
 func TestPostgresConsoleServiceUsageFailuresUsesRequestStartedAtWindow(t *testing.T) {
 	t.Parallel()
 
@@ -5323,6 +5397,98 @@ func TestPostgresConsoleServiceUsageRequestDetail(t *testing.T) {
 	}
 	if len(payload.FailureEvents) == 0 {
 		t.Fatal("expected failure_events to be populated")
+	}
+}
+
+func TestPostgresConsoleServiceUsageRequestDetailIncludesSecurityGuardEvents(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	if _, err := conn.Exec(ctx, `
+		insert into llm_request_logs (
+			id, tenant_id, platform_api_key_id, platform_api_key_name, provider_credential_id, route_id,
+			request_path, request_model, upstream_model, usage_source, usage_status, status_code,
+			latency_ms, prompt_tokens, completion_tokens, total_tokens, error_code, error_message,
+			request_started_at, request_completed_at, created_at
+		) values (
+			'llmreq_guard_detail',
+			'tenant_demo',
+			'pak_demo',
+			'demo key',
+			'provider_openai_demo',
+			'route:provider_openai_demo:default',
+			'/v1/chat/completions',
+			'qwen-flash',
+			'qwen-flash',
+			'estimated',
+			'failed',
+			400,
+			26,
+			12,
+			0,
+			12,
+			'',
+			'请求被安全策略拦截：包含明显 SQL 注入攻击意图',
+			now() - interval '3 minutes',
+			now() - interval '3 minutes',
+			now() - interval '3 minutes'
+		);
+
+		insert into llm_request_events (
+			id, request_log_id, tenant_id, event_type, usage_source, usage_status, status_code, detail, created_at
+		) values (
+			'llmevt_guard_detail_block',
+			'llmreq_guard_detail',
+			'tenant_demo',
+			'security_guard_blocked',
+			'estimated',
+			'failed',
+			400,
+			'包含明显 SQL 注入攻击意图',
+			now() - interval '3 minutes'
+		), (
+			'llmevt_guard_detail_fallback',
+			'llmreq_guard_detail',
+			'tenant_demo',
+			'security_guard_fallback',
+			'estimated',
+			'success',
+			200,
+			'content moderation unavailable, fallback_regex applied',
+			now() - interval '2 minutes'
+		);
+	`); err != nil {
+		t.Fatalf("seed usage detail security events failed: %v", err)
+	}
+
+	payload, err := console.UsageRequestDetail(ctx, "llmreq_guard_detail")
+	if err != nil {
+		t.Fatalf("UsageRequestDetail failed: %v", err)
+	}
+
+	if len(payload.FailureEvents) < 2 {
+		t.Fatalf("expected at least 2 failure events, got %d", len(payload.FailureEvents))
+	}
+
+	var sawBlocked bool
+	var sawFallback bool
+	for _, item := range payload.FailureEvents {
+		if item.Category == "安全拦截" && strings.Contains(item.Reason, "已被安全策略拦截") {
+			sawBlocked = true
+		}
+		if item.Category == "安全审核降级" && strings.Contains(item.Reason, "安全审核已降级") {
+			sawFallback = true
+		}
+	}
+	if !sawBlocked {
+		t.Fatalf("expected usage detail to include blocked security event, got %+v", payload.FailureEvents)
+	}
+	if !sawFallback {
+		t.Fatalf("expected usage detail to include fallback security event, got %+v", payload.FailureEvents)
 	}
 }
 

@@ -3774,6 +3774,7 @@ func (s postgresConsoleService) UsageFailures(ctx context.Context, query UsageQu
 			coalesce(pc.display_name, l.provider_credential_id),
 			`+usageEventFailureCategoryExpr("l", "e")+` as failure_category,
 			e.event_type,
+			e.usage_status,
 			e.status_code,
 			e.detail,
 			l.latency_ms,
@@ -3784,7 +3785,10 @@ func (s postgresConsoleService) UsageFailures(ctx context.Context, query UsageQu
 		left join route_catalog r on r.id = l.route_id
 		left join provider_credentials pc on pc.id = l.provider_credential_id
 		where `+eventWhere+`
-		  and (e.usage_status <> 'success' or e.event_type = 'usage_publish_failed')
+		  and (
+			e.usage_status <> 'success'
+			or e.event_type in ('usage_publish_failed', 'security_guard_blocked', 'security_guard_fallback')
+		  )
 		order by e.created_at desc
 		limit 5;
 	`, eventArgs...)
@@ -3804,6 +3808,7 @@ func (s postgresConsoleService) UsageFailures(ctx context.Context, query UsageQu
 		var provider string
 		var failureCategory string
 		var eventType string
+		var eventUsageStatus string
 		var statusCode int
 		var detail string
 		var latencyMS int64
@@ -3817,6 +3822,7 @@ func (s postgresConsoleService) UsageFailures(ctx context.Context, query UsageQu
 			&provider,
 			&failureCategory,
 			&eventType,
+			&eventUsageStatus,
 			&statusCode,
 			&detail,
 			&latencyMS,
@@ -3825,7 +3831,7 @@ func (s postgresConsoleService) UsageFailures(ctx context.Context, query UsageQu
 			return UsageFailureData{}, err
 		}
 
-		translatedCategory := translateUsageFailureCategory(failureCategory)
+		translatedCategory := usageEventCategoryLabel(failureCategory, eventType, eventUsageStatus)
 		reason := describeUsageEvent(detail, eventType, requestModel, provider, latencyMS, statusCode, usageSource)
 		message := fmt.Sprintf(
 			"%s · %s · %s",
@@ -4208,9 +4214,7 @@ func (s postgresConsoleService) UsageRequestDetail(ctx context.Context, requestI
 		}
 		item.Time = createdAt.In(shanghaiLocation()).Format("01-02 15:04")
 		item.Provider = strings.TrimSpace(provider)
-		if strings.TrimSpace(eventUsageStatus) != "success" || strings.TrimSpace(eventType) == "usage_publish_failed" {
-			item.Category = translateUsageFailureCategory(failureCategory)
-		}
+		item.Category = usageEventCategoryLabel(failureCategory, eventType, eventUsageStatus)
 		item.Reason = describeUsageEvent(detail, eventType, item.RequestModel, provider, latency, item.StatusCode, usageSourceValue)
 		payload.FailureEvents = append(payload.FailureEvents, item)
 	}
@@ -5046,6 +5050,10 @@ func translateUsageEventType(eventType string) string {
 		return "计量已估算"
 	case "usage_publish_failed":
 		return "计量事件投递失败"
+	case "security_guard_blocked":
+		return "安全拦截"
+	case "security_guard_fallback":
+		return "安全审核降级"
 	default:
 		return eventType
 	}
@@ -5085,12 +5093,39 @@ func describeUsageEvent(detail string, eventType string, requestModel string, pr
 			reason = "usage 事件写入失败"
 		}
 		return fmt.Sprintf("用户调用 %s 已完成，但计量事件投递失败：%s。", model, reason)
+	case "security_guard_blocked":
+		reason := strings.TrimSpace(neutralizeConsoleNarrative(detail))
+		if reason == "" {
+			reason = "检测到疑似攻击内容"
+		}
+		return fmt.Sprintf("用户调用 %s 已被安全策略拦截，原因：%s。", model, reason)
+	case "security_guard_fallback":
+		reason := strings.TrimSpace(neutralizeConsoleNarrative(detail))
+		if reason == "" || reason == "content moderation unavailable, fallback_regex applied" {
+			reason = "内容审核服务暂不可用，已自动切换为本地脱敏规则继续执行"
+		}
+		return fmt.Sprintf("用户调用 %s 已继续执行，但安全审核已降级：%s。", model, reason)
 	default:
 		if strings.TrimSpace(detail) != "" {
 			return neutralizeConsoleNarrative(detail)
 		}
 		return translateUsageEventType(eventType)
 	}
+}
+
+func usageEventCategoryLabel(failureCategory string, eventType string, usageStatus string) string {
+	switch strings.TrimSpace(eventType) {
+	case "security_guard_blocked":
+		return "安全拦截"
+	case "security_guard_fallback":
+		return "安全审核降级"
+	case "usage_publish_failed":
+		return "网关内部错误"
+	}
+	if strings.TrimSpace(usageStatus) != "success" {
+		return translateUsageFailureCategory(failureCategory)
+	}
+	return translateUsageEventType(eventType)
 }
 
 func translateUsageFailureCategory(category string) string {

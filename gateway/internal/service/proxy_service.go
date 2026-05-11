@@ -99,6 +99,7 @@ type chatProxyService struct {
 	client    UpstreamChatClient
 	publisher queue.UsagePublisher
 	recorder  UsageRecorder
+	guard     chatContentGuard
 }
 
 type embeddingProxyService struct {
@@ -116,17 +117,31 @@ type usageRecordEvent struct {
 	detail    string
 }
 
+type chatContentGuard interface {
+	Guard(ctx context.Context, messages []ChatMessage) ContentGuardResult
+}
+
+type noopChatContentGuard struct{}
+
 func NewChatProxyService(client UpstreamChatClient, publisher queue.UsagePublisher, recorders ...UsageRecorder) ChatProxyService {
+	return NewChatProxyServiceWithGuard(client, publisher, nil, recorders...)
+}
+
+func NewChatProxyServiceWithGuard(client UpstreamChatClient, publisher queue.UsagePublisher, guard chatContentGuard, recorders ...UsageRecorder) ChatProxyService {
 	if client == nil {
 		return unavailableChatProxyService{}
 	}
 	if publisher == nil {
 		publisher = queue.NewNoopUsagePublisher()
 	}
+	if guard == nil {
+		guard = noopChatContentGuard{}
+	}
 	return chatProxyService{
 		client:    client,
 		publisher: publisher,
 		recorder:  firstUsageRecorder(recorders...),
+		guard:     guard,
 	}
 }
 
@@ -197,9 +212,40 @@ func (s chatProxyService) Complete(ctx context.Context, req ChatRequest, resolve
 			Err:     fmt.Errorf("%w: request context is missing", ErrUnauthorized),
 		}
 	}
+	guardResult := s.guard.Guard(ctx, req.Messages)
+	if guardResult.Decision == ModerationDecisionBlock {
+		reason := strings.TrimSpace(guardResult.Reason)
+		if reason == "" {
+			reason = "检测到疑似攻击内容"
+		}
+		now := time.Now().UTC()
+		record := NewChatUsageRecord(
+			requestIDFromContext(ctx),
+			requestContext,
+			req,
+			ChatResponse{},
+			http.StatusBadRequest,
+			now,
+			now,
+			errors.New("请求被安全策略拦截：" + reason),
+		)
+		s.recordWithEvents(ctx, record, usageRecordEvent{
+			eventType: "security_guard_blocked",
+			detail:    reason,
+		})
+		return ChatResponse{}, StatusError{
+			Code:    http.StatusBadRequest,
+			Message: "请求被安全策略拦截：" + reason,
+			Err:     errors.New("content guard blocked request"),
+		}
+	}
+	guardEvents := usageEventsForGuardResult(guardResult)
+	if len(guardResult.Messages) > 0 {
+		req.Messages = guardResult.Messages
+	}
 	if err := validateProviderTarget(requestContext); err != nil {
 		now := time.Now().UTC()
-		s.record(ctx, NewChatUsageRecord(requestIDFromContext(ctx), requestContext, req, ChatResponse{}, http.StatusBadGateway, now, now, err))
+		s.recordWithEvents(ctx, NewChatUsageRecord(requestIDFromContext(ctx), requestContext, req, ChatResponse{}, http.StatusBadGateway, now, now, err), guardEvents...)
 		return ChatResponse{}, err
 	}
 
@@ -207,7 +253,7 @@ func (s chatProxyService) Complete(ctx context.Context, req ChatRequest, resolve
 	start := time.Now().UTC()
 	resp, statusCode, err := s.client.Complete(ctx, requestContext.ProviderTarget, req)
 	record := NewChatUsageRecord(requestID, requestContext, req, resp, statusCode, start, time.Now().UTC(), err)
-	s.record(ctx, record)
+	s.recordWithEvents(ctx, record, guardEvents...)
 	if err != nil {
 		return ChatResponse{}, StatusError{
 			Code:    defaultStatusCode(statusCode),
@@ -227,9 +273,40 @@ func (s chatProxyService) Stream(ctx context.Context, req ChatRequest, resolved 
 			Err:     fmt.Errorf("%w: request context is missing", ErrUnauthorized),
 		}
 	}
+	guardResult := s.guard.Guard(ctx, req.Messages)
+	if guardResult.Decision == ModerationDecisionBlock {
+		reason := strings.TrimSpace(guardResult.Reason)
+		if reason == "" {
+			reason = "检测到疑似攻击内容"
+		}
+		now := time.Now().UTC()
+		record := NewChatUsageRecord(
+			requestIDFromContext(ctx),
+			requestContext,
+			req,
+			ChatResponse{},
+			http.StatusBadRequest,
+			now,
+			now,
+			errors.New("请求被安全策略拦截：" + reason),
+		)
+		s.recordWithEvents(ctx, record, usageRecordEvent{
+			eventType: "security_guard_blocked",
+			detail:    reason,
+		})
+		return ChatCompletionStream{}, StatusError{
+			Code:    http.StatusBadRequest,
+			Message: "请求被安全策略拦截：" + reason,
+			Err:     errors.New("content guard blocked request"),
+		}
+	}
+	guardEvents := usageEventsForGuardResult(guardResult)
+	if len(guardResult.Messages) > 0 {
+		req.Messages = guardResult.Messages
+	}
 	if err := validateProviderTarget(requestContext); err != nil {
 		now := time.Now().UTC()
-		s.record(ctx, NewChatUsageRecord(requestIDFromContext(ctx), requestContext, req, ChatResponse{}, http.StatusBadGateway, now, now, err))
+		s.recordWithEvents(ctx, NewChatUsageRecord(requestIDFromContext(ctx), requestContext, req, ChatResponse{}, http.StatusBadGateway, now, now, err), guardEvents...)
 		return ChatCompletionStream{}, err
 	}
 
@@ -283,6 +360,7 @@ func (s chatProxyService) Stream(ctx context.Context, req ChatRequest, resolved 
 					detail:    "client disconnected after first content token",
 				})
 			}
+			events = append(events, guardEvents...)
 			s.recordWithEvents(ctx, record, events...)
 			result.Response = redactChatResponse(result.Response)
 			return result, streamErr
@@ -427,6 +505,23 @@ func resolvedRequestContext(resolved any) (domain.RequestContext, bool) {
 		return domain.RequestContext{}, false
 	}
 	return requestContext, true
+}
+
+func (noopChatContentGuard) Guard(_ context.Context, messages []ChatMessage) ContentGuardResult {
+	return ContentGuardResult{
+		Decision: ModerationDecisionAllow,
+		Messages: cloneMessages(messages),
+	}
+}
+
+func usageEventsForGuardResult(result ContentGuardResult) []usageRecordEvent {
+	if strings.TrimSpace(result.Reason) != "fallback_regex" {
+		return nil
+	}
+	return []usageRecordEvent{{
+		eventType: "security_guard_fallback",
+		detail:    "content moderation unavailable, fallback_regex applied",
+	}}
 }
 
 func redactChatResponse(resp ChatResponse) ChatResponse {

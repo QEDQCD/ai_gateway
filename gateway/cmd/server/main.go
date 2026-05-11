@@ -9,6 +9,7 @@ import (
 
 	gatewaydb "github.com/example/ai_gateway/gateway/db"
 	"github.com/example/ai_gateway/gateway/internal/config"
+	"github.com/example/ai_gateway/gateway/internal/domain"
 	apphttp "github.com/example/ai_gateway/gateway/internal/http"
 	"github.com/example/ai_gateway/gateway/internal/provider"
 	"github.com/example/ai_gateway/gateway/internal/queue"
@@ -41,6 +42,11 @@ func newServerApp(cfg config.Config) *fiber.App {
 		"gateway.usage",
 		"gateway.usage.request",
 	)
+	guard := newConfiguredContentGuard(cfg, chatClient)
+	chatProxy := service.NewChatProxyService(chatClient, usagePublisher)
+	if guard != nil {
+		chatProxy = service.NewChatProxyServiceWithGuard(chatClient, usagePublisher, guard)
+	}
 
 	return apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
 		ServiceAuthUsername:   cfg.ServiceAuthUsername,
@@ -48,7 +54,7 @@ func newServerApp(cfg config.Config) *fiber.App {
 		ConsoleSessionEnabled: strings.TrimSpace(cfg.ConsoleSessionSecret) != "",
 		AuthService:           newBootstrapAuthService(cfg),
 		SmartRouter:           smartRouter,
-		ChatProxy:             service.NewChatProxyService(chatClient, usagePublisher),
+		ChatProxy:             chatProxy,
 		EmbeddingProxy:        service.NewEmbeddingProxyService(embeddingClient, usagePublisher),
 		RAGProxy:              service.NewRAGProxyService(cfg.RAGServiceBaseURL, cfg.RAGServiceUsername, cfg.RAGServicePassword, nil),
 		ConsoleService:        service.NewUnavailableConsoleService(),
@@ -105,10 +111,15 @@ func newDatabaseBackedServerApp(cfg config.Config) *fiber.App {
 	smartRouter := newConfiguredSmartRouter(cfg)
 	pricingResolver := mustNewUsagePricingResolver(cfg)
 	upstreamClient := provider.NewOpenAIClient(http.DefaultClient)
+	guard := newConfiguredContentGuard(cfg, upstreamClient)
 	chatProxy := service.NewChatProxyService(upstreamClient, usagePublisher, usageRecorder)
+	if guard != nil {
+		chatProxy = service.NewChatProxyServiceWithGuard(upstreamClient, usagePublisher, guard, usageRecorder)
+	}
+	consoleChatProxy := service.NewChatProxyService(upstreamClient, usagePublisher, usageRecorder)
 	embeddingProxy := service.NewEmbeddingProxyService(upstreamClient, usagePublisher, usageRecorder)
 	ragProxy := service.NewRAGProxyService(cfg.RAGServiceBaseURL, cfg.RAGServiceUsername, cfg.RAGServicePassword, http.DefaultClient)
-	consoleService := service.NewPostgresConsoleServiceWithPricing(pool, authService, chatProxy, ragProxy, cfg.SeedPlatformAPIKey, pricingResolver, platformAPIKeySecretCodec)
+	consoleService := service.NewPostgresConsoleServiceWithPricing(pool, authService, consoleChatProxy, ragProxy, cfg.SeedPlatformAPIKey, pricingResolver, platformAPIKeySecretCodec)
 	memberConsoleService := service.NewPostgresMemberConsoleService(pool, service.ConsolePrincipal{}, platformAPIKeySecretCodec)
 	if cfg.ModelHealthcheckEnabled {
 		go service.NewModelHealthcheckRunner(
@@ -141,6 +152,54 @@ func newConfiguredSmartRouter(cfg config.Config) service.SmartRouter {
 		EnableCodeFenceRule:  true,
 		EnableStackTraceRule: true,
 	})
+}
+
+func newConfiguredContentGuard(cfg config.Config, client service.UpstreamChatClient) *service.ContentGuardService {
+	if !cfg.ContentGuardEnabled || client == nil {
+		return nil
+	}
+
+	target, ok := contentGuardTargetFromConfig(cfg)
+	if !ok {
+		return nil
+	}
+
+	guard := service.NewContentGuardService(service.NewTransportModerationClient(
+		client,
+		target,
+		cfg.ContentGuardModel,
+		cfg.ContentGuardTimeout,
+	))
+	return &guard
+}
+
+func contentGuardTargetFromConfig(cfg config.Config) (domain.ProviderTarget, bool) {
+	if strings.TrimSpace(cfg.SeedProviderAPIKey) != "" && strings.TrimSpace(cfg.SeedProviderBaseURL) != "" {
+		return domain.ProviderTarget{
+			CredentialID: "content_guard_seed_provider",
+			Provider:     firstNonEmptyString(cfg.SeedProvider, cfg.BootstrapProvider),
+			BaseURL:      strings.TrimSpace(cfg.SeedProviderBaseURL),
+			APIKey:       strings.TrimSpace(cfg.SeedProviderAPIKey),
+		}, true
+	}
+	if strings.TrimSpace(cfg.BootstrapProviderAPIKey) != "" && strings.TrimSpace(cfg.BootstrapProviderBaseURL) != "" {
+		return domain.ProviderTarget{
+			CredentialID: "content_guard_bootstrap_provider",
+			Provider:     strings.TrimSpace(cfg.BootstrapProvider),
+			BaseURL:      strings.TrimSpace(cfg.BootstrapProviderBaseURL),
+			APIKey:       strings.TrimSpace(cfg.BootstrapProviderAPIKey),
+		}, true
+	}
+	return domain.ProviderTarget{}, false
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func newBootstrapAuthService(cfg config.Config) service.AuthService {

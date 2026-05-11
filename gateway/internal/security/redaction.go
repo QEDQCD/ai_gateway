@@ -9,6 +9,10 @@ var (
 )
 
 func RedactText(input string) string {
+	return RedactTextForDisplay(input)
+}
+
+func RedactTextForDisplay(input string) string {
 	if input == "" {
 		return ""
 	}
@@ -21,6 +25,19 @@ func RedactText(input string) string {
 			return value
 		}
 		return matches[1] + "***" + matches[3] + "@" + matches[4]
+	})
+	return output
+}
+
+func SanitizeTextForUpstream(input string) string {
+	if input == "" {
+		return ""
+	}
+
+	output := phonePattern.ReplaceAllString(input, `***`)
+	output = idCardPattern.ReplaceAllString(output, `***`)
+	output = emailPattern.ReplaceAllStringFunc(output, func(string) string {
+		return "***"
 	})
 	return output
 }

@@ -239,6 +239,190 @@ func TestChatProxyStreamRedactsSensitiveContentInFinalResponseAndForwardedChunks
 	}
 }
 
+func TestChatProxyCompleteBlocksAttackBeforeUpstream(t *testing.T) {
+	t.Parallel()
+
+	upstreamCalled := false
+	proxy := service.NewChatProxyServiceWithGuard(
+		stubChatClient{
+			completeFn: func(context.Context, domain.ProviderTarget, service.ChatRequest) (service.ChatResponse, int, error) {
+				upstreamCalled = true
+				return service.ChatResponse{
+					Model: "qwen-flash",
+					Choices: []service.ChatChoice{
+						{Message: service.ChatMessage{Role: "assistant", Content: "should not happen"}},
+					},
+				}, 200, nil
+			},
+		},
+		queue.NewNoopUsagePublisher(),
+		service.NewContentGuardService(&stubContentModeratorProxy{
+			result: service.ModerationResult{
+				Decision: service.ModerationDecisionBlock,
+				Reason:   "检测到疑似 SQL 注入内容",
+			},
+		}),
+	)
+
+	_, err := proxy.Complete(context.Background(), service.ChatRequest{
+		Model: "qwen-flash",
+		Messages: []service.ChatMessage{
+			{Role: "user", Content: "' OR 1=1 --"},
+		},
+	}, validRequestContext())
+	if err == nil {
+		t.Fatal("expected block error")
+	}
+	if upstreamCalled {
+		t.Fatal("expected upstream not to be called")
+	}
+	code, message, ok := service.StatusCodeFromError(err)
+	if !ok {
+		t.Fatalf("expected status error, got %v", err)
+	}
+	if code != 400 {
+		t.Fatalf("expected block status 400, got %d", code)
+	}
+	if !strings.Contains(message, "请求被安全策略拦截") {
+		t.Fatalf("expected chinese block message, got %q", message)
+	}
+}
+
+func TestChatProxyCompleteSendsSanitizedMessagesUpstream(t *testing.T) {
+	t.Parallel()
+
+	var forwarded service.ChatRequest
+	proxy := service.NewChatProxyServiceWithGuard(
+		stubChatClient{
+			completeFn: func(_ context.Context, _ domain.ProviderTarget, req service.ChatRequest) (service.ChatResponse, int, error) {
+				forwarded = req
+				return service.ChatResponse{
+					Model: "qwen-flash",
+					Choices: []service.ChatChoice{
+						{Message: service.ChatMessage{Role: "assistant", Content: "ok"}},
+					},
+				}, 200, nil
+			},
+		},
+		queue.NewNoopUsagePublisher(),
+		service.NewContentGuardService(&stubContentModeratorProxy{
+			result: service.ModerationResult{
+				Decision: service.ModerationDecisionAllow,
+				Reason:   "safe",
+				Redactions: []service.ModerationRedaction{
+					{Text: "13812345678", Replacement: "***"},
+				},
+			},
+		}),
+	)
+
+	_, err := proxy.Complete(context.Background(), service.ChatRequest{
+		Model: "qwen-flash",
+		Messages: []service.ChatMessage{
+			{Role: "user", Content: "我手机号是13812345678"},
+		},
+	}, validRequestContext())
+	if err != nil {
+		t.Fatalf("proxy.Complete returned unexpected error: %v", err)
+	}
+	if len(forwarded.Messages) != 1 {
+		t.Fatalf("expected 1 forwarded message, got %d", len(forwarded.Messages))
+	}
+	if got := forwarded.Messages[0].Content; got != "我手机号是***" {
+		t.Fatalf("expected upstream sanitized message %q, got %q", "我手机号是***", got)
+	}
+}
+
+func TestChatProxyCompleteRecordsSecurityGuardBlockedRequest(t *testing.T) {
+	t.Parallel()
+
+	recorder := &stubUsageRecorder{}
+	proxy := service.NewChatProxyServiceWithGuard(
+		stubChatClient{},
+		queue.NewNoopUsagePublisher(),
+		service.NewContentGuardService(&stubContentModeratorProxy{
+			result: service.ModerationResult{
+				Decision: service.ModerationDecisionBlock,
+				Reason:   "包含明显 SQL 注入攻击意图",
+			},
+		}),
+		recorder,
+	)
+
+	_, err := proxy.Complete(context.Background(), service.ChatRequest{
+		Model: "qwen-flash",
+		Messages: []service.ChatMessage{
+			{Role: "user", Content: "SELECT * FROM users WHERE name = '' OR 1=1 --"},
+		},
+	}, validRequestContext())
+	if err == nil {
+		t.Fatal("expected block error")
+	}
+
+	if recorder.recordCalls != 1 {
+		t.Fatalf("expected blocked request to record once, got %d", recorder.recordCalls)
+	}
+	if recorder.lastRecord.StatusCode != 400 {
+		t.Fatalf("expected blocked request status 400, got %d", recorder.lastRecord.StatusCode)
+	}
+	if !strings.Contains(recorder.lastRecord.ErrorMessage, "包含明显 SQL 注入攻击意图") {
+		t.Fatalf("expected blocked reason to be recorded, got %q", recorder.lastRecord.ErrorMessage)
+	}
+	if recorder.eventCalls != 1 {
+		t.Fatalf("expected blocked request to emit 1 extra event, got %d", recorder.eventCalls)
+	}
+	if recorder.lastEventType != "security_guard_blocked" {
+		t.Fatalf("expected blocked event type security_guard_blocked, got %q", recorder.lastEventType)
+	}
+	if !strings.Contains(recorder.lastEventDetail, "包含明显 SQL 注入攻击意图") {
+		t.Fatalf("expected blocked event detail to include reason, got %q", recorder.lastEventDetail)
+	}
+}
+
+func TestChatProxyCompleteRecordsSecurityGuardFallbackEvent(t *testing.T) {
+	t.Parallel()
+
+	recorder := &stubUsageRecorder{}
+	proxy := service.NewChatProxyServiceWithGuard(
+		stubChatClient{
+			response: service.ChatResponse{
+				Model: "qwen-flash",
+				Choices: []service.ChatChoice{
+					{Message: service.ChatMessage{Role: "assistant", Content: "ok"}},
+				},
+			},
+		},
+		queue.NewNoopUsagePublisher(),
+		service.NewContentGuardService(&stubContentModeratorProxy{
+			err: errors.New("moderation upstream timeout"),
+		}),
+		recorder,
+	)
+
+	_, err := proxy.Complete(context.Background(), service.ChatRequest{
+		Model: "qwen-flash",
+		Messages: []service.ChatMessage{
+			{Role: "user", Content: "我的手机号是13812345678"},
+		},
+	}, validRequestContext())
+	if err != nil {
+		t.Fatalf("proxy.Complete returned unexpected error: %v", err)
+	}
+
+	if recorder.recordCalls != 1 {
+		t.Fatalf("expected fallback request to record once, got %d", recorder.recordCalls)
+	}
+	if recorder.eventCalls != 1 {
+		t.Fatalf("expected fallback request to emit 1 extra event, got %d", recorder.eventCalls)
+	}
+	if recorder.lastEventType != "security_guard_fallback" {
+		t.Fatalf("expected fallback event type security_guard_fallback, got %q", recorder.lastEventType)
+	}
+	if !strings.Contains(recorder.lastEventDetail, "fallback_regex") {
+		t.Fatalf("expected fallback event detail to mention fallback_regex, got %q", recorder.lastEventDetail)
+	}
+}
+
 func TestEmbeddingProxyCreatePublishesUsageEventWithCostSnapshot(t *testing.T) {
 	t.Parallel()
 
@@ -612,9 +796,10 @@ func TestChatProxyStreamDoesNotTreatPreTokenAbortAsSuccess(t *testing.T) {
 }
 
 type stubChatClient struct {
-	response  service.ChatResponse
-	err       error
-	streamRun func(emit func([]byte) error, onFirstToken func()) (service.ChatStreamResult, error)
+	response   service.ChatResponse
+	err        error
+	completeFn func(context.Context, domain.ProviderTarget, service.ChatRequest) (service.ChatResponse, int, error)
+	streamRun  func(emit func([]byte) error, onFirstToken func()) (service.ChatStreamResult, error)
 }
 
 type stubEmbeddingClient struct {
@@ -622,7 +807,10 @@ type stubEmbeddingClient struct {
 	err      error
 }
 
-func (c stubChatClient) Complete(context.Context, domain.ProviderTarget, service.ChatRequest) (service.ChatResponse, int, error) {
+func (c stubChatClient) Complete(ctx context.Context, target domain.ProviderTarget, req service.ChatRequest) (service.ChatResponse, int, error) {
+	if c.completeFn != nil {
+		return c.completeFn(ctx, target, req)
+	}
 	if c.err != nil {
 		return service.ChatResponse{}, 502, c.err
 	}
@@ -673,6 +861,33 @@ type stubUsageRecorder struct {
 	lastEventRecord     service.UsageRecord
 	lastEventType       string
 	lastEventDetail     string
+}
+
+type stubContentModeratorProxy struct {
+	result service.ModerationResult
+	err    error
+}
+
+func (s *stubContentModeratorProxy) Moderate(context.Context, string) (service.ModerationResult, error) {
+	if s.err != nil {
+		return service.ModerationResult{}, s.err
+	}
+	return s.result, nil
+}
+
+func validRequestContext() domain.RequestContext {
+	return domain.RequestContext{
+		TenantID:           "tenant_demo",
+		PlatformAPIKeyID:   "pak_demo",
+		PlatformAPIKeyName: "demo key",
+		RouteID:            "route:provider_openai_demo:default",
+		ProviderTarget: domain.ProviderTarget{
+			CredentialID: "provider_openai_demo",
+			Provider:     "openai",
+			BaseURL:      "https://api.openai.example/v1",
+			APIKey:       "provider-secret",
+		},
+	}
 }
 
 func (r *stubUsageRecorder) PrepareUsageEventRecord(record service.UsageRecord) (service.UsageRecord, error) {

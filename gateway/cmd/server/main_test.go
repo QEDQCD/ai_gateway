@@ -74,6 +74,23 @@ func TestValidateDatabaseModeSecurityRejectsDefaultWeakSecrets(t *testing.T) {
 	})
 }
 
+func TestLoadConfigIncludesContentGuardSettings(t *testing.T) {
+	t.Setenv("GATEWAY_CONTENT_GUARD_ENABLED", "true")
+	t.Setenv("GATEWAY_CONTENT_GUARD_MODEL", "qwen-mt-flash")
+	t.Setenv("GATEWAY_CONTENT_GUARD_TIMEOUT_MS", "3000")
+
+	cfg := config.Load()
+	if !cfg.ContentGuardEnabled {
+		t.Fatal("expected content guard enabled")
+	}
+	if cfg.ContentGuardModel != "qwen-mt-flash" {
+		t.Fatalf("expected content guard model %q, got %q", "qwen-mt-flash", cfg.ContentGuardModel)
+	}
+	if cfg.ContentGuardTimeout != 3*time.Second {
+		t.Fatalf("expected content guard timeout %v, got %v", 3*time.Second, cfg.ContentGuardTimeout)
+	}
+}
+
 func TestNewServerAppAuthenticatesBootstrapRequest(t *testing.T) {
 	t.Parallel()
 
@@ -106,6 +123,84 @@ func TestNewServerAppAuthenticatesBootstrapRequest(t *testing.T) {
 	}
 	if string(body) != `{"status":"ok"}` {
 		t.Fatalf("expected body %q, got %q", `{"status":"ok"}`, string(body))
+	}
+}
+
+func TestNewServerAppContentGuardModeratesAndSanitizesBeforeBusinessUpstream(t *testing.T) {
+	t.Parallel()
+
+	var moderationCalls int
+	var businessCalls int
+	var businessMessage string
+	providerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+
+		var payload struct {
+			Model    string `json:"model"`
+			Messages []struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("json.NewDecoder failed: %v", err)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if payload.Model == "qwen-mt-flash" {
+			moderationCalls++
+			_, _ = io.WriteString(w, `{"model":"qwen-mt-flash","choices":[{"message":{"role":"assistant","content":"{\"decision\":\"allow\",\"reason\":\"safe\",\"attack_type\":\"\",\"redactions\":[{\"text\":\"13812345678\",\"replacement\":\"***\"}]}"}}]}`)
+			return
+		}
+
+		businessCalls++
+		if len(payload.Messages) > 0 {
+			businessMessage = payload.Messages[0].Content
+		}
+		_, _ = io.WriteString(w, `{"model":"qwen-plus","choices":[{"message":{"role":"assistant","content":"ok"}}]}`)
+	}))
+	t.Cleanup(providerServer.Close)
+
+	app := newServerApp(config.Config{
+		BootstrapPlatformAPIKey:      "platform-live-key",
+		BootstrapPlatformAPIKeyID:    "pak_bootstrap",
+		BootstrapPlatformAPIKeyName:  "bootstrap key",
+		BootstrapTenantID:            "tenant_bootstrap",
+		BootstrapTenantName:          "Bootstrap Tenant",
+		BootstrapProviderID:          "pc_bootstrap",
+		BootstrapProvider:            "openai",
+		BootstrapProviderDisplayName: "OpenAI Primary",
+		BootstrapProviderBaseURL:     providerServer.URL + "/v1",
+		BootstrapProviderAPIKey:      "provider-secret-key",
+		BootstrapSupportedModels:     []string{"qwen-plus"},
+		ContentGuardEnabled:          true,
+		ContentGuardModel:            "qwen-mt-flash",
+		ContentGuardTimeout:          3 * time.Second,
+	})
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/chat/completions",
+		bytes.NewBufferString(`{"model":"qwen-plus","messages":[{"role":"user","content":"我的手机号是13812345678"}]}`),
+	)
+	req.Header.Set("Authorization", "Bearer platform-live-key")
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if moderationCalls != 1 {
+		t.Fatalf("expected moderation calls %d, got %d", 1, moderationCalls)
+	}
+	if businessCalls != 1 {
+		t.Fatalf("expected business calls %d, got %d", 1, businessCalls)
+	}
+	if businessMessage != "我的手机号是***" {
+		t.Fatalf("expected sanitized business message %q, got %q", "我的手机号是***", businessMessage)
 	}
 }
 
