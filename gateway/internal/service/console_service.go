@@ -247,6 +247,10 @@ type ProviderModelMutationResult struct {
 	Item ProviderModelItem `json:"item"`
 }
 
+type ProviderModelDeleteResult struct {
+	DeletedID string `json:"deleted_id"`
+}
+
 type ModelHealthItem struct {
 	ID                   string `json:"id"`
 	RequestedModel       string `json:"requested_model"`
@@ -541,6 +545,12 @@ type UsageRequestItem struct {
 	InputPrice          string `json:"input_price"`
 	OutputPrice         string `json:"output_price"`
 	CachedPrice         string `json:"cached_price"`
+	CacheHit            bool   `json:"cache_hit"`
+	CacheType           string `json:"cache_type"`
+	CacheFAQKey         string `json:"cache_faq_key"`
+	ClassifierModel     string `json:"classifier_model"`
+	ClassifierStatus    string `json:"classifier_status"`
+	ClassifierLatencyMS int64  `json:"classifier_latency_ms"`
 }
 
 type UsageRequestDetail struct {
@@ -568,6 +578,13 @@ type UsageRequestDetail struct {
 	InputPrice          string                  `json:"input_price"`
 	OutputPrice         string                  `json:"output_price"`
 	CachedPrice         string                  `json:"cached_price"`
+	CacheHit            bool                    `json:"cache_hit"`
+	CacheType           string                  `json:"cache_type"`
+	CacheKey            string                  `json:"cache_key"`
+	CacheFAQKey         string                  `json:"cache_faq_key"`
+	ClassifierModel     string                  `json:"classifier_model"`
+	ClassifierStatus    string                  `json:"classifier_status"`
+	ClassifierLatencyMS int64                   `json:"classifier_latency_ms"`
 	PromptExcerpt       string                  `json:"prompt_excerpt"`
 	ResponseExcerpt     string                  `json:"response_excerpt"`
 	ErrorCode           string                  `json:"error_code"`
@@ -605,6 +622,7 @@ type ConsoleService interface {
 	ProviderModels(ctx context.Context) (ProviderModelsPageData, error)
 	CreateProvider(ctx context.Context, req CreateProviderRequest) (ProviderMutationResult, error)
 	CreateProviderModel(ctx context.Context, req CreateProviderModelRequest) (ProviderModelMutationResult, error)
+	DeleteProviderModel(ctx context.Context, id string) (ProviderModelDeleteResult, error)
 	RunProviderModelHealthcheck(ctx context.Context, id string) (ProviderModelMutationResult, error)
 	ModelHealth(ctx context.Context, window string) (ModelHealthPageData, error)
 	Routes(ctx context.Context) (RoutesPageData, error)
@@ -730,6 +748,10 @@ func (unavailableConsoleService) CreateProvider(context.Context, CreateProviderR
 
 func (unavailableConsoleService) CreateProviderModel(context.Context, CreateProviderModelRequest) (ProviderModelMutationResult, error) {
 	return ProviderModelMutationResult{}, ErrConsoleServiceUnavailable
+}
+
+func (unavailableConsoleService) DeleteProviderModel(context.Context, string) (ProviderModelDeleteResult, error) {
+	return ProviderModelDeleteResult{}, ErrConsoleServiceUnavailable
 }
 
 func (unavailableConsoleService) RunProviderModelHealthcheck(context.Context, string) (ProviderModelMutationResult, error) {

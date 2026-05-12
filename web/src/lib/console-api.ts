@@ -212,6 +212,10 @@ export type ProviderModelMutationResult = {
   item: ProviderModelItem;
 };
 
+export type ProviderModelDeleteResult = {
+  deleted_id: string;
+};
+
 export type TenantBillingSummary = {
   tenant_id: string;
   month: string;
@@ -1095,6 +1099,12 @@ export function createProviderModel(payload: CreateProviderModelPayload) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
+  });
+}
+
+export function deleteProviderModel(id: string) {
+  return requestJson<ProviderModelDeleteResult>(`/api/admin/provider-models/${encodeURIComponent(id)}`, {
+    method: "DELETE",
   });
 }
 

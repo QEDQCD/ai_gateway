@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { ProviderModelCreateForm } from "../components/provider-model-create-form";
 import { DataTable, ErrorSection, LoadingSection, StatCard } from "../components/console";
-import { getProviderModels, type ProviderModelsPageData } from "../lib/console-api";
+import { deleteProviderModel, getProviderModels, type ProviderModelsPageData } from "../lib/console-api";
 import { neutralizeLineLabel } from "../lib/platform-routing";
 import { useRemoteData } from "../lib/use-remote-data";
 
@@ -26,13 +26,17 @@ const emptyData: ProviderModelsPageData = {
 export function AdminProviderModelsPage() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [createModalOpen, setCreateModalOpen] = useState(false);
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<ProviderModelsPageData["models"][number] | null>(null);
+  const [actionError, setActionError] = useState("");
+  const [deletingModelID, setDeletingModelID] = useState("");
   const modalRef = useRef<HTMLElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const { data, loading, error } = useRemoteData(() => getProviderModels(), [refreshKey]);
   const pageData = data ?? emptyData;
 
   useEffect(() => {
-    if (!createModalOpen) {
+    if (!createModalOpen && !deleteModalOpen) {
       return;
     }
 
@@ -87,11 +91,41 @@ export function AdminProviderModelsPage() {
     return () => {
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [createModalOpen]);
+  }, [createModalOpen, deleteModalOpen]);
 
   function handleModelCreated() {
     setCreateModalOpen(false);
+    setActionError("");
     setRefreshKey((value) => value + 1);
+  }
+
+  function openDeleteModal(item: ProviderModelsPageData["models"][number]) {
+    if (deletingModelID) {
+      return;
+    }
+    setDeleteTarget(item);
+    setDeleteModalOpen(true);
+    setActionError("");
+  }
+
+  async function handleDeleteModel() {
+    if (!deleteTarget?.id || deletingModelID) {
+      return;
+    }
+
+    const id = deleteTarget.id;
+    setDeletingModelID(id);
+    setActionError("");
+    try {
+      await deleteProviderModel(id);
+      setDeleteModalOpen(false);
+      setDeleteTarget(null);
+      setRefreshKey((value) => value + 1);
+    } catch (deleteError) {
+      setActionError(deleteError instanceof Error ? deleteError.message : "删除模型失败");
+    } finally {
+      setDeletingModelID("");
+    }
   }
 
   if (loading) {
@@ -148,8 +182,9 @@ export function AdminProviderModelsPage() {
             <p>聊天模型到 provider 凭证的映射关系。</p>
           </div>
         </div>
+        {actionError ? <p>{actionError}</p> : null}
         <DataTable
-          columns={["请求模型", "Provider", "凭证 ID", "线路", "模式", "健康状态", "延迟"]}
+          columns={["请求模型", "Provider", "凭证 ID", "线路", "模式", "健康状态", "延迟", "操作"]}
           rows={pageData.models.map((item) => [
             item.requested_model,
             item.provider,
@@ -158,6 +193,16 @@ export function AdminProviderModelsPage() {
             item.request_mode,
             item.health_status,
             item.latency_ms > 0 ? `${item.latency_ms} ms` : "-",
+            <button
+              key={`delete-${item.id ?? item.requested_model}`}
+              type="button"
+              className="button-shell button-shell--danger"
+              aria-label={`删除 ${item.requested_model}`}
+              disabled={!item.id || deletingModelID === item.id}
+              onClick={() => openDeleteModal(item)}
+            >
+              删除
+            </button>,
           ])}
         />
       </section>
@@ -191,6 +236,74 @@ export function AdminProviderModelsPage() {
               providers={pageData.providers}
               onModelCreated={handleModelCreated}
             />
+          </section>
+        </div>
+      ) : null}
+
+      {deleteModalOpen && deleteTarget ? (
+        <div className="modal-backdrop" role="presentation">
+          <section
+            ref={modalRef}
+            className="modal-card"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="provider-model-delete-modal-title"
+          >
+            <div className="modal-card__header">
+              <div>
+                <span className="modal-card__eyebrow">后台模型</span>
+                <h3 id="provider-model-delete-modal-title">删除模型</h3>
+                <p>这只会删除模型挂载配置，不会删除 Provider，也不会清理历史调用观测数据。</p>
+              </div>
+              <button
+                ref={closeButtonRef}
+                type="button"
+                className="button-shell"
+                disabled={Boolean(deletingModelID)}
+                onClick={() => {
+                  setDeleteModalOpen(false);
+                  setDeleteTarget(null);
+                }}
+              >
+                取消
+              </button>
+            </div>
+            <div className="detail-list">
+              <div className="detail-list__row">
+                <dt>请求模型</dt>
+                <dd>{deleteTarget.requested_model}</dd>
+              </div>
+              <div className="detail-list__row">
+                <dt>Provider</dt>
+                <dd>{deleteTarget.provider}</dd>
+              </div>
+              <div className="detail-list__row">
+                <dt>线路</dt>
+                <dd>{neutralizeLineLabel(deleteTarget.route_label)}</dd>
+              </div>
+            </div>
+            {actionError ? <p className="form-error">{actionError}</p> : null}
+            <div className="page-actions">
+              <button
+                type="button"
+                className="button-shell button-shell--danger"
+                disabled={Boolean(deletingModelID)}
+                onClick={() => void handleDeleteModel()}
+              >
+                {deletingModelID === deleteTarget.id ? "删除中..." : "确认删除"}
+              </button>
+              <button
+                type="button"
+                className="button-shell"
+                disabled={Boolean(deletingModelID)}
+                onClick={() => {
+                  setDeleteModalOpen(false);
+                  setDeleteTarget(null);
+                }}
+              >
+                取消
+              </button>
+            </div>
           </section>
         </div>
       ) : null}

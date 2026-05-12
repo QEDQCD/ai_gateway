@@ -62,6 +62,11 @@ type Config struct {
 	ContentGuardEnabled              bool
 	ContentGuardModel                string
 	ContentGuardTimeout              time.Duration
+	FAQSemanticCacheEnabled          bool
+	FAQSemanticCacheModel            string
+	FAQSemanticCacheTimeout          time.Duration
+	FAQSemanticCacheConfidence       float64
+	FAQSemanticCacheRedisTTL         time.Duration
 	ModelHealthcheckEnabled          bool
 	ModelHealthcheckInterval         time.Duration
 	ModelHealthcheckTimeout          time.Duration
@@ -132,6 +137,11 @@ func Load() Config {
 		ContentGuardEnabled:              lookupBoolEnv("GATEWAY_CONTENT_GUARD_ENABLED", false),
 		ContentGuardModel:                defaultString(lookupEnv("GATEWAY_CONTENT_GUARD_MODEL"), "qwen-mt-flash"),
 		ContentGuardTimeout:              lookupMillisecondsEnv("GATEWAY_CONTENT_GUARD_TIMEOUT_MS", 3000*time.Millisecond),
+		FAQSemanticCacheEnabled:          lookupBoolEnv("GATEWAY_FAQ_SEMANTIC_CACHE_ENABLED", false),
+		FAQSemanticCacheModel:            defaultString(lookupEnv("GATEWAY_FAQ_SEMANTIC_CACHE_MODEL"), "qwen-mt-flash"),
+		FAQSemanticCacheTimeout:          lookupMillisecondsEnv("GATEWAY_FAQ_SEMANTIC_CACHE_TIMEOUT_MS", 1500*time.Millisecond),
+		FAQSemanticCacheConfidence:       lookupFloat64Env("GATEWAY_FAQ_SEMANTIC_CACHE_CONFIDENCE_THRESHOLD", 0.90),
+		FAQSemanticCacheRedisTTL:         lookupDurationEnv("GATEWAY_FAQ_SEMANTIC_CACHE_REDIS_TTL", 24*time.Hour),
 		ModelHealthcheckEnabled:          lookupBoolEnv("GATEWAY_MODEL_HEALTHCHECK_ENABLED", false),
 		ModelHealthcheckInterval:         lookupDurationEnv("GATEWAY_MODEL_HEALTHCHECK_INTERVAL", time.Hour),
 		ModelHealthcheckTimeout:          lookupDurationEnv("GATEWAY_MODEL_HEALTHCHECK_TIMEOUT", 20*time.Second),
@@ -232,6 +242,22 @@ func lookupMillisecondsEnv(name string, fallback time.Duration) time.Duration {
 		panic(fmt.Sprintf("config: %s must be > 0", name))
 	}
 	return time.Duration(parsed) * time.Millisecond
+}
+
+func lookupFloat64Env(name string, fallback float64) float64 {
+	value := strings.TrimSpace(lookupEnv(name))
+	if value == "" {
+		return fallback
+	}
+
+	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		panic(fmt.Sprintf("config: parse %s: %v", name, err))
+	}
+	if parsed < 0 {
+		panic(fmt.Sprintf("config: %s must be >= 0", name))
+	}
+	return parsed
 }
 
 func splitCommaSeparatedEnv(value string) []string {

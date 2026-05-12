@@ -1671,6 +1671,7 @@ func (s postgresConsoleService) ProviderModels(ctx context.Context) (ProviderMod
 
 	modelRows, err := s.db.Query(ctx, `
 		select
+			rc.id,
 			rc.requested_model,
 			pc.provider,
 			rc.provider_credential_id,
@@ -1697,6 +1698,7 @@ func (s postgresConsoleService) ProviderModels(ctx context.Context) (ProviderMod
 		var rawDisplayName string
 		var rawResolvedProvider string
 		if err := modelRows.Scan(
+			&item.ID,
 			&item.RequestedModel,
 			&rawProvider,
 			&item.ProviderCredentialID,
@@ -1730,6 +1732,37 @@ func (s postgresConsoleService) ProviderModels(ctx context.Context) (ProviderMod
 		Providers: providers,
 		Models:    models,
 	}, nil
+}
+
+func (s postgresConsoleService) DeleteProviderModel(ctx context.Context, id string) (ProviderModelDeleteResult, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return ProviderModelDeleteResult{}, StatusError{Code: http.StatusBadRequest, Message: "provider model id is required"}
+	}
+
+	var endpoint string
+	if err := s.db.QueryRow(ctx, `
+		select endpoint
+		from route_catalog
+		where id = $1;
+	`, id).Scan(&endpoint); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ProviderModelDeleteResult{}, StatusError{Code: http.StatusNotFound, Message: "provider model not found", Err: err}
+		}
+		return ProviderModelDeleteResult{}, err
+	}
+	if strings.TrimSpace(endpoint) != modelHealthcheckChatEndpoint {
+		return ProviderModelDeleteResult{}, StatusError{Code: http.StatusBadRequest, Message: "only chat provider models can be deleted"}
+	}
+
+	tag, err := s.db.Exec(ctx, `delete from route_catalog where id = $1;`, id)
+	if err != nil {
+		return ProviderModelDeleteResult{}, err
+	}
+	if tag.RowsAffected() == 0 {
+		return ProviderModelDeleteResult{}, StatusError{Code: http.StatusNotFound, Message: "provider model not found"}
+	}
+	return ProviderModelDeleteResult{DeletedID: id}, nil
 }
 
 func (s postgresConsoleService) CreateProvider(ctx context.Context, req CreateProviderRequest) (ProviderMutationResult, error) {
@@ -3945,7 +3978,13 @@ func (s postgresConsoleService) UsageRequests(ctx context.Context, query UsageQu
 			l.total_cost_microyuan,
 			l.input_price_microyuan_per_million,
 			l.output_price_microyuan_per_million,
-			l.cached_price_microyuan_per_million
+			l.cached_price_microyuan_per_million,
+			coalesce(l.cache_hit, false),
+			coalesce(l.cache_type, ''),
+			coalesce(l.cache_faq_key, ''),
+			coalesce(l.classifier_model, ''),
+			coalesce(l.classifier_status, ''),
+			coalesce(l.classifier_latency_ms, 0)
 		from llm_request_logs l
 		left join tenants t on t.id = l.tenant_id
 		left join route_catalog r on r.id = l.route_id
@@ -4003,6 +4042,12 @@ func (s postgresConsoleService) UsageRequests(ctx context.Context, query UsageQu
 			&inputPriceMicroyuanPerMillion,
 			&outputPriceMicroyuanPerMillion,
 			&cachedPriceMicroyuanPerMillion,
+			&item.CacheHit,
+			&item.CacheType,
+			&item.CacheFAQKey,
+			&item.ClassifierModel,
+			&item.ClassifierStatus,
+			&item.ClassifierLatencyMS,
 		); err != nil {
 			return UsageRequestsPageData{}, err
 		}
@@ -4092,6 +4137,13 @@ func (s postgresConsoleService) UsageRequestDetail(ctx context.Context, requestI
 			l.input_price_microyuan_per_million,
 			l.output_price_microyuan_per_million,
 			l.cached_price_microyuan_per_million,
+			coalesce(l.cache_hit, false),
+			coalesce(l.cache_type, ''),
+			coalesce(l.cache_key, ''),
+			coalesce(l.cache_faq_key, ''),
+			coalesce(l.classifier_model, ''),
+			coalesce(l.classifier_status, ''),
+			coalesce(l.classifier_latency_ms, 0),
 			coalesce(l.prompt_excerpt, ''),
 			coalesce(l.response_excerpt, ''),
 			coalesce(l.error_code, ''),
@@ -4121,12 +4173,19 @@ func (s postgresConsoleService) UsageRequestDetail(ctx context.Context, requestI
 		&outputCostMicroyuan,
 		&cachedCostMicroyuan,
 		&totalCostMicroyuan,
-		&inputPriceMicroyuanPerMillion,
-		&outputPriceMicroyuanPerMillion,
-		&cachedPriceMicroyuanPerMillion,
-		&payload.PromptExcerpt,
-		&payload.ResponseExcerpt,
-		&payload.ErrorCode,
+			&inputPriceMicroyuanPerMillion,
+			&outputPriceMicroyuanPerMillion,
+			&cachedPriceMicroyuanPerMillion,
+			&payload.CacheHit,
+			&payload.CacheType,
+			&payload.CacheKey,
+			&payload.CacheFAQKey,
+			&payload.ClassifierModel,
+			&payload.ClassifierStatus,
+			&payload.ClassifierLatencyMS,
+			&payload.PromptExcerpt,
+			&payload.ResponseExcerpt,
+			&payload.ErrorCode,
 		&payload.ErrorMessage,
 	)
 	if err != nil {

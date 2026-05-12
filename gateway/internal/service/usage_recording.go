@@ -55,6 +55,13 @@ type UsageRecord struct {
 	ErrorMessage         string
 	PromptExcerpt        string
 	ResponseExcerpt      string
+	CacheHit             bool
+	CacheType            string
+	CacheKey             string
+	CacheFAQKey          string
+	ClassifierModel      string
+	ClassifierStatus     string
+	ClassifierLatencyMS  int64
 	RequestStartedAt     time.Time
 	RequestCompletedAt   time.Time
 }
@@ -117,12 +124,20 @@ insert into llm_request_logs (
 	target_model_tier,
 	resolved_model,
 	prompt_excerpt,
-	response_excerpt
+	response_excerpt,
+	cache_hit,
+	cache_type,
+	cache_key,
+	cache_faq_key,
+	classifier_model,
+	classifier_status,
+	classifier_latency_ms
 ) values (
 	$1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
 	$11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
 	$21, $22, $23, $24, $25, $26, $27, $28, $29, $30,
-	$31, $32, $33, $34, $35
+	$31, $32, $33, $34, $35, $36, $37, $38, $39, $40,
+	$41, $42
 )`
 
 const insertUsagePublishFailureEventSQL = `
@@ -283,6 +298,13 @@ func insertUsageRecord(ctx context.Context, db store.DBTX, record UsageRecord) e
 		record.ResolvedModel,
 		record.PromptExcerpt,
 		record.ResponseExcerpt,
+		record.CacheHit,
+		record.CacheType,
+		record.CacheKey,
+		record.CacheFAQKey,
+		record.ClassifierModel,
+		record.ClassifierStatus,
+		record.ClassifierLatencyMS,
 	)
 	return err
 }
@@ -614,6 +636,14 @@ func (r *UsageRecord) ensureDefaults() {
 	if r.CachedTokens < 0 {
 		r.CachedTokens = 0
 	}
+	if r.ClassifierLatencyMS < 0 {
+		r.ClassifierLatencyMS = 0
+	}
+	r.CacheType = strings.TrimSpace(r.CacheType)
+	r.CacheKey = strings.TrimSpace(r.CacheKey)
+	r.CacheFAQKey = strings.TrimSpace(r.CacheFAQKey)
+	r.ClassifierModel = strings.TrimSpace(r.ClassifierModel)
+	r.ClassifierStatus = strings.TrimSpace(r.ClassifierStatus)
 	r.PromptExcerpt = redactAndTruncateUsageExcerpt(r.PromptExcerpt)
 	r.ResponseExcerpt = redactAndTruncateUsageExcerpt(r.ResponseExcerpt)
 }

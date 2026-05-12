@@ -127,6 +127,106 @@ func TestChatProxyCompletePublishesUsageEventWithCostSnapshot(t *testing.T) {
 	}
 }
 
+func TestChatProxyCompleteReturnsFAQCachedResponseWithoutCallingUpstream(t *testing.T) {
+	t.Parallel()
+
+	upstreamCalled := false
+	recorder := &stubUsageRecorder{}
+	proxy := service.NewChatProxyServiceWithGuardAndFAQCache(
+		stubChatClient{
+			completeFn: func(context.Context, domain.ProviderTarget, service.ChatRequest) (service.ChatResponse, int, error) {
+				upstreamCalled = true
+				return service.ChatResponse{}, 200, nil
+			},
+		},
+		queue.NewNoopUsagePublisher(),
+		nil,
+		stubFAQSemanticCacheOrchestrator{
+			outcome: service.FAQSemanticCacheOutcome{
+				Hit: true,
+				Response: service.ChatResponse{
+					Model: "qwen-flash",
+					Choices: []service.ChatChoice{{
+						Message: service.ChatMessage{Role: "assistant", Content: "我是企业 AI Gateway 提供的智能助手。"},
+					}},
+				},
+				Metadata: service.FAQSemanticCacheMetadata{
+					CacheHit:         true,
+					CacheType:        "faq_semantic",
+					CacheKey:         "faq_cache:pak_demo:faq.identity.who_are_you:v1",
+					CacheFAQKey:      "faq.identity.who_are_you",
+					ClassifierModel:  "qwen-mt-flash",
+					ClassifierStatus: "hit",
+				},
+			},
+		},
+		recorder,
+	)
+
+	resp, err := proxy.Complete(context.Background(), service.ChatRequest{
+		Model: "qwen-flash",
+		Messages: []service.ChatMessage{
+			{Role: "user", Content: "你是谁"},
+		},
+	}, validRequestContext())
+	if err != nil {
+		t.Fatalf("proxy.Complete returned unexpected error: %v", err)
+	}
+	if upstreamCalled {
+		t.Fatal("expected upstream not to be called on faq cached response")
+	}
+	if got := resp.Choices[0].Message.Content; got != "我是企业 AI Gateway 提供的智能助手。" {
+		t.Fatalf("unexpected faq response %q", got)
+	}
+	if recorder.lastRecord.CacheHit != true || recorder.lastRecord.CacheFAQKey != "faq.identity.who_are_you" {
+		t.Fatalf("expected cache metadata to be recorded, got %+v", recorder.lastRecord)
+	}
+}
+
+func TestChatProxyCompleteFallsBackToUpstreamWhenFAQCacheMisses(t *testing.T) {
+	t.Parallel()
+
+	recorder := &stubUsageRecorder{}
+	proxy := service.NewChatProxyServiceWithGuardAndFAQCache(
+		stubChatClient{
+			response: service.ChatResponse{
+				Model: "qwen-flash",
+				Choices: []service.ChatChoice{{
+					Message: service.ChatMessage{Role: "assistant", Content: "upstream"},
+				}},
+			},
+		},
+		queue.NewNoopUsagePublisher(),
+		nil,
+		stubFAQSemanticCacheOrchestrator{
+			outcome: service.FAQSemanticCacheOutcome{
+				Hit: false,
+				Metadata: service.FAQSemanticCacheMetadata{
+					ClassifierModel:  "qwen-mt-flash",
+					ClassifierStatus: "miss",
+				},
+			},
+		},
+		recorder,
+	)
+
+	resp, err := proxy.Complete(context.Background(), service.ChatRequest{
+		Model: "qwen-flash",
+		Messages: []service.ChatMessage{
+			{Role: "user", Content: "请写一个 golang 并发示例"},
+		},
+	}, validRequestContext())
+	if err != nil {
+		t.Fatalf("proxy.Complete returned unexpected error: %v", err)
+	}
+	if got := resp.Choices[0].Message.Content; got != "upstream" {
+		t.Fatalf("expected upstream response, got %q", got)
+	}
+	if recorder.lastRecord.ClassifierStatus != "miss" {
+		t.Fatalf("expected classifier miss metadata, got %+v", recorder.lastRecord)
+	}
+}
+
 func TestChatProxyCompleteRedactsSensitiveContentInResponse(t *testing.T) {
 	t.Parallel()
 
@@ -868,11 +968,20 @@ type stubContentModeratorProxy struct {
 	err    error
 }
 
+type stubFAQSemanticCacheOrchestrator struct {
+	outcome service.FAQSemanticCacheOutcome
+	err     error
+}
+
 func (s *stubContentModeratorProxy) Moderate(context.Context, string) (service.ModerationResult, error) {
 	if s.err != nil {
 		return service.ModerationResult{}, s.err
 	}
 	return s.result, nil
+}
+
+func (s stubFAQSemanticCacheOrchestrator) TryServe(context.Context, domain.RequestContext, service.ChatRequest) (service.FAQSemanticCacheOutcome, error) {
+	return s.outcome, s.err
 }
 
 func validRequestContext() domain.RequestContext {

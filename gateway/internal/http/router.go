@@ -114,6 +114,7 @@ func NewRouterWithDependencies(deps RouterDependencies) *fiber.App {
 	admin.Get("/provider-models", handlers.ConsoleProviderModels(deps.ConsoleService))
 	admin.Post("/providers", handlers.ConsoleCreateProvider(deps.ConsoleService))
 	admin.Post("/provider-models", handlers.ConsoleCreateProviderModel(deps.ConsoleService))
+	admin.Delete("/provider-models/:id", handlers.ConsoleDeleteProviderModel(deps.ConsoleService))
 	admin.Get("/model-health", handlers.ConsoleModelHealth(deps.ConsoleService))
 	admin.Post("/provider-models/:id/health-check", handlers.ConsoleRunProviderModelHealthcheck(deps.ConsoleService))
 	admin.Get("/billing/tenant", handlers.ConsoleTenantBilling(deps.ConsoleService))

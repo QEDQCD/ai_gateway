@@ -847,6 +847,204 @@ func TestPostgresConsoleServiceCreateProviderModelGeneratesURLSafeOpaqueID(t *te
 	}
 }
 
+func TestPostgresConsoleServiceDeleteProviderModelRemovesChatRouteFromProviderModels(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	t.Setenv("TEST_QWEN_PROVIDER_SECRET", "provider-secret")
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	codec, err := secret.NewCodec("0123456789abcdef0123456789abcdef")
+	if err != nil {
+		t.Fatalf("secret.NewCodec failed: %v", err)
+	}
+
+	console = service.NewPostgresConsoleService(
+		conn,
+		nil,
+		service.NewChatProxyService(&stubConsoleUpstreamChatClient{}, nil),
+		nil,
+		"",
+		codec,
+	)
+
+	providerResult, err := console.CreateProvider(ctx, service.CreateProviderRequest{
+		Provider:       "dashscope",
+		DisplayName:    "Qwen Delete",
+		BaseURL:        "https://dashscope.aliyuncs.com/compatible-mode/v1",
+		CredentialMode: "secret_ref",
+		SecretRef:      "TEST_QWEN_PROVIDER_SECRET",
+	})
+	if err != nil {
+		t.Fatalf("CreateProvider failed: %v", err)
+	}
+
+	modelResult, err := console.CreateProviderModel(ctx, service.CreateProviderModelRequest{
+		RequestedModel:       "qwen-delete-me",
+		ProviderCredentialID: providerResult.Item.ID,
+		RequestMode:          "聊天",
+		HealthcheckEnabled:   false,
+	})
+	if err != nil {
+		t.Fatalf("CreateProviderModel failed: %v", err)
+	}
+
+	if _, err := conn.Exec(ctx, `
+		insert into llm_request_logs (
+			id, tenant_id, platform_api_key_id, platform_api_key_name, provider_credential_id, route_id,
+			request_path, request_model, upstream_model, usage_source, usage_status, status_code,
+			latency_ms, prompt_tokens, completion_tokens, total_tokens, error_code, error_message,
+			request_started_at, request_completed_at
+		) values (
+			'llmreq_delete_provider_model', 'tenant_demo', 'pak_demo', 'demo key', $1, $2,
+			'/v1/chat/completions', 'qwen-delete-me', 'qwen-delete-me', 'upstream', 'success', 200,
+			10, 10, 5, 15, '', '', now() - interval '1 hour', now() - interval '1 hour'
+		);
+	`, providerResult.Item.ID, modelResult.Item.ID); err != nil {
+		t.Fatalf("seed llm_request_logs failed: %v", err)
+	}
+
+	if _, err := conn.Exec(ctx, `
+		insert into llm_usage_agg_hourly (
+			bucket_start, tenant_id, platform_api_key_id, provider_credential_id, route_id,
+			request_path, usage_source, usage_status, request_count, prompt_tokens, completion_tokens, total_tokens
+		) values (
+			date_trunc('hour', now() - interval '1 hour'),
+			'tenant_demo', 'pak_demo', $1, $2,
+			'/v1/chat/completions', 'upstream', 'success', 1, 10, 5, 15
+		);
+	`, providerResult.Item.ID, modelResult.Item.ID); err != nil {
+		t.Fatalf("seed llm_usage_agg_hourly failed: %v", err)
+	}
+
+	if _, err := conn.Exec(ctx, `
+		insert into model_healthcheck_history (
+			id, route_id, requested_model, provider_credential_id, route_label, health_status,
+			last_health_error, request_mode, latency_ms, first_token_latency_ms, checked_at
+		) values (
+			'mhh_delete_provider_model', $2, 'qwen-delete-me', $1, 'Qwen Delete', 'healthy',
+			'', '聊天', 10, 3, now() - interval '1 hour'
+		);
+	`, providerResult.Item.ID, modelResult.Item.ID); err != nil {
+		t.Fatalf("seed delete provider model history failed: %v", err)
+	}
+
+	deleteResult, err := console.DeleteProviderModel(ctx, modelResult.Item.ID)
+	if err != nil {
+		t.Fatalf("DeleteProviderModel failed: %v", err)
+	}
+	if deleteResult.DeletedID != modelResult.Item.ID {
+		t.Fatalf("expected deleted_id %q, got %q", modelResult.Item.ID, deleteResult.DeletedID)
+	}
+
+	payload, err := console.ProviderModels(ctx)
+	if err != nil {
+		t.Fatalf("ProviderModels failed: %v", err)
+	}
+	for _, item := range payload.Models {
+		if item.ID == modelResult.Item.ID || item.RequestedModel == "qwen-delete-me" {
+			t.Fatalf("expected deleted model to disappear from provider models, got %+v", item)
+		}
+	}
+
+	var routeCount int
+	if err := conn.QueryRow(ctx, `select count(*) from route_catalog where id = $1;`, modelResult.Item.ID).Scan(&routeCount); err != nil {
+		t.Fatalf("query route_catalog failed: %v", err)
+	}
+	if routeCount != 0 {
+		t.Fatalf("expected route_catalog row deleted, got count %d", routeCount)
+	}
+
+	var logCount int
+	if err := conn.QueryRow(ctx, `select count(*) from llm_request_logs where route_id = $1;`, modelResult.Item.ID).Scan(&logCount); err != nil {
+		t.Fatalf("query llm_request_logs failed: %v", err)
+	}
+	if logCount != 1 {
+		t.Fatalf("expected llm_request_logs to remain, got count %d", logCount)
+	}
+
+	var aggCount int
+	if err := conn.QueryRow(ctx, `select count(*) from llm_usage_agg_hourly where route_id = $1;`, modelResult.Item.ID).Scan(&aggCount); err != nil {
+		t.Fatalf("query llm_usage_agg_hourly failed: %v", err)
+	}
+	if aggCount != 1 {
+		t.Fatalf("expected llm_usage_agg_hourly to remain, got count %d", aggCount)
+	}
+
+	var historyCount int
+	if err := conn.QueryRow(ctx, `select count(*) from model_healthcheck_history where route_id = $1;`, modelResult.Item.ID).Scan(&historyCount); err != nil {
+		t.Fatalf("query model_healthcheck_history failed: %v", err)
+	}
+	if historyCount != 1 {
+		t.Fatalf("expected model_healthcheck_history to remain, got count %d", historyCount)
+	}
+}
+
+func TestPostgresConsoleServiceDeleteProviderModelReturnsNotFound(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, _ := newUsageConsoleService(t, ctx)
+
+	_, err := console.DeleteProviderModel(ctx, "route:missing:model")
+	if err == nil {
+		t.Fatal("expected not found error")
+	}
+
+	statusErr, ok := err.(service.StatusError)
+	if !ok {
+		t.Fatalf("expected StatusError, got %T", err)
+	}
+	if statusErr.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", statusErr.Code)
+	}
+}
+
+func TestPostgresConsoleServiceDeleteProviderModelRejectsNonChatEndpoint(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	console, conn := newUsageConsoleService(t, ctx)
+
+	if _, err := conn.Exec(ctx, `
+		delete from route_catalog where id = 'route:provider_openai_demo:embedding-delete';
+		insert into route_catalog (
+			id, requested_model, resolved_provider, provider_credential_id, endpoint,
+			latency_ms, health_status, request_mode, updated_at
+		) values (
+			'route:provider_openai_demo:embedding-delete',
+			'text-embedding-delete',
+			'OpenAI Primary',
+			'provider_openai_demo',
+			'/v1/embeddings',
+			0,
+			'healthy',
+			'向量',
+			now()
+		);
+	`); err != nil {
+		t.Fatalf("seed non-chat route failed: %v", err)
+	}
+
+	_, err := console.DeleteProviderModel(ctx, "route:provider_openai_demo:embedding-delete")
+	if err == nil {
+		t.Fatal("expected bad request error")
+	}
+
+	statusErr, ok := err.(service.StatusError)
+	if !ok {
+		t.Fatalf("expected StatusError, got %T", err)
+	}
+	if statusErr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", statusErr.Code)
+	}
+}
+
 func TestPostgresConsoleServiceModelHealthWallAggregatesWindowData(t *testing.T) {
 	t.Parallel()
 

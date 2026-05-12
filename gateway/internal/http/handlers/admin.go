@@ -309,6 +309,20 @@ func ConsoleCreateProviderModel(console service.ConsoleService) fiber.Handler {
 	}
 }
 
+func ConsoleDeleteProviderModel(console service.ConsoleService) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		id, err := url.PathUnescape(c.Params("id"))
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid provider model id")
+		}
+		payload, err := console.DeleteProviderModel(c.UserContext(), id)
+		if err != nil {
+			return consoleError(err)
+		}
+		return c.JSON(payload)
+	}
+}
+
 func ConsoleModelHealth(console service.ConsoleService) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		window := strings.TrimSpace(c.Query("window"))

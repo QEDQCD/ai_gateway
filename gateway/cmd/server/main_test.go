@@ -91,6 +91,31 @@ func TestLoadConfigIncludesContentGuardSettings(t *testing.T) {
 	}
 }
 
+func TestLoadConfigIncludesFAQSemanticCacheSettings(t *testing.T) {
+	t.Setenv("GATEWAY_FAQ_SEMANTIC_CACHE_ENABLED", "true")
+	t.Setenv("GATEWAY_FAQ_SEMANTIC_CACHE_MODEL", "qwen-mt-flash")
+	t.Setenv("GATEWAY_FAQ_SEMANTIC_CACHE_TIMEOUT_MS", "1500")
+	t.Setenv("GATEWAY_FAQ_SEMANTIC_CACHE_CONFIDENCE_THRESHOLD", "0.95")
+	t.Setenv("GATEWAY_FAQ_SEMANTIC_CACHE_REDIS_TTL", "12h")
+
+	cfg := config.Load()
+	if !cfg.FAQSemanticCacheEnabled {
+		t.Fatal("expected faq semantic cache enabled")
+	}
+	if cfg.FAQSemanticCacheModel != "qwen-mt-flash" {
+		t.Fatalf("expected faq semantic cache model %q, got %q", "qwen-mt-flash", cfg.FAQSemanticCacheModel)
+	}
+	if cfg.FAQSemanticCacheTimeout != 1500*time.Millisecond {
+		t.Fatalf("expected faq semantic cache timeout %v, got %v", 1500*time.Millisecond, cfg.FAQSemanticCacheTimeout)
+	}
+	if cfg.FAQSemanticCacheConfidence != 0.95 {
+		t.Fatalf("expected faq semantic cache confidence %v, got %v", 0.95, cfg.FAQSemanticCacheConfidence)
+	}
+	if cfg.FAQSemanticCacheRedisTTL != 12*time.Hour {
+		t.Fatalf("expected faq semantic cache redis ttl %v, got %v", 12*time.Hour, cfg.FAQSemanticCacheRedisTTL)
+	}
+}
+
 func TestNewServerAppAuthenticatesBootstrapRequest(t *testing.T) {
 	t.Parallel()
 
@@ -201,6 +226,85 @@ func TestNewServerAppContentGuardModeratesAndSanitizesBeforeBusinessUpstream(t *
 	}
 	if businessMessage != "我的手机号是***" {
 		t.Fatalf("expected sanitized business message %q, got %q", "我的手机号是***", businessMessage)
+	}
+}
+
+func TestNewServerAppServesBuiltinFAQWithoutCallingBusinessUpstream(t *testing.T) {
+	t.Parallel()
+
+	var moderationCalls int
+	var businessCalls int
+	providerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+
+		var payload struct {
+			Model    string `json:"model"`
+			Messages []struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("json.NewDecoder failed: %v", err)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if payload.Model == "qwen-mt-flash" {
+			moderationCalls++
+			_, _ = io.WriteString(w, `{"model":"qwen-mt-flash","choices":[{"message":{"role":"assistant","content":"{\"matched\":true,\"faq_key\":\"faq.identity.who_are_you\",\"confidence\":0.99,\"reason\":\"身份问题\"}"}}]}`)
+			return
+		}
+
+		businessCalls++
+		_, _ = io.WriteString(w, `{"model":"qwen-plus","choices":[{"message":{"role":"assistant","content":"should not be called"}}]}`)
+	}))
+	t.Cleanup(providerServer.Close)
+
+	app := newServerApp(config.Config{
+		BootstrapPlatformAPIKey:      "platform-live-key",
+		BootstrapPlatformAPIKeyID:    "pak_bootstrap",
+		BootstrapPlatformAPIKeyName:  "bootstrap key",
+		BootstrapTenantID:            "tenant_bootstrap",
+		BootstrapTenantName:          "Bootstrap Tenant",
+		BootstrapProviderID:          "pc_bootstrap",
+		BootstrapProvider:            "openai",
+		BootstrapProviderDisplayName: "OpenAI Primary",
+		BootstrapProviderBaseURL:     providerServer.URL + "/v1",
+		BootstrapProviderAPIKey:      "provider-secret-key",
+		BootstrapSupportedModels:     []string{"qwen-flash", "qwen-mt-flash"},
+		FAQSemanticCacheEnabled:      true,
+		FAQSemanticCacheModel:        "qwen-mt-flash",
+		FAQSemanticCacheTimeout:      1500 * time.Millisecond,
+		FAQSemanticCacheConfidence:   0.90,
+	})
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/chat/completions",
+		bytes.NewBufferString(`{"model":"qwen-flash","messages":[{"role":"user","content":"你是谁"}]}`),
+	)
+	req.Header.Set("Authorization", "Bearer platform-live-key")
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("io.ReadAll failed: %v", err)
+	}
+	if moderationCalls != 1 {
+		t.Fatalf("expected classifier call count 1, got %d", moderationCalls)
+	}
+	if businessCalls != 0 {
+		t.Fatalf("expected business upstream not to be called, got %d", businessCalls)
+	}
+	if !strings.Contains(string(body), "我是企业 AI Gateway 提供的智能助手") {
+		t.Fatalf("expected builtin faq answer, got %q", string(body))
 	}
 }
 

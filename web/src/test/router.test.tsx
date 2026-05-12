@@ -2991,6 +2991,90 @@ describe("控制台路由", () => {
     expect(providerModelsGetCount).toBe(2);
   });
 
+  test("后台模型页展示删除按钮并在删除成功后刷新列表", async () => {
+    let providerModelsGetCount = 0;
+    let deletedPath = "";
+    const providerModelsResponse = {
+      providers: [
+        {
+          id: "provider_dashscope_primary",
+          provider: "qwen",
+          display_name: "Qwen 主线路",
+          supported_models: ["qwen-flash"],
+          credential_mode: "secret_ref",
+          secret_ref: "TEST_QWEN_PROVIDER_SECRET",
+          status: "active",
+        },
+      ],
+      models: [
+        {
+          id: "route:provider_dashscope_primary:qwen-flash",
+          requested_model: "qwen-flash",
+          provider: "qwen",
+          provider_credential_id: "provider_dashscope_primary",
+          route_label: "Qwen 主线路",
+          health_status: "healthy",
+          latency_ms: 218,
+          request_mode: "聊天",
+        },
+      ] as Array<Record<string, unknown>>,
+    };
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url === "/api/admin/system/status") {
+        return new Response(JSON.stringify(defaultSystemStatus()), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url === "/api/admin/provider-models" && (!init?.method || init.method === "GET")) {
+        providerModelsGetCount += 1;
+        return new Response(JSON.stringify(providerModelsResponse), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (
+        url === "/api/admin/provider-models/route%3Aprovider_dashscope_primary%3Aqwen-flash" &&
+        init?.method === "DELETE"
+      ) {
+        deletedPath = url;
+        providerModelsResponse.models = [];
+        return new Response(JSON.stringify({ deleted_id: "route:provider_dashscope_primary:qwen-flash" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      throw new Error(`Unexpected fetch url: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderRoute("/provider-models");
+
+    expect(await screen.findByRole("heading", { level: 1, name: "后台模型" })).toBeInTheDocument();
+    expect(screen.getByText("qwen-flash")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "删除 qwen-flash" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "删除模型" });
+    expect(within(dialog).getByText("qwen-flash")).toBeInTheDocument();
+    expect(
+      within(dialog).getByText("这只会删除模型挂载配置，不会删除 Provider，也不会清理历史调用观测数据。"),
+    ).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "确认删除" }));
+
+    await waitFor(() => {
+      expect(deletedPath).toBe("/api/admin/provider-models/route%3Aprovider_dashscope_primary%3Aqwen-flash");
+    });
+    await waitFor(() => {
+      expect(screen.queryByText("qwen-flash")).not.toBeInTheDocument();
+    });
+    expect(screen.queryByRole("dialog", { name: "删除模型" })).not.toBeInTheDocument();
+    expect(providerModelsGetCount).toBe(2);
+  });
+
   test("租户管理页点击查看账单后请求租户账单详情", async () => {
     const scrollIntoView = vi.fn();
     Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {

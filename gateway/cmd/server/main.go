@@ -43,9 +43,10 @@ func newServerApp(cfg config.Config) *fiber.App {
 		"gateway.usage.request",
 	)
 	guard := newConfiguredContentGuard(cfg, chatClient)
-	chatProxy := service.NewChatProxyService(chatClient, usagePublisher)
+	faqCache := newConfiguredFAQSemanticCache(cfg, chatClient)
+	chatProxy := service.NewChatProxyServiceWithGuardAndFAQCache(chatClient, usagePublisher, nil, faqCache)
 	if guard != nil {
-		chatProxy = service.NewChatProxyServiceWithGuard(chatClient, usagePublisher, guard)
+		chatProxy = service.NewChatProxyServiceWithGuardAndFAQCache(chatClient, usagePublisher, guard, faqCache)
 	}
 
 	return apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
@@ -112,9 +113,10 @@ func newDatabaseBackedServerApp(cfg config.Config) *fiber.App {
 	pricingResolver := mustNewUsagePricingResolver(cfg)
 	upstreamClient := provider.NewOpenAIClient(http.DefaultClient)
 	guard := newConfiguredContentGuard(cfg, upstreamClient)
-	chatProxy := service.NewChatProxyService(upstreamClient, usagePublisher, usageRecorder)
+	faqCache := newConfiguredFAQSemanticCache(cfg, upstreamClient)
+	chatProxy := service.NewChatProxyServiceWithGuardAndFAQCache(upstreamClient, usagePublisher, nil, faqCache, usageRecorder)
 	if guard != nil {
-		chatProxy = service.NewChatProxyServiceWithGuard(upstreamClient, usagePublisher, guard, usageRecorder)
+		chatProxy = service.NewChatProxyServiceWithGuardAndFAQCache(upstreamClient, usagePublisher, guard, faqCache, usageRecorder)
 	}
 	consoleChatProxy := service.NewChatProxyService(upstreamClient, usagePublisher, usageRecorder)
 	embeddingProxy := service.NewEmbeddingProxyService(upstreamClient, usagePublisher, usageRecorder)
@@ -173,6 +175,46 @@ func newConfiguredContentGuard(cfg config.Config, client service.UpstreamChatCli
 	return &guard
 }
 
+func newConfiguredFAQSemanticCache(cfg config.Config, client service.UpstreamChatClient) service.FAQSemanticCacheOrchestrator {
+	if !cfg.FAQSemanticCacheEnabled || client == nil {
+		return service.NewNoopFAQSemanticCacheOrchestrator()
+	}
+
+	target, ok := faqClassifierTargetFromConfig(cfg)
+	if !ok {
+		return service.NewNoopFAQSemanticCacheOrchestrator()
+	}
+
+	registry := service.NewBuiltinFAQRegistry()
+	classifier := service.NewTransportFAQClassifier(
+		client,
+		target,
+		cfg.FAQSemanticCacheModel,
+		cfg.FAQSemanticCacheTimeout,
+	)
+
+	var cache service.FAQCacheService = service.NewNoopFAQCacheService()
+	redisURL := strings.TrimSpace(cfg.RedisURL)
+	if redisURL != "" {
+		options, err := redis.ParseURL(redisURL)
+		if err == nil {
+			redisClient := redis.NewClient(options)
+			cache = service.NewFAQCacheService(
+				service.NewGoRedisFAQCacheClient(redisClient),
+				cfg.FAQSemanticCacheRedisTTL,
+			)
+		}
+	}
+
+	return service.NewFAQSemanticCacheOrchestrator(
+		registry,
+		classifier,
+		cache,
+		cfg.FAQSemanticCacheModel,
+		cfg.FAQSemanticCacheConfidence,
+	)
+}
+
 func contentGuardTargetFromConfig(cfg config.Config) (domain.ProviderTarget, bool) {
 	if strings.TrimSpace(cfg.SeedProviderAPIKey) != "" && strings.TrimSpace(cfg.SeedProviderBaseURL) != "" {
 		return domain.ProviderTarget{
@@ -185,6 +227,26 @@ func contentGuardTargetFromConfig(cfg config.Config) (domain.ProviderTarget, boo
 	if strings.TrimSpace(cfg.BootstrapProviderAPIKey) != "" && strings.TrimSpace(cfg.BootstrapProviderBaseURL) != "" {
 		return domain.ProviderTarget{
 			CredentialID: "content_guard_bootstrap_provider",
+			Provider:     strings.TrimSpace(cfg.BootstrapProvider),
+			BaseURL:      strings.TrimSpace(cfg.BootstrapProviderBaseURL),
+			APIKey:       strings.TrimSpace(cfg.BootstrapProviderAPIKey),
+		}, true
+	}
+	return domain.ProviderTarget{}, false
+}
+
+func faqClassifierTargetFromConfig(cfg config.Config) (domain.ProviderTarget, bool) {
+	if strings.TrimSpace(cfg.SeedProviderAPIKey) != "" && strings.TrimSpace(cfg.SeedProviderBaseURL) != "" {
+		return domain.ProviderTarget{
+			CredentialID: "faq_classifier_seed_provider",
+			Provider:     firstNonEmptyString(cfg.SeedProvider, cfg.BootstrapProvider),
+			BaseURL:      strings.TrimSpace(cfg.SeedProviderBaseURL),
+			APIKey:       strings.TrimSpace(cfg.SeedProviderAPIKey),
+		}, true
+	}
+	if strings.TrimSpace(cfg.BootstrapProviderAPIKey) != "" && strings.TrimSpace(cfg.BootstrapProviderBaseURL) != "" {
+		return domain.ProviderTarget{
+			CredentialID: "faq_classifier_bootstrap_provider",
 			Provider:     strings.TrimSpace(cfg.BootstrapProvider),
 			BaseURL:      strings.TrimSpace(cfg.BootstrapProviderBaseURL),
 			APIKey:       strings.TrimSpace(cfg.BootstrapProviderAPIKey),

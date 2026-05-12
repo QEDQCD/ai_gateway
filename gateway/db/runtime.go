@@ -645,6 +645,13 @@ func RuntimeSeedStatements() []string {
 			error_message,
 			request_started_at,
 			request_completed_at,
+			cache_hit,
+			cache_type,
+			cache_key,
+			cache_faq_key,
+			classifier_model,
+			classifier_status,
+			classifier_latency_ms,
 			created_at
 		)
 		values
@@ -678,6 +685,13 @@ func RuntimeSeedStatements() []string {
 				'',
 				timestamptz '2026-04-24T10:00:00Z',
 				timestamptz '2026-04-24T10:00:00.182Z',
+				false,
+				'',
+				'',
+				'',
+				'',
+				'',
+				0,
 				timestamptz '2026-04-24T10:00:01Z'
 			),
 			(
@@ -710,6 +724,13 @@ func RuntimeSeedStatements() []string {
 				'demo rate limit response',
 				timestamptz '2026-04-24T10:05:00Z',
 				timestamptz '2026-04-24T10:05:00.095Z',
+				false,
+				'',
+				'',
+				'',
+				'',
+				'',
+				0,
 				timestamptz '2026-04-24T10:05:01Z'
 			)
 		on conflict (id) do nothing;

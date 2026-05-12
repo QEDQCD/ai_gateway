@@ -468,6 +468,86 @@ func TestAdminRunProviderModelHealthcheckRouteDecodesEncodedID(t *testing.T) {
 	}
 }
 
+func TestAdminDeleteProviderModelRoutePassesID(t *testing.T) {
+	t.Parallel()
+
+	var capturedID string
+	app := apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+		ServiceAuthUsername: "test-console-user",
+		ServiceAuthPassword: "test-console-password",
+		ConsoleService: stubConsoleService{
+			deleteProviderModelIDRef: &capturedID,
+			deleteProviderModelResult: service.ProviderModelDeleteResult{
+				DeletedID: "route:provider_dashscope_primary:qwen-flash",
+			},
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodDelete, "/admin/provider-models/route:provider_dashscope_primary:qwen-flash", nil)
+	req.SetBasicAuth("test-console-user", "test-console-password")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, resp.StatusCode)
+	}
+	if capturedID != "route:provider_dashscope_primary:qwen-flash" {
+		t.Fatalf("expected captured id %q, got %q", "route:provider_dashscope_primary:qwen-flash", capturedID)
+	}
+}
+
+func TestAdminDeleteProviderModelRouteDecodesEncodedID(t *testing.T) {
+	t.Parallel()
+
+	var capturedID string
+	app := apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+		ServiceAuthUsername: "test-console-user",
+		ServiceAuthPassword: "test-console-password",
+		ConsoleService: stubConsoleService{
+			deleteProviderModelIDRef: &capturedID,
+			deleteProviderModelResult: service.ProviderModelDeleteResult{
+				DeletedID: "route:provider_dashscope_primary:default",
+			},
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodDelete, "/admin/provider-models/route%3Aprovider_dashscope_primary%3Adefault", nil)
+	req.SetBasicAuth("test-console-user", "test-console-password")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, resp.StatusCode)
+	}
+	if capturedID != "route:provider_dashscope_primary:default" {
+		t.Fatalf("expected captured id %q, got %q", "route:provider_dashscope_primary:default", capturedID)
+	}
+}
+
+func TestAdminDeleteProviderModelRouteRequiresAuth(t *testing.T) {
+	t.Parallel()
+
+	app := apphttp.NewRouterWithDependencies(apphttp.RouterDependencies{
+		ServiceAuthUsername: "test-console-user",
+		ServiceAuthPassword: "test-console-password",
+		ConsoleService: stubConsoleService{},
+	})
+
+	req := httptest.NewRequest(http.MethodDelete, "/admin/provider-models/route:provider_dashscope_primary:qwen-flash", nil)
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, resp.StatusCode)
+	}
+}
+
 func TestAdminPlaygroundStreamRouteReturnsSSE(t *testing.T) {
 	t.Parallel()
 
@@ -1851,7 +1931,7 @@ func TestAdminUsageRequestsRouteReturnsConsoleData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("io.ReadAll failed: %v", err)
 	}
-	expected := `{"items":[{"request_id":"llmreq_demo_002","tenant":"tenant_demo","tenant_id":"tenant_demo","tenant_name":"Demo Tenant","endpoint":"/v1/embeddings","model":"text-embedding-3-small","resolved_model":"text-embedding-3-small","task_class":"embedding_simple","routing_reason":"model:direct","target_model_tier":"text-embedding-3-small","status":"限流","total_tokens":"16","input_tokens":"16","output_tokens":"0","cached_tokens":"5","latency":"95 ms","first_token_latency_ms":0,"usage_source":"估算","input_cost":"1.75 ￥","output_cost":"0.00 ￥","cached_cost":"0.25 ￥","total_cost":"2.00 ￥","input_price":"2.50 ￥/M","output_price":"0.00 ￥/M","cached_price":"0.75 ￥/M"}],"total":1,"limit":20,"offset":0}`
+	expected := `{"items":[{"request_id":"llmreq_demo_002","tenant":"tenant_demo","tenant_id":"tenant_demo","tenant_name":"Demo Tenant","endpoint":"/v1/embeddings","model":"text-embedding-3-small","resolved_model":"text-embedding-3-small","task_class":"embedding_simple","routing_reason":"model:direct","target_model_tier":"text-embedding-3-small","status":"限流","total_tokens":"16","input_tokens":"16","output_tokens":"0","cached_tokens":"5","latency":"95 ms","first_token_latency_ms":0,"usage_source":"估算","input_cost":"1.75 ￥","output_cost":"0.00 ￥","cached_cost":"0.25 ￥","total_cost":"2.00 ￥","input_price":"2.50 ￥/M","output_price":"0.00 ￥/M","cached_price":"0.75 ￥/M","cache_hit":false,"cache_type":"","cache_faq_key":"","classifier_model":"","classifier_status":"","classifier_latency_ms":0}],"resolved_model_options":null,"total":1,"limit":20,"offset":0}`
 	if string(body) != expected {
 		t.Fatalf("expected body %q, got %q", expected, string(body))
 	}
@@ -1889,6 +1969,13 @@ func TestAdminUsageRequestDetailRouteReturnsConsoleData(t *testing.T) {
 				InputPrice:          "2.00 ￥/M",
 				OutputPrice:         "20.00 ￥/M",
 				CachedPrice:         "0.50 ￥/M",
+				CacheHit:            true,
+				CacheType:           "faq_semantic",
+				CacheKey:            "faq_cache:pak_demo:faq.identity.who_are_you:v1",
+				CacheFAQKey:         "faq.identity.who_are_you",
+				ClassifierModel:     "qwen-mt-flash",
+				ClassifierStatus:    "hit",
+				ClassifierLatencyMS: 182,
 				PromptExcerpt:       "你好，手机号 138XXXX0000",
 				ResponseExcerpt:     "你好，请问有什么可以帮你？",
 				ErrorCode:           "",
@@ -1917,6 +2004,15 @@ func TestAdminUsageRequestDetailRouteReturnsConsoleData(t *testing.T) {
 	}
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("io.ReadAll failed: %v", err)
+	}
+	expected := `{"request_id":"llmreq_demo_002","tenant_id":"tenant_demo","tenant_name":"Demo Tenant","endpoint":"/v1/chat/completions","model":"qwen-flash","resolved_model":"qwen-flash","task_class":"chat_simple","routing_reason":"model:direct","target_model_tier":"fast","status":"成功","total_tokens":"18","input_tokens":"12","output_tokens":"6","cached_tokens":"0","latency":"120 ms","first_token_latency_ms":33,"usage_source":"上游返回","input_cost":"0.01 ￥","output_cost":"0.03 ￥","cached_cost":"0.00 ￥","total_cost":"0.04 ￥","input_price":"2.00 ￥/M","output_price":"20.00 ￥/M","cached_price":"0.50 ￥/M","cache_hit":true,"cache_type":"faq_semantic","cache_key":"faq_cache:pak_demo:faq.identity.who_are_you:v1","cache_faq_key":"faq.identity.who_are_you","classifier_model":"qwen-mt-flash","classifier_status":"hit","classifier_latency_ms":182,"prompt_excerpt":"你好，手机号 138XXXX0000","response_excerpt":"你好，请问有什么可以帮你？","error_code":"","error_message":"","failure_events":[{"time":"04-24 18:00","tenant_id":"tenant_demo","tenant_name":"Demo Tenant","request_model":"qwen-flash","resolved_model":"qwen-flash","provider":"阿里云百炼","status_code":0,"category":"","reason":"调用成功"}]}`
+	if string(body) != expected {
+		t.Fatalf("expected body %q, got %q", expected, string(body))
 	}
 }
 
@@ -2806,6 +2902,7 @@ type stubConsoleService struct {
 	createApplicationReqRef          *service.CreateApplicationRequest
 	createProviderReqRef             *service.CreateProviderRequest
 	createProviderModelReqRef        *service.CreateProviderModelRequest
+	deleteProviderModelIDRef         *string
 	runProviderModelHealthcheckIDRef *string
 	approveApplicationIDRef          *string
 	approveApplicationReqRef         *service.ApproveApplicationRequest
@@ -2817,6 +2914,7 @@ type stubConsoleService struct {
 	rejectAccountDeletionReqRef      *service.ReviewAccountDeletionApplicationRequest
 	providerMutation                 service.ProviderMutationResult
 	providerModelMutation            service.ProviderModelMutationResult
+	deleteProviderModelResult        service.ProviderModelDeleteResult
 	usageOverview                    service.UsageOverviewData
 	usageTrends                      service.UsageTrendData
 	usageLatencyWall                 service.UsageLatencyWallData
@@ -3032,6 +3130,13 @@ func (s stubConsoleService) CreateProviderModel(_ context.Context, req service.C
 		*s.createProviderModelReqRef = req
 	}
 	return s.providerModelMutation, nil
+}
+
+func (s stubConsoleService) DeleteProviderModel(_ context.Context, id string) (service.ProviderModelDeleteResult, error) {
+	if s.deleteProviderModelIDRef != nil {
+		*s.deleteProviderModelIDRef = id
+	}
+	return s.deleteProviderModelResult, nil
 }
 
 func (s stubConsoleService) RunProviderModelHealthcheck(_ context.Context, id string) (service.ProviderModelMutationResult, error) {

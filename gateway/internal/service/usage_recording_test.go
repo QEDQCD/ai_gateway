@@ -3,6 +3,7 @@ package service_test
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -107,6 +108,62 @@ func TestUsageRecorderRecordPersistsSmartRoutingFields(t *testing.T) {
 	}
 	if got := db.tx.execCalls[0].args[32]; got != "qwen-plus" {
 		t.Fatalf("expected resolved_model arg %q, got %#v", "qwen-plus", got)
+	}
+}
+
+func TestUsageRecorderRecordWritesFAQSemanticCacheFields(t *testing.T) {
+	t.Parallel()
+
+	db := newRecordingTxDB()
+	recorder := service.NewUsageRecorder(db, newTestUsagePricingResolver(t))
+	record := newUsageRecord(service.UsageStatusSuccess, service.UsageSourceUpstream)
+	setUsageRecordField(t, &record, "CacheHit", true)
+	setUsageRecordField(t, &record, "CacheType", "faq_semantic")
+	setUsageRecordField(t, &record, "CacheKey", "faq_cache:pak_demo:faq.identity.who_are_you:v1")
+	setUsageRecordField(t, &record, "CacheFAQKey", "faq.identity.who_are_you")
+	setUsageRecordField(t, &record, "ClassifierModel", "qwen-mt-flash")
+	setUsageRecordField(t, &record, "ClassifierStatus", "hit")
+	setUsageRecordField(t, &record, "ClassifierLatencyMS", int64(87))
+
+	if err := recorder.Record(context.Background(), record); err != nil {
+		t.Fatalf("recorder.Record failed: %v", err)
+	}
+
+	query := db.tx.execCalls[0].query
+	for _, needle := range []string{
+		"cache_hit",
+		"cache_type",
+		"cache_key",
+		"cache_faq_key",
+		"classifier_model",
+		"classifier_status",
+		"classifier_latency_ms",
+	} {
+		if !strings.Contains(query, needle) {
+			t.Fatalf("expected insert query to contain %q, got %q", needle, query)
+		}
+	}
+
+	if got := db.tx.execCalls[0].args[35]; got != true {
+		t.Fatalf("expected cache_hit arg true, got %#v", got)
+	}
+	if got := db.tx.execCalls[0].args[36]; got != "faq_semantic" {
+		t.Fatalf("expected cache_type arg %q, got %#v", "faq_semantic", got)
+	}
+	if got := db.tx.execCalls[0].args[37]; got != "faq_cache:pak_demo:faq.identity.who_are_you:v1" {
+		t.Fatalf("expected cache_key arg to be preserved, got %#v", got)
+	}
+	if got := db.tx.execCalls[0].args[38]; got != "faq.identity.who_are_you" {
+		t.Fatalf("expected cache_faq_key arg %q, got %#v", "faq.identity.who_are_you", got)
+	}
+	if got := db.tx.execCalls[0].args[39]; got != "qwen-mt-flash" {
+		t.Fatalf("expected classifier_model arg %q, got %#v", "qwen-mt-flash", got)
+	}
+	if got := db.tx.execCalls[0].args[40]; got != "hit" {
+		t.Fatalf("expected classifier_status arg %q, got %#v", "hit", got)
+	}
+	if got := db.tx.execCalls[0].args[41]; got != int64(87) {
+		t.Fatalf("expected classifier_latency_ms arg 87, got %#v", got)
 	}
 }
 
@@ -462,6 +519,99 @@ func TestUsageRecorderRecordPersistsZeroCachedTokens(t *testing.T) {
 	}
 }
 
+func TestUsageRecorderRecordPersistsFAQSemanticCacheFields(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	container, dsn := startPostgresContainer(ctx, t)
+	t.Cleanup(func() {
+		_ = container.Terminate(context.Background())
+	})
+
+	pool, err := gatewaydb.OpenPostgres(ctx, dsn)
+	if err != nil {
+		t.Fatalf("OpenPostgres failed: %v", err)
+	}
+	t.Cleanup(pool.Close)
+
+	if err := gatewaydb.ApplyMigrations(ctx, pool); err != nil {
+		t.Fatalf("ApplyMigrations failed: %v", err)
+	}
+	for _, statement := range gatewaydb.RuntimeSeedStatements() {
+		if _, err := pool.Exec(ctx, statement); err != nil {
+			t.Fatalf("pool.Exec seed failed: %v", err)
+		}
+	}
+
+	recorder := service.NewUsageRecorder(pool, newTestUsagePricingResolver(t))
+	record := newUsageRecord(service.UsageStatusSuccess, service.UsageSourceUpstream)
+	record.RequestID = "llmreq_faq_cache_fields"
+	setUsageRecordField(t, &record, "CacheHit", true)
+	setUsageRecordField(t, &record, "CacheType", "faq_semantic")
+	setUsageRecordField(t, &record, "CacheKey", "faq_cache:pak_demo:faq.identity.who_are_you:v1")
+	setUsageRecordField(t, &record, "CacheFAQKey", "faq.identity.who_are_you")
+	setUsageRecordField(t, &record, "ClassifierModel", "qwen-mt-flash")
+	setUsageRecordField(t, &record, "ClassifierStatus", "hit")
+	setUsageRecordField(t, &record, "ClassifierLatencyMS", int64(87))
+
+	if err := recorder.Record(ctx, record); err != nil {
+		t.Fatalf("recorder.Record failed: %v", err)
+	}
+
+	var cacheHit bool
+	var cacheType string
+	var cacheKey string
+	var cacheFAQKey string
+	var classifierModel string
+	var classifierStatus string
+	var classifierLatencyMS int64
+	if err := pool.QueryRow(ctx, `
+		select cache_hit,
+		       cache_type,
+		       cache_key,
+		       cache_faq_key,
+		       classifier_model,
+		       classifier_status,
+		       classifier_latency_ms
+		from llm_request_logs
+		where id = $1
+	`, record.RequestID).Scan(
+		&cacheHit,
+		&cacheType,
+		&cacheKey,
+		&cacheFAQKey,
+		&classifierModel,
+		&classifierStatus,
+		&classifierLatencyMS,
+	); err != nil {
+		t.Fatalf("QueryRow llm_request_logs faq semantic cache fields failed: %v", err)
+	}
+
+	if !cacheHit {
+		t.Fatal("expected cache_hit true")
+	}
+	if cacheType != "faq_semantic" {
+		t.Fatalf("expected cache_type %q, got %q", "faq_semantic", cacheType)
+	}
+	if cacheKey != "faq_cache:pak_demo:faq.identity.who_are_you:v1" {
+		t.Fatalf("expected cache_key to be preserved, got %q", cacheKey)
+	}
+	if cacheFAQKey != "faq.identity.who_are_you" {
+		t.Fatalf("expected cache_faq_key %q, got %q", "faq.identity.who_are_you", cacheFAQKey)
+	}
+	if classifierModel != "qwen-mt-flash" {
+		t.Fatalf("expected classifier_model %q, got %q", "qwen-mt-flash", classifierModel)
+	}
+	if classifierStatus != "hit" {
+		t.Fatalf("expected classifier_status %q, got %q", "hit", classifierStatus)
+	}
+	if classifierLatencyMS != 87 {
+		t.Fatalf("expected classifier_latency_ms 87, got %d", classifierLatencyMS)
+	}
+}
+
 func TestUsageRecorderUsageEventIncludesCachedTokensAndCostSnapshot(t *testing.T) {
 	t.Parallel()
 
@@ -772,6 +922,29 @@ func newUsageRecord(status service.UsageStatus, source service.UsageSource) serv
 		RequestStartedAt:   startedAt,
 		RequestCompletedAt: completedAt,
 	}
+}
+
+func setUsageRecordField(t *testing.T, record *service.UsageRecord, fieldName string, value any) {
+	t.Helper()
+
+	field := reflect.ValueOf(record).Elem().FieldByName(fieldName)
+	if !field.IsValid() {
+		t.Fatalf("expected UsageRecord.%s to exist", fieldName)
+	}
+
+	input := reflect.ValueOf(value)
+	if !input.IsValid() {
+		t.Fatalf("expected non-nil value for UsageRecord.%s", fieldName)
+	}
+	if input.Type().AssignableTo(field.Type()) {
+		field.Set(input)
+		return
+	}
+	if input.Type().ConvertibleTo(field.Type()) {
+		field.Set(input.Convert(field.Type()))
+		return
+	}
+	t.Fatalf("expected value for UsageRecord.%s to be assignable to %s, got %s", fieldName, field.Type(), input.Type())
 }
 
 func newTestUsagePricingResolver(t *testing.T) service.ModelPricingResolver {

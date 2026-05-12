@@ -100,6 +100,7 @@ type chatProxyService struct {
 	publisher queue.UsagePublisher
 	recorder  UsageRecorder
 	guard     chatContentGuard
+	faqCache  FAQSemanticCacheOrchestrator
 }
 
 type embeddingProxyService struct {
@@ -128,6 +129,10 @@ func NewChatProxyService(client UpstreamChatClient, publisher queue.UsagePublish
 }
 
 func NewChatProxyServiceWithGuard(client UpstreamChatClient, publisher queue.UsagePublisher, guard chatContentGuard, recorders ...UsageRecorder) ChatProxyService {
+	return NewChatProxyServiceWithGuardAndFAQCache(client, publisher, guard, nil, recorders...)
+}
+
+func NewChatProxyServiceWithGuardAndFAQCache(client UpstreamChatClient, publisher queue.UsagePublisher, guard chatContentGuard, faqCache FAQSemanticCacheOrchestrator, recorders ...UsageRecorder) ChatProxyService {
 	if client == nil {
 		return unavailableChatProxyService{}
 	}
@@ -137,11 +142,15 @@ func NewChatProxyServiceWithGuard(client UpstreamChatClient, publisher queue.Usa
 	if guard == nil {
 		guard = noopChatContentGuard{}
 	}
+	if faqCache == nil {
+		faqCache = NewNoopFAQSemanticCacheOrchestrator()
+	}
 	return chatProxyService{
 		client:    client,
 		publisher: publisher,
 		recorder:  firstUsageRecorder(recorders...),
 		guard:     guard,
+		faqCache:  faqCache,
 	}
 }
 
@@ -243,17 +252,29 @@ func (s chatProxyService) Complete(ctx context.Context, req ChatRequest, resolve
 	if len(guardResult.Messages) > 0 {
 		req.Messages = guardResult.Messages
 	}
+	requestID := requestIDFromContext(ctx)
+	start := time.Now().UTC()
+	faqOutcome, faqErr := s.faqCache.TryServe(ctx, requestContext, req)
+	faqEvents := usageEventsForFAQCacheOutcome(faqOutcome, faqErr)
+	if faqErr == nil && faqOutcome.Hit {
+		record := NewChatUsageRecord(requestID, requestContext, req, faqOutcome.Response, http.StatusOK, start, time.Now().UTC(), nil)
+		applyFAQSemanticCacheMetadata(&record, faqOutcome.Metadata)
+		s.recordWithEvents(ctx, record, append(faqEvents, guardEvents...)...)
+		return redactChatResponse(faqOutcome.Response), nil
+	}
+
 	if err := validateProviderTarget(requestContext); err != nil {
 		now := time.Now().UTC()
-		s.recordWithEvents(ctx, NewChatUsageRecord(requestIDFromContext(ctx), requestContext, req, ChatResponse{}, http.StatusBadGateway, now, now, err), guardEvents...)
+		record := NewChatUsageRecord(requestIDFromContext(ctx), requestContext, req, ChatResponse{}, http.StatusBadGateway, now, now, err)
+		applyFAQSemanticCacheMetadata(&record, faqOutcome.Metadata)
+		s.recordWithEvents(ctx, record, append(faqEvents, guardEvents...)...)
 		return ChatResponse{}, err
 	}
 
-	requestID := requestIDFromContext(ctx)
-	start := time.Now().UTC()
 	resp, statusCode, err := s.client.Complete(ctx, requestContext.ProviderTarget, req)
 	record := NewChatUsageRecord(requestID, requestContext, req, resp, statusCode, start, time.Now().UTC(), err)
-	s.recordWithEvents(ctx, record, guardEvents...)
+	applyFAQSemanticCacheMetadata(&record, faqOutcome.Metadata)
+	s.recordWithEvents(ctx, record, append(faqEvents, guardEvents...)...)
 	if err != nil {
 		return ChatResponse{}, StatusError{
 			Code:    defaultStatusCode(statusCode),
@@ -522,6 +543,45 @@ func usageEventsForGuardResult(result ContentGuardResult) []usageRecordEvent {
 		eventType: "security_guard_fallback",
 		detail:    "content moderation unavailable, fallback_regex applied",
 	}}
+}
+
+func usageEventsForFAQCacheOutcome(outcome FAQSemanticCacheOutcome, err error) []usageRecordEvent {
+	status := strings.TrimSpace(outcome.Metadata.ClassifierStatus)
+	if status == "" {
+		return nil
+	}
+
+	events := []usageRecordEvent{{
+		eventType: "classifier_" + status,
+		detail:    firstNonEmpty(outcome.Metadata.CacheFAQKey, status),
+	}}
+	if outcome.Hit {
+		events = append(events, usageRecordEvent{
+			eventType: "cache_served",
+			detail:    firstNonEmpty(outcome.Metadata.CacheType, "faq_semantic"),
+		})
+		return events
+	}
+	if err != nil || status != "miss" {
+		events = append(events, usageRecordEvent{
+			eventType: "fallback_upstream",
+			detail:    status,
+		})
+	}
+	return events
+}
+
+func applyFAQSemanticCacheMetadata(record *UsageRecord, metadata FAQSemanticCacheMetadata) {
+	if record == nil {
+		return
+	}
+	record.CacheHit = metadata.CacheHit
+	record.CacheType = metadata.CacheType
+	record.CacheKey = metadata.CacheKey
+	record.CacheFAQKey = metadata.CacheFAQKey
+	record.ClassifierModel = metadata.ClassifierModel
+	record.ClassifierStatus = metadata.ClassifierStatus
+	record.ClassifierLatencyMS = metadata.ClassifierLatencyMS
 }
 
 func redactChatResponse(resp ChatResponse) ChatResponse {

@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/example/ai_gateway/gateway/internal/domain"
 	apphttp "github.com/example/ai_gateway/gateway/internal/http"
@@ -235,6 +237,72 @@ func TestChatCompletionProxyPublishesUsageOnInvalidBody(t *testing.T) {
 	}
 	if events[0].UsageSource != "estimated" {
 		t.Fatalf("expected usage source %q, got %q", "estimated", events[0].UsageSource)
+	}
+}
+
+func TestChatCompletionProxyServesBuiltinFAQWithoutCallingUpstream(t *testing.T) {
+	t.Parallel()
+
+	var upstreamCalls int
+	providerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalls++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"should-not-be-called"}}]}`)
+	}))
+	t.Cleanup(providerServer.Close)
+
+	registry := service.NewBuiltinFAQRegistry()
+	classifier := integrationFAQClassifier{
+		result: service.FAQClassifierResult{
+			Matched:    true,
+			FAQKey:     "faq.identity.who_are_you",
+			Confidence: 0.99,
+		},
+	}
+	cache := integrationFAQCache{
+		entry: service.FAQCacheEntry{
+			FAQKey:  "faq.identity.who_are_you",
+			Answer:  "我是企业 AI Gateway 提供的智能助手，用于统一接入和管理大模型能力。",
+			Version: "v1",
+			Source:  "builtin",
+		},
+		hit: true,
+	}
+	chatProxy := service.NewChatProxyServiceWithGuardAndFAQCache(
+		provider.NewOpenAIClient(http.DefaultClient),
+		queue.NewRecordingUsagePublisher(),
+		nil,
+		service.NewFAQSemanticCacheOrchestrator(registry, classifier, cache, "qwen-mt-flash", 0.90),
+	)
+	app := newGatewayAppWithChatProxy(t, chatProxy)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"model":"gpt-4o-mini","messages":[{"role":"user","content":"你是谁"}]}`))
+	req.Header.Set("Authorization", "Bearer platform-live-key")
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var body struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("json.NewDecoder failed: %v", err)
+	}
+	if got := body.Choices[0].Message.Content; !strings.Contains(got, "我是企业 AI Gateway 提供的智能助手") {
+		t.Fatalf("expected builtin faq answer, got %q", got)
+	}
+	if upstreamCalls != 0 {
+		t.Fatalf("expected upstream not to be called, got %d", upstreamCalls)
 	}
 }
 
@@ -554,6 +622,46 @@ type staticQuotaClient struct{}
 
 func (staticQuotaClient) Exists(context.Context, string) (bool, error) {
 	return false, nil
+}
+
+type integrationFAQClassifier struct {
+	result service.FAQClassifierResult
+	err    error
+}
+
+func (c integrationFAQClassifier) Classify(context.Context, string) (service.FAQClassifierResult, error) {
+	if c.err != nil {
+		return service.FAQClassifierResult{}, c.err
+	}
+	return c.result, nil
+}
+
+type integrationFAQCache struct {
+	entry service.FAQCacheEntry
+	hit   bool
+	err   error
+}
+
+func (c integrationFAQCache) Get(context.Context, string, service.FAQEntry) (service.FAQCacheEntry, bool, error) {
+	if c.err != nil {
+		return service.FAQCacheEntry{}, false, c.err
+	}
+	return c.entry, c.hit, nil
+}
+
+func (c integrationFAQCache) Set(_ context.Context, _ string, faq service.FAQEntry) (service.FAQCacheEntry, error) {
+	if c.err != nil && !errors.Is(c.err, service.ErrFAQCacheMiss) {
+		return service.FAQCacheEntry{}, c.err
+	}
+	return service.FAQCacheEntry{
+		FAQKey:    faq.Key,
+		Answer:    faq.Answer,
+		Version:   faq.Version,
+		Source:    "builtin",
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+		HitCount:  0,
+	}, nil
 }
 
 type capturingChatProxyService struct {
