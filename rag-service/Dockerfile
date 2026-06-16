@@ -1,10 +1,21 @@
-FROM compose-rag-service:latest
+FROM python:3.11-slim
 
-ENV PIP_INDEX_URL=https://pypi.org/simple
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_INDEX_URL=https://pypi.org/simple
 
 WORKDIR /app
 
-RUN python -m pip install --no-cache-dir "pg8000>=1.31,<2.0"
+COPY rag-service/pyproject.toml ./pyproject.toml
+RUN python - <<'PY'
+import subprocess
+import tomllib
+
+with open("pyproject.toml", "rb") as f:
+    deps = tomllib.load(f)["project"]["dependencies"]
+
+subprocess.run(["pip", "install", "--no-cache-dir", *deps], check=True)
+PY
 
 COPY rag-service/app ./app
 
