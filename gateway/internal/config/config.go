@@ -73,6 +73,7 @@ type Config struct {
 	ModelHealthcheckPrompt           string
 	ModelHealthcheckMaxTokens        int
 	ModelTokenPricing                map[string]ModelTokenPrice
+	PointsDivisor                    int64
 }
 
 func Load() Config {
@@ -148,6 +149,7 @@ func Load() Config {
 		ModelHealthcheckPrompt:           defaultString(lookupEnv("GATEWAY_MODEL_HEALTHCHECK_PROMPT"), "你好"),
 		ModelHealthcheckMaxTokens:        modelHealthcheckMaxTokens,
 		ModelTokenPricing:                modelTokenPricing,
+		PointsDivisor:                    lookupInt64Env("GATEWAY_POINTS_DIVISOR", 10_000),
 	}
 }
 

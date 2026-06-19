@@ -15,6 +15,7 @@ type UsageEvent struct {
 	ProviderCredentialID string    `json:"provider_credential_id"`
 	RouteID              string    `json:"route_id"`
 	Provider             string    `json:"provider"`
+	UserID               string    `json:"user_id"`
 	Model                string    `json:"model"`
 	Status               string    `json:"status"`
 	UsageSource          string    `json:"usage_source"`

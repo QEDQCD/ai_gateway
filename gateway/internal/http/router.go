@@ -129,6 +129,7 @@ func NewRouterWithDependencies(deps RouterDependencies) *fiber.App {
 	admin.Get("/usage/failures", handlers.ConsoleUsageFailures(deps.ConsoleService))
 	admin.Get("/usage/requests", handlers.ConsoleUsageRequests(deps.ConsoleService))
 	admin.Get("/usage/requests/:id", handlers.ConsoleUsageRequestDetail(deps.ConsoleService))
+	admin.Get("/points/users", handlers.ConsoleUserPointsOverview(deps.ConsoleService))
 
 	member := app.Group(
 		"/me",
@@ -151,6 +152,7 @@ func NewRouterWithDependencies(deps RouterDependencies) *fiber.App {
 	member.Post("/account-deletion-applications", handlers.MemberCreateAccountDeletionApplication(deps.MemberConsoleService))
 	member.Get("/usage/overview", handlers.MemberUsageOverview(deps.MemberConsoleService))
 	member.Get("/usage/requests", handlers.MemberUsageRequests(deps.MemberConsoleService))
+	member.Get("/points/overview", handlers.MemberPointsOverview(deps.MemberConsoleService))
 	member.Get("/failures", handlers.MemberFailures(deps.MemberConsoleService))
 	member.Get("/audit-events", handlers.MemberAuditEvents(deps.MemberConsoleService))
 

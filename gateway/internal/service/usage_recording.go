@@ -92,6 +92,7 @@ const insertUsageRecordSQL = `
 insert into llm_request_logs (
 	id,
 	tenant_id,
+	user_id,
 	platform_api_key_id,
 	platform_api_key_name,
 	provider_credential_id,
@@ -133,11 +134,11 @@ insert into llm_request_logs (
 	classifier_status,
 	classifier_latency_ms
 ) values (
-	$1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+	$1, $2, nullif($3, ''), $4, $5, $6, $7, $8, $9, $10,
 	$11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
 	$21, $22, $23, $24, $25, $26, $27, $28, $29, $30,
 	$31, $32, $33, $34, $35, $36, $37, $38, $39, $40,
-	$41, $42
+	$41, $42, $43
 )`
 
 const insertUsagePublishFailureEventSQL = `
@@ -265,6 +266,7 @@ func insertUsageRecord(ctx context.Context, db store.DBTX, record UsageRecord) e
 	_, err := db.Exec(ctx, insertUsageRecordSQL,
 		record.RequestID,
 		record.TenantID,
+		record.UserID,
 		record.PlatformAPIKeyID,
 		record.PlatformAPIKeyName,
 		record.ProviderCredentialID,
@@ -536,6 +538,7 @@ func (r UsageRecord) UsageEvent() queue.UsageEvent {
 	return queue.UsageEvent{
 		RequestID:            r.RequestID,
 		TenantID:             r.TenantID,
+		UserID:               r.UserID,
 		PlatformAPIKeyID:     r.PlatformAPIKeyID,
 		PlatformAPIKeyName:   r.PlatformAPIKeyName,
 		ProviderCredentialID: r.ProviderCredentialID,

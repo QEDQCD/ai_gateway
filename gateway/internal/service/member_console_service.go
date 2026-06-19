@@ -59,6 +59,7 @@ type MemberConsoleService interface {
 	CreateAccountDeletionApplication(ctx context.Context, req CreateAccountDeletionApplicationRequest) (AccountDeletionApplicationMutationResult, error)
 	UsageOverview(ctx context.Context, query UsageQuery) (UsageOverviewData, error)
 	UsageRequests(ctx context.Context, query UsageQuery) (UsageRequestsPageData, error)
+	PointsOverview(ctx context.Context, query UsageQuery) (MemberPointsOverviewData, error)
 	Failures(ctx context.Context, query UsageQuery) (MemberFailurePageData, error)
 	AuditEvents(ctx context.Context) (MemberAuditPageData, error)
 }
@@ -125,6 +126,10 @@ func (unavailableMemberConsoleService) UsageOverview(context.Context, UsageQuery
 
 func (unavailableMemberConsoleService) UsageRequests(context.Context, UsageQuery) (UsageRequestsPageData, error) {
 	return UsageRequestsPageData{}, ErrConsoleServiceUnavailable
+}
+
+func (unavailableMemberConsoleService) PointsOverview(context.Context, UsageQuery) (MemberPointsOverviewData, error) {
+	return MemberPointsOverviewData{}, ErrConsoleServiceUnavailable
 }
 
 func (unavailableMemberConsoleService) Failures(context.Context, UsageQuery) (MemberFailurePageData, error) {

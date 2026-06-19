@@ -2921,6 +2921,7 @@ type stubConsoleService struct {
 	usageFailures                    service.UsageFailureData
 	usageRequests                    service.UsageRequestsPageData
 	usageRequestDetail               service.UsageRequestDetail
+	userPointsOverview               service.UserPointsOverviewData
 	tenantBilling                    service.TenantBillingPageData
 	usageQueryRef                    *service.UsageQuery
 	modelHealthWindowRef             *string
@@ -2936,6 +2937,7 @@ type stubMemberConsoleService struct {
 	apiKeySecretView            service.APIKeySecretView
 	usageOverview               service.UsageOverviewData
 	usageRequests               service.UsageRequestsPageData
+	pointsOverview              service.MemberPointsOverviewData
 	failures                    service.MemberFailurePageData
 	auditEvents                 service.MemberAuditPageData
 	principalRef                *service.ConsolePrincipal
@@ -3003,6 +3005,11 @@ func (s stubMemberConsoleService) UsageOverview(ctx context.Context, _ service.U
 func (s stubMemberConsoleService) UsageRequests(ctx context.Context, _ service.UsageQuery) (service.UsageRequestsPageData, error) {
 	s.capturePrincipal(ctx)
 	return s.usageRequests, nil
+}
+
+func (s stubMemberConsoleService) PointsOverview(ctx context.Context, _ service.UsageQuery) (service.MemberPointsOverviewData, error) {
+	s.capturePrincipal(ctx)
+	return s.pointsOverview, nil
 }
 
 func (s stubMemberConsoleService) Failures(ctx context.Context, _ service.UsageQuery) (service.MemberFailurePageData, error) {
@@ -3220,4 +3227,11 @@ func (s stubConsoleService) UsageRequests(_ context.Context, query service.Usage
 
 func (s stubConsoleService) UsageRequestDetail(_ context.Context, _ string) (service.UsageRequestDetail, error) {
 	return s.usageRequestDetail, nil
+}
+
+func (s stubConsoleService) UserPointsOverview(_ context.Context, query service.UsageQuery) (service.UserPointsOverviewData, error) {
+	if s.usageQueryRef != nil {
+		*s.usageQueryRef = query
+	}
+	return s.userPointsOverview, nil
 }

@@ -133,6 +133,20 @@ func MemberUsageRequests(member service.MemberConsoleService) fiber.Handler {
 	}
 }
 
+func MemberPointsOverview(member service.MemberConsoleService) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		query, err := parseUsageQuery(c)
+		if err != nil {
+			return err
+		}
+		payload, err := member.PointsOverview(c.UserContext(), query)
+		if err != nil {
+			return consoleError(err)
+		}
+		return c.JSON(payload)
+	}
+}
+
 func MemberFailures(member service.MemberConsoleService) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		query, err := parseUsageQuery(c)

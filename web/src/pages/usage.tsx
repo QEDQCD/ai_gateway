@@ -241,6 +241,7 @@ export function UsagePage() {
           />
           <StatCard label="总 Token" value={formatValue(overview.data.total_tokens)} />
           <StatCard label="总费用" value={formatValue(overview.data.total_cost)} />
+          <StatCard label="总积分" value={formatValue(overview.data.total_points)} />
         </div>
       </section>
 

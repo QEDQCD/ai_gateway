@@ -409,6 +409,6 @@ func newUsageMemberConsoleService(t *testing.T, ctx context.Context, principal s
 	if err != nil {
 		t.Fatalf("secret.NewCodec failed: %v", err)
 	}
-	member := service.NewPostgresMemberConsoleService(conn, principal, codec)
+	member := service.NewPostgresMemberConsoleService(conn, principal, 0, codec)
 	return member, conn
 }

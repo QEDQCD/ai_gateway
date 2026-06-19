@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/example/ai_gateway/gateway/internal/queue"
@@ -66,6 +67,42 @@ on conflict (tenant_id, period_start) do update set
 	requests_used = tenant_quota_usage_periods.requests_used + excluded.requests_used,
 	tokens_used = tenant_quota_usage_periods.tokens_used + excluded.tokens_used,
 	last_aggregated_at = now()
+`
+
+const upsertUserUsageLedgerSQL = `
+insert into user_usage_ledger (
+	bucket_start,
+	tenant_id,
+	user_id,
+	input_tokens,
+	output_tokens,
+	total_tokens,
+	cached_tokens,
+	input_cost_microyuan,
+	output_cost_microyuan,
+	cached_cost_microyuan,
+	total_cost_microyuan,
+	request_count,
+	success_count,
+	failure_count
+) values (
+	$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 1,
+	case when $13 = 'success' then 1 else 0 end,
+	case when $13 = 'success' then 0 else 1 end
+)
+on conflict (bucket_start, tenant_id, user_id) do update set
+	input_tokens = user_usage_ledger.input_tokens + excluded.input_tokens,
+	output_tokens = user_usage_ledger.output_tokens + excluded.output_tokens,
+	total_tokens = user_usage_ledger.total_tokens + excluded.total_tokens,
+	cached_tokens = user_usage_ledger.cached_tokens + excluded.cached_tokens,
+	input_cost_microyuan = user_usage_ledger.input_cost_microyuan + excluded.input_cost_microyuan,
+	output_cost_microyuan = user_usage_ledger.output_cost_microyuan + excluded.output_cost_microyuan,
+	cached_cost_microyuan = user_usage_ledger.cached_cost_microyuan + excluded.cached_cost_microyuan,
+	total_cost_microyuan = user_usage_ledger.total_cost_microyuan + excluded.total_cost_microyuan,
+	request_count = user_usage_ledger.request_count + 1,
+	success_count = user_usage_ledger.success_count + excluded.success_count,
+	failure_count = user_usage_ledger.failure_count + excluded.failure_count,
+	updated_at = now()
 `
 
 type sqlUsageAggregator struct {
@@ -176,6 +213,24 @@ func (a sqlUsageAggregator) Consume(ctx context.Context, event queue.UsageEvent)
 		max(0, event.TotalTokens),
 	); err != nil {
 		return err
+	}
+	if strings.TrimSpace(event.UserID) != "" {
+		if _, err := a.db.Exec(ctx, upsertUserUsageLedgerSQL,
+			bucketStart,
+			event.TenantID,
+			strings.TrimSpace(event.UserID),
+			max(0, event.PromptTokens),
+			max(0, event.CompletionTokens),
+			max(0, event.TotalTokens),
+			max(0, event.CachedTokens),
+			max(0, event.InputCostMicroyuan),
+			max(0, event.OutputCostMicroyuan),
+			max(0, event.CachedCostMicroyuan),
+			max(0, event.TotalCostMicroyuan),
+			event.Status,
+		); err != nil {
+			return err
+		}
 	}
 	return a.AggregateHour(ctx, bucketStart)
 }

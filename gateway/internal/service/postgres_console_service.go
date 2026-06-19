@@ -46,13 +46,14 @@ type usageLatencyLaneAccumulator struct {
 }
 
 type postgresConsoleService struct {
-	db              consoleDB
-	authService     AuthService
-	chatProxy       ChatProxyService
-	ragProxy        RAGProxyService
-	seedPlatformKey string
-	secretService   platformAPIKeySecretService
-	pricingResolver ModelPricingResolver
+	db                 consoleDB
+	authService        AuthService
+	chatProxy          ChatProxyService
+	ragProxy           RAGProxyService
+	seedPlatformKey    string
+	secretService      platformAPIKeySecretService
+	pricingResolver      ModelPricingResolver
+	pointsDivisorValue int64
 }
 
 func NewPostgresConsoleService(
@@ -70,6 +71,7 @@ func NewPostgresConsoleService(
 		ragProxy,
 		seedPlatformKey,
 		ModelPricingResolver{},
+		0,
 		secretCodecs...,
 	)
 }
@@ -81,6 +83,7 @@ func NewPostgresConsoleServiceWithPricing(
 	ragProxy RAGProxyService,
 	seedPlatformKey string,
 	pricingResolver ModelPricingResolver,
+	pointsDivisor int64,
 	secretCodecs ...*secret.Codec,
 ) ConsoleService {
 	if db == nil {
@@ -91,13 +94,14 @@ func NewPostgresConsoleServiceWithPricing(
 		secretCodec = secretCodecs[0]
 	}
 	return postgresConsoleService{
-		db:              db,
-		authService:     authService,
-		chatProxy:       chatProxy,
-		ragProxy:        ragProxy,
-		seedPlatformKey: seedPlatformKey,
-		secretService:   newPlatformAPIKeySecretService(secretCodec),
-		pricingResolver: pricingResolver,
+		db:                 db,
+		authService:        authService,
+		chatProxy:          chatProxy,
+		ragProxy:           ragProxy,
+		seedPlatformKey:    seedPlatformKey,
+		secretService:      newPlatformAPIKeySecretService(secretCodec),
+		pricingResolver:    pricingResolver,
+		pointsDivisorValue: NormalizePointsDivisor(pointsDivisor),
 	}
 }
 
@@ -3581,6 +3585,7 @@ func (s postgresConsoleService) usageOverviewFromLogs(ctx context.Context, query
 		OutputCost:     formatMicroyuanAmount(outputCostMicroyuan),
 		CachedCost:     formatMicroyuanAmount(cachedCostMicroyuan),
 		TotalCost:      formatMicroyuanAmount(totalCostMicroyuan),
+		TotalPoints:    FormatPoints(PointsFromMicroyuan(totalCostMicroyuan, s.pointsDivisor())),
 		PricingModels:  pricingModels,
 	}, nil
 }
@@ -4914,6 +4919,7 @@ func (b *usageWhereBuilder) addIfNotEmpty(template string, value string) {
 func normalizeUsageQuery(query UsageQuery, now time.Time) (UsageQuery, error) {
 	query.Window = strings.TrimSpace(query.Window)
 	query.TenantID = strings.TrimSpace(query.TenantID)
+	query.UserID = strings.TrimSpace(query.UserID)
 	query.PlatformAPIKeyID = strings.TrimSpace(query.PlatformAPIKeyID)
 	query.Provider = strings.TrimSpace(query.Provider)
 	query.Model = strings.TrimSpace(query.Model)

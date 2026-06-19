@@ -12,12 +12,13 @@ import (
 )
 
 type postgresMemberConsoleService struct {
-	db                consoleDB
-	principalOverride ConsolePrincipal
-	secretService     platformAPIKeySecretService
+	db                 consoleDB
+	principalOverride  ConsolePrincipal
+	secretService      platformAPIKeySecretService
+	pointsDivisorValue int64
 }
 
-func NewPostgresMemberConsoleService(db consoleDB, principalOverride ConsolePrincipal, secretCodecs ...*secret.Codec) MemberConsoleService {
+func NewPostgresMemberConsoleService(db consoleDB, principalOverride ConsolePrincipal, pointsDivisor int64, secretCodecs ...*secret.Codec) MemberConsoleService {
 	if db == nil {
 		return NewUnavailableMemberConsoleService()
 	}
@@ -26,9 +27,10 @@ func NewPostgresMemberConsoleService(db consoleDB, principalOverride ConsolePrin
 		secretCodec = secretCodecs[0]
 	}
 	return postgresMemberConsoleService{
-		db:                db,
-		principalOverride: principalOverride,
-		secretService:     newPlatformAPIKeySecretService(secretCodec),
+		db:                 db,
+		principalOverride:  principalOverride,
+		secretService:      newPlatformAPIKeySecretService(secretCodec),
+		pointsDivisorValue: NormalizePointsDivisor(pointsDivisor),
 	}
 }
 
@@ -554,6 +556,13 @@ func (s postgresMemberConsoleService) CreateAccountDeletionApplication(ctx conte
 	return AccountDeletionApplicationMutationResult{Item: item}, nil
 }
 
+func (s postgresMemberConsoleService) consoleService() postgresConsoleService {
+	return postgresConsoleService{
+		db:                 s.db,
+		pointsDivisorValue: s.pointsDivisorValue,
+	}
+}
+
 func (s postgresMemberConsoleService) UsageOverview(ctx context.Context, query UsageQuery) (UsageOverviewData, error) {
 	principal, err := s.resolvePrincipal(ctx)
 	if err != nil {
@@ -563,7 +572,7 @@ func (s postgresMemberConsoleService) UsageOverview(ctx context.Context, query U
 		return UsageOverviewData{}, err
 	}
 	query.TenantID = principal.TenantID
-	return (postgresConsoleService{db: s.db}).UsageOverview(ctx, query)
+	return s.consoleService().UsageOverview(ctx, query)
 }
 
 func (s postgresMemberConsoleService) UsageRequests(ctx context.Context, query UsageQuery) (UsageRequestsPageData, error) {
@@ -575,7 +584,17 @@ func (s postgresMemberConsoleService) UsageRequests(ctx context.Context, query U
 		return UsageRequestsPageData{}, err
 	}
 	query.TenantID = principal.TenantID
-	return (postgresConsoleService{db: s.db}).UsageRequests(ctx, query)
+	return s.consoleService().UsageRequests(ctx, query)
+}
+
+func (s postgresMemberConsoleService) PointsOverview(ctx context.Context, query UsageQuery) (MemberPointsOverviewData, error) {
+	principal, err := s.resolvePrincipal(ctx)
+	if err != nil {
+		return MemberPointsOverviewData{}, err
+	}
+	query.TenantID = principal.TenantID
+	query.UserID = principal.UserID
+	return s.consoleService().MemberPointsOverview(ctx, query)
 }
 
 func (s postgresMemberConsoleService) Failures(ctx context.Context, query UsageQuery) (MemberFailurePageData, error) {
@@ -587,7 +606,7 @@ func (s postgresMemberConsoleService) Failures(ctx context.Context, query UsageQ
 		return MemberFailurePageData{}, err
 	}
 	query.TenantID = principal.TenantID
-	payload, err := (postgresConsoleService{db: s.db}).UsageFailures(ctx, query)
+	payload, err := s.consoleService().UsageFailures(ctx, query)
 	if err != nil {
 		return MemberFailurePageData{}, err
 	}

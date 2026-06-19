@@ -12,18 +12,26 @@ import (
 )
 
 const getPlatformAPIKeyByHash = `-- name: GetPlatformAPIKeyByHash :one
-select id, tenant_id, name, key_hash, status, coalesce(expires_at, created_at + interval '30 days') as expires_at
+select
+  id,
+  tenant_id,
+  name,
+  key_hash,
+  status,
+  coalesce(expires_at, created_at + interval '30 days') as expires_at,
+  coalesce(created_by_user_id, '') as created_by_user_id
 from platform_api_keys
 where key_hash = $1
 `
 
 type GetPlatformAPIKeyByHashRow struct {
-	ID        string             `json:"id"`
-	TenantID  string             `json:"tenant_id"`
-	Name      string             `json:"name"`
-	KeyHash   string             `json:"key_hash"`
-	Status    string             `json:"status"`
-	ExpiresAt pgtype.Timestamptz `json:"expires_at"`
+	ID              string             `json:"id"`
+	TenantID        string             `json:"tenant_id"`
+	Name            string             `json:"name"`
+	KeyHash         string             `json:"key_hash"`
+	Status          string             `json:"status"`
+	ExpiresAt       pgtype.Timestamptz `json:"expires_at"`
+	CreatedByUserID string             `json:"created_by_user_id"`
 }
 
 func (q *Queries) GetPlatformAPIKeyByHash(ctx context.Context, keyHash string) (GetPlatformAPIKeyByHashRow, error) {
@@ -36,6 +44,7 @@ func (q *Queries) GetPlatformAPIKeyByHash(ctx context.Context, keyHash string) (
 		&i.KeyHash,
 		&i.Status,
 		&i.ExpiresAt,
+		&i.CreatedByUserID,
 	)
 	return i, err
 }

@@ -149,9 +149,13 @@ func (r *SQLAuthRepository) FindPlatformAPIKeyByHash(ctx context.Context, keyHas
 		return PlatformAPIKeyRecord{}, err
 	}
 
-	userID, err := r.findUniqueActiveMembershipUserID(ctx, row.TenantID)
-	if err != nil {
-		return PlatformAPIKeyRecord{}, err
+	userID := strings.TrimSpace(row.CreatedByUserID)
+	if userID == "" {
+		var err error
+		userID, err = r.findUniqueActiveMembershipUserID(ctx, row.TenantID)
+		if err != nil {
+			return PlatformAPIKeyRecord{}, err
+		}
 	}
 
 	return PlatformAPIKeyRecord{

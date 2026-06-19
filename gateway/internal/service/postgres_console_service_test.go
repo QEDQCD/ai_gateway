@@ -6049,7 +6049,7 @@ func newUsageConsoleService(t *testing.T, ctx context.Context) (service.ConsoleS
 		t.Fatalf("NewModelPricingResolver failed: %v", err)
 	}
 
-	return service.NewPostgresConsoleServiceWithPricing(conn, nil, nil, nil, "", pricingResolver, codec), conn
+	return service.NewPostgresConsoleServiceWithPricing(conn, nil, nil, nil, "", pricingResolver, 0, codec), conn
 }
 
 func mustParseUsageTime(t *testing.T, value string) time.Time {

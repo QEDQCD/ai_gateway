@@ -121,8 +121,8 @@ func newDatabaseBackedServerApp(cfg config.Config) *fiber.App {
 	consoleChatProxy := service.NewChatProxyService(upstreamClient, usagePublisher, usageRecorder)
 	embeddingProxy := service.NewEmbeddingProxyService(upstreamClient, usagePublisher, usageRecorder)
 	ragProxy := service.NewRAGProxyService(cfg.RAGServiceBaseURL, cfg.RAGServiceUsername, cfg.RAGServicePassword, http.DefaultClient)
-	consoleService := service.NewPostgresConsoleServiceWithPricing(pool, authService, consoleChatProxy, ragProxy, cfg.SeedPlatformAPIKey, pricingResolver, platformAPIKeySecretCodec)
-	memberConsoleService := service.NewPostgresMemberConsoleService(pool, service.ConsolePrincipal{}, platformAPIKeySecretCodec)
+	consoleService := service.NewPostgresConsoleServiceWithPricing(pool, authService, consoleChatProxy, ragProxy, cfg.SeedPlatformAPIKey, pricingResolver, cfg.PointsDivisor, platformAPIKeySecretCodec)
+	memberConsoleService := service.NewPostgresMemberConsoleService(pool, service.ConsolePrincipal{}, cfg.PointsDivisor, platformAPIKeySecretCodec)
 	if cfg.ModelHealthcheckEnabled {
 		go service.NewModelHealthcheckRunner(
 			service.NewPostgresModelHealthcheckCatalog(pool, repository),

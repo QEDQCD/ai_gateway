@@ -519,6 +519,20 @@ func ConsoleUsageRequestDetail(console service.ConsoleService) fiber.Handler {
 	}
 }
 
+func ConsoleUserPointsOverview(console service.ConsoleService) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		query, err := parseUsageQuery(c)
+		if err != nil {
+			return err
+		}
+		payload, err := console.UserPointsOverview(c.UserContext(), query)
+		if err != nil {
+			return consoleError(err)
+		}
+		return c.JSON(payload)
+	}
+}
+
 func containsString(values []string, target string) bool {
 	for _, value := range values {
 		if value == target {

@@ -365,6 +365,7 @@ type UsageQuery struct {
 	To               time.Time `json:"to"`
 	Window           string    `json:"window"`
 	TenantID         string    `json:"tenant_id"`
+	UserID           string    `json:"user_id"`
 	PlatformAPIKeyID string    `json:"platform_api_key_id"`
 	Provider         string    `json:"provider"`
 	Model            string    `json:"model"`
@@ -451,6 +452,7 @@ type UsageOverviewData struct {
 	OutputCost     string             `json:"output_cost"`
 	CachedCost     string             `json:"cached_cost"`
 	TotalCost      string             `json:"total_cost"`
+	TotalPoints    string             `json:"total_points"`
 	PricingModels  []PricingModelItem `json:"pricing_models"`
 }
 
@@ -637,6 +639,7 @@ type ConsoleService interface {
 	UsageFailures(ctx context.Context, query UsageQuery) (UsageFailureData, error)
 	UsageRequests(ctx context.Context, query UsageQuery) (UsageRequestsPageData, error)
 	UsageRequestDetail(ctx context.Context, requestID string) (UsageRequestDetail, error)
+	UserPointsOverview(ctx context.Context, query UsageQuery) (UserPointsOverviewData, error)
 }
 
 type unavailableConsoleService struct{}
@@ -808,4 +811,8 @@ func (unavailableConsoleService) UsageRequests(context.Context, UsageQuery) (Usa
 
 func (unavailableConsoleService) UsageRequestDetail(context.Context, string) (UsageRequestDetail, error) {
 	return UsageRequestDetail{}, ErrConsoleServiceUnavailable
+}
+
+func (unavailableConsoleService) UserPointsOverview(context.Context, UsageQuery) (UserPointsOverviewData, error) {
+	return UserPointsOverviewData{}, ErrConsoleServiceUnavailable
 }

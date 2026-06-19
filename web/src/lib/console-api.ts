@@ -392,7 +392,48 @@ export type UsageOverviewData = {
   output_cost: string;
   cached_cost: string;
   total_cost: string;
+  total_points: string;
   pricing_models: PricingModelItem[];
+};
+
+export type UserPointsSummaryItem = {
+  user_id: string;
+  user_name: string;
+  user_email: string;
+  tenant_id: string;
+  tenant_name: string;
+  request_count: number;
+  total_tokens: string;
+  total_cost: string;
+  total_points: string;
+};
+
+export type UserPointsOverviewData = {
+  points_divisor: number;
+  total_points: string;
+  total_cost: string;
+  total_requests: number;
+  total_tokens: string;
+  items: UserPointsSummaryItem[];
+};
+
+export type UserPointsModelItem = {
+  model: string;
+  request_count: number;
+  total_tokens: string;
+  total_cost: string;
+  total_points: string;
+};
+
+export type MemberPointsOverviewData = {
+  user_id: string;
+  user_name: string;
+  points_divisor: number;
+  total_points: string;
+  total_cost: string;
+  total_requests: number;
+  total_tokens: string;
+  by_model: UserPointsModelItem[];
 };
 
 export type UsageTrendPoint = {
@@ -630,6 +671,7 @@ function toUsageOverviewData(value: unknown): UsageOverviewData {
     output_cost: readString(record, "output_cost"),
     cached_cost: readString(record, "cached_cost"),
     total_cost: readString(record, "total_cost"),
+    total_points: readString(record, "total_points"),
     pricing_models: Array.isArray(record.pricing_models)
       ? record.pricing_models.map(toPricingModelItem)
       : [],
@@ -1242,6 +1284,78 @@ export function getUsageRequestDetail(id: string) {
 
 export function getMemberUsageOverview() {
   return requestJson<JsonRecord>("/api/me/usage/overview").then(toUsageOverviewData);
+}
+
+function toUserPointsSummaryItem(value: unknown): UserPointsSummaryItem {
+  const record = asRecord(value);
+  return {
+    user_id: readString(record, "user_id"),
+    user_name: readString(record, "user_name"),
+    user_email: readString(record, "user_email"),
+    tenant_id: readString(record, "tenant_id"),
+    tenant_name: readString(record, "tenant_name"),
+    request_count: readNumber(record, "request_count"),
+    total_tokens: readString(record, "total_tokens"),
+    total_cost: readString(record, "total_cost"),
+    total_points: readString(record, "total_points"),
+  };
+}
+
+function toUserPointsOverviewData(value: unknown): UserPointsOverviewData {
+  const record = asRecord(value);
+  return {
+    points_divisor: readNumber(record, "points_divisor"),
+    total_points: readString(record, "total_points"),
+    total_cost: readString(record, "total_cost"),
+    total_requests: readNumber(record, "total_requests"),
+    total_tokens: readString(record, "total_tokens"),
+    items: Array.isArray(record.items) ? record.items.map(toUserPointsSummaryItem) : [],
+  };
+}
+
+function toUserPointsModelItem(value: unknown): UserPointsModelItem {
+  const record = asRecord(value);
+  return {
+    model: readString(record, "model"),
+    request_count: readNumber(record, "request_count"),
+    total_tokens: readString(record, "total_tokens"),
+    total_cost: readString(record, "total_cost"),
+    total_points: readString(record, "total_points"),
+  };
+}
+
+function toMemberPointsOverviewData(value: unknown): MemberPointsOverviewData {
+  const record = asRecord(value);
+  return {
+    user_id: readString(record, "user_id"),
+    user_name: readString(record, "user_name"),
+    points_divisor: readNumber(record, "points_divisor"),
+    total_points: readString(record, "total_points"),
+    total_cost: readString(record, "total_cost"),
+    total_requests: readNumber(record, "total_requests"),
+    total_tokens: readString(record, "total_tokens"),
+    by_model: Array.isArray(record.by_model) ? record.by_model.map(toUserPointsModelItem) : [],
+  };
+}
+
+export function getUserPointsOverview(query: { window?: "6h" | "24h" | "7d"; tenant_id?: string } = {}) {
+  const params = new URLSearchParams();
+  if (query.window) {
+    params.set("window", query.window);
+  }
+  if (query.tenant_id) {
+    params.set("tenant_id", query.tenant_id);
+  }
+  const suffix = params.toString();
+  return requestJson<JsonRecord>(`/api/admin/points/users${suffix ? `?${suffix}` : ""}`).then(
+    toUserPointsOverviewData,
+  );
+}
+
+export function getMemberPointsOverview(window: "6h" | "24h" | "7d" = "24h") {
+  return requestJson<JsonRecord>(`/api/me/points/overview?window=${window}`).then(
+    toMemberPointsOverviewData,
+  );
 }
 
 export function getMemberUsageRequests(query: UsageRequestsQuery) {

@@ -1,7 +1,7 @@
 import { useCallback, useState } from "react";
 
 import { DataTable, ErrorSection, LoadingSection, SourcePill, StatCard, StatusPill } from "../components/console";
-import { getMemberUsageOverview, getMemberUsageRequests } from "../lib/console-api";
+import { getMemberPointsOverview, getMemberUsageOverview, getMemberUsageRequests } from "../lib/console-api";
 import { formatTargetModelTierLabel, formatTaskClassLabel } from "../lib/smart-routing";
 import { useRemoteData } from "../lib/use-remote-data";
 
@@ -31,6 +31,7 @@ function formatTokenCost(tokens: string, cost: string) {
 export function MemberUsagePage() {
   const [offset, setOffset] = useState(0);
   const loadOverview = useCallback(() => getMemberUsageOverview(), []);
+  const loadPoints = useCallback(() => getMemberPointsOverview(), []);
   const loadRequests = useCallback(
     () =>
       getMemberUsageRequests({
@@ -40,14 +41,15 @@ export function MemberUsagePage() {
     [offset],
   );
   const overview = useRemoteData(loadOverview);
+  const points = useRemoteData(loadPoints);
   const requests = useRemoteData(loadRequests);
-  const error = overview.error ?? requests.error;
+  const error = overview.error ?? points.error ?? requests.error;
 
   if (error) {
     return <ErrorSection message={error} />;
   }
 
-  if (!overview.data || !requests.data) {
+  if (!overview.data || !points.data || !requests.data) {
     return <LoadingSection text="正在加载成员调用观测..." />;
   }
 
@@ -79,8 +81,29 @@ export function MemberUsagePage() {
           />
           <StatCard label="总 Token" value={formatValue(overview.data.total_tokens)} />
           <StatCard label="总费用" value={formatValue(overview.data.total_cost)} />
+          <StatCard label="总积分" value={formatValue(points.data.total_points || overview.data.total_points)} />
         </div>
       </section>
+
+      {points.data.by_model.length > 0 ? (
+        <section className="section-card">
+          <div className="section-card__header">
+            <div>
+              <h2>模型积分消耗</h2>
+              <p>按模型统计当前窗口内的积分消耗，贵的模型积分更高。</p>
+            </div>
+          </div>
+          <DataTable
+            columns={["模型", "请求数", "Token / 费用", "积分"]}
+            rows={points.data.by_model.map((item) => [
+              item.model,
+              String(item.request_count),
+              formatTokenCost(item.total_tokens, item.total_cost),
+              formatValue(item.total_points),
+            ])}
+          />
+        </section>
+      ) : null}
 
       <section className="section-card">
         <div className="section-card__header">

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from "react"
 import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { DataTable, ErrorSection, LoadingSection, StatCard } from "../components/console";
-import { getAPIKeys, getOverview, getTenantBilling, getUsageOverview } from "../lib/console-api";
+import { getAPIKeys, getOverview, getTenantBilling, getUsageOverview, getUserPointsOverview } from "../lib/console-api";
 import { useRemoteData } from "../lib/use-remote-data";
 
 type TenantSummary = {
@@ -185,16 +185,18 @@ export function AdminTenantsPage() {
   const [monthInput, setMonthInput] = useState(selectedMonth);
   const loadTenants = useCallback(
     async () => {
-      const [overview, apiKeys, usageOverview] = await Promise.all([
+      const [overview, apiKeys, usageOverview, userPoints] = await Promise.all([
         getOverview(),
         getAPIKeys(),
         getUsageOverview(),
+        getUserPointsOverview(),
       ]);
 
       return {
         overview,
         apiKeys,
         usageOverview,
+        userPoints,
         tenantSummaries: buildTenantSummaries(apiKeys.items),
       };
     },
@@ -278,7 +280,33 @@ export function AdminTenantsPage() {
         <StatCard label="总调用数" value={String(data.usageOverview.total_requests)} />
         <StatCard label="成功率" value={data.usageOverview.success_rate} />
         <StatCard label="总费用" value={formatValue(data.usageOverview.total_cost)} />
+        <StatCard label="总积分" value={formatValue(data.usageOverview.total_points)} />
       </div>
+
+      {data.userPoints.items.length > 0 ? (
+        <section className="section-card">
+          <div className="section-card__header">
+            <div>
+              <h2>用户积分消耗</h2>
+              <p>
+                积分 = Token 费用 / {data.userPoints.points_divisor || 10000} 微元，不同模型单价不同，贵的模型消耗更多积分。
+              </p>
+            </div>
+            <p>共 {data.userPoints.items.length} 位用户</p>
+          </div>
+          <DataTable
+            columns={["用户", "邮箱", "租户", "请求数", "Token / 费用", "积分"]}
+            rows={data.userPoints.items.map((item) => [
+              item.user_name || item.user_id,
+              item.user_email || "-",
+              item.tenant_name || item.tenant_id,
+              String(item.request_count),
+              `${item.total_tokens} / ${item.total_cost}`,
+              item.total_points,
+            ])}
+          />
+        </section>
+      ) : null}
 
       <section className="section-card">
         <div className="section-card__header">
