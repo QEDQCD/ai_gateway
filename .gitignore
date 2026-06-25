@@ -19,3 +19,4 @@ deploy/redis/users.acl
 gateway/cmd/tmp_*/
 gateway/gateway/
 tests/output/
+AGENTS.md

@@ -2,6 +2,8 @@
 
 一个面向企业与团队的租户制 AI API 接入平台。它把账号申请、租户开通、平台 API Key 分发、调用治理、审计追踪和统一接口接入放在同一套系统里，对外只暴露平台能力，不暴露真实上游凭据。
 
+本项目采用 [MIT License](LICENSE) 开源协议。
+
 ## 产品定位
 
 平台当前主线是：
@@ -407,3 +409,7 @@ docker compose --env-file deploy/compose/.env.example -f deploy/compose/compose.
 - `deploy/compose/.env.example` 只提供占位符，不提供真实值
 - 平台只向租户用户暴露平台 API Key，不向前台返回真实上游凭据
 - 真实上游密钥通过文件挂载或环境变量注入，由平台内部统一管理
+
+## License
+
+本项目以 [MIT License](LICENSE) 发布。使用、修改与分发请遵守许可证条款。
